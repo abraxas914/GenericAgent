@@ -139,6 +139,7 @@ body{ background:var(--bg); color:var(--txt); font-size:13px; overflow:hidden; }
 .body{
   flex:1; display:flex; min-height:0;
   background:var(--bg); padding:14px; gap:12px;
+  position:relative;
 }
 
 /* ============ ① 侧边栏（立体卡片 · 美术重点）============ */
@@ -346,11 +347,40 @@ body{ background:var(--bg); color:var(--txt); font-size:13px; overflow:hidden; }
 .send svg{ width:15px; height:15px; }
 
 /* ============ ④ 右侧会话面板 ============ */
+.rp-toggle{
+  position:relative; z-index:10; align-self:center;
+  width:20px; height:36px; border:1px solid var(--line); border-radius:6px;
+  background:var(--panel); cursor:pointer; display:flex; align-items:center; justify-content:center;
+  color:var(--muted); flex:0 0 auto; margin-right:-10px; margin-left:-10px;
+  transition:color .15s, width .2s, margin .2s, opacity .15s;
+}
+.rp-toggle:hover{ color:var(--txt-2); border-color:var(--line-strong); }
+.rp-toggle svg{ width:14px; height:14px; transition:transform .2s; }
+.body.rp-collapsed .rp-toggle svg{ transform:rotate(180deg); }
+.body.rp-collapsed .rp-toggle{
+  position:absolute; right:7px; top:50%; transform:translateY(-50%);
+  margin:0; width:20px; opacity:.6;
+}
+.body.rp-collapsed .rp-toggle:hover{ opacity:1; }
+
+.rp-resize{
+  width:4px; flex:0 0 4px; cursor:col-resize; border-radius:2px;
+  background:transparent; transition:background .15s; align-self:stretch;
+  margin-right:-10px;
+}
+.rp-resize:hover, .rp-resize.dragging{ background:var(--blue); }
+.body.rp-collapsed .rp-resize{ display:none; }
+
 .rightpanel{
   width:220px; flex:0 0 220px; background:var(--panel);
   border:1px solid var(--line); border-radius:14px; box-shadow:var(--shadow);
   overflow:hidden; padding:14px 12px;
   display:flex; flex-direction:column; gap:10px;
+  transition:width .2s, padding .2s, opacity .15s, flex .2s;
+}
+.body.rp-collapsed .rightpanel{
+  width:0; flex:0 0 0; padding:0; border:none; opacity:0; pointer-events:none; overflow:hidden;
+  margin:0; display:none;
 }
 .search{
   display:flex; align-items:center; gap:6px; border:1px solid var(--line);

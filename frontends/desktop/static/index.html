@@ -207,7 +207,11 @@
     </main>
 
     <!-- ④ 右侧会话面板 -->
-    <aside class="rightpanel">
+    <button class="rp-toggle" id="rp-toggle" aria-label="toggle panel">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+    </button>
+    <div class="rp-resize" id="rp-resize"></div>
+    <aside class="rightpanel" id="rightpanel">
       <div class="search">
         <svg class="search-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
         <input data-i18n-ph="search.placeholder" placeholder="">

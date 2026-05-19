@@ -207,6 +207,36 @@ const runToggle  = document.getElementById('run-toggle');
 const runLabel   = runToggle.querySelector('.rs-label');
 const convListEl = document.querySelector('.conv-list');
 const newConvBtn = document.querySelector('.new-conv');
+const searchInput = document.querySelector('.search input');
+const rpToggle   = document.getElementById('rp-toggle');
+const rpResize   = document.getElementById('rp-resize');
+const rpPanel    = document.getElementById('rightpanel');
+const bodyEl     = document.querySelector('.body');
+if (rpToggle) rpToggle.addEventListener('click', () => bodyEl.classList.toggle('rp-collapsed'));
+
+if (rpResize && rpPanel) {
+  let dragging = false, startX = 0, startW = 0;
+  rpResize.addEventListener('mousedown', (e) => {
+    dragging = true; startX = e.clientX; startW = rpPanel.offsetWidth;
+    rpResize.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const w = Math.min(400, Math.max(160, startW + (startX - e.clientX)));
+    rpPanel.style.width = w + 'px';
+    rpPanel.style.flex = '0 0 ' + w + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    rpResize.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+}
 const modelChip  = document.getElementById('model-chip');
 const modelNameEl= modelChip ? modelChip.querySelector('.model-name') : null;
 const langSel    = document.getElementById('lang-select');
@@ -283,12 +313,21 @@ runToggle.addEventListener('click', async () => {
 function isUntitled(x) { return !x || /^(new chat|新对话|新会话)$/i.test(String(x).trim()); }
 function renderSessionList() {
   convListEl.innerHTML = '';
-  if (state.sessions.size === 0) {
+  const query = (searchInput ? searchInput.value : '').trim().toLowerCase();
+  const all = [...state.sessions.values()];
+  const filtered = query
+    ? all.filter(s => {
+        const title = (s.title || '').toLowerCase();
+        const hasMsg = s.messages && s.messages.some(m => (m.text || '').toLowerCase().includes(query));
+        return title.includes(query) || hasMsg;
+      })
+    : all;
+  if (filtered.length === 0) {
     const e = document.createElement('div');
     e.className = 'conv-empty'; e.textContent = t('conv.emptyList');
     convListEl.appendChild(e); return;
   }
-  for (const sess of state.sessions.values()) {
+  for (const sess of filtered) {
     const r = state.runtime.get(sess.id);
     const busy = !!(r && r.busy);
     const item = document.createElement('div');
@@ -302,6 +341,7 @@ function renderSessionList() {
     convListEl.appendChild(item);
   }
 }
+if (searchInput) searchInput.addEventListener('input', () => renderSessionList());
 async function ensureBridgeSession(sess) {
   if (sess.bridgeSessionId) return sess.bridgeSessionId;
   const res = await window.ga.rpc('session/new', { cwd: '', mcp_servers: [] });
