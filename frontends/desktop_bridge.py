@@ -98,13 +98,21 @@ class AgentManager:
         return p
 
     @staticmethod
-    def _next_native_var(text: str) -> str:
+    def _next_native_var(text: str, protocol: str) -> str:
+        # 协议必选(由前端下拉强制),不再用 apibase 兜底瞎猜
+        proto = str(protocol or "").strip().lower()
+        if proto == "claude":
+            prefix = "native_claude_config"
+        elif proto in ("oai", "openai"):
+            prefix = "native_oai_config"
+        else:
+            raise ValueError("protocol is required: choose 'oai' or 'claude'")
         nums = [0]
-        if re.search(r"^native_claude_config\s*=", text, re.M):
+        if re.search(rf"^{prefix}\s*=", text, re.M):
             nums.append(0)
-        nums.extend(int(m.group(1)) for m in re.finditer(r"^native_claude_config(\d+)\s*=", text, re.M))
+        nums.extend(int(m.group(1)) for m in re.finditer(rf"^{prefix}(\d+)\s*=", text, re.M))
         n = max(nums) + 1
-        return "native_claude_config" if n == 1 and not re.search(r"^native_claude_config\s*=", text, re.M) else f"native_claude_config{n}"
+        return prefix if n == 1 and not re.search(rf"^{prefix}\s*=", text, re.M) else f"{prefix}{n}"
 
     @staticmethod
     def _format_py_dict(d: dict) -> str:
@@ -188,7 +196,7 @@ class AgentManager:
     def add_model_profile(self, data: dict) -> dict:
         cfg = self._build_cfg(data)
         text = self._mykey_file().read_text(encoding="utf-8")
-        var = self._next_native_var(text)
+        var = self._next_native_var(text, data.get("protocol", ""))
         profiles = self._save_mykey_text(text.rstrip() + f"\n{var} = {self._format_py_dict(cfg)}\n")
         return {"varName": var, "profileId": profiles[-1]["id"] if profiles else 0, "profiles": profiles}
 

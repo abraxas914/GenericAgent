@@ -288,6 +288,7 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 .model-row:hover{ background:var(--line-soft); border-color:var(--line-strong); }
 .model-row.sel{ background:var(--blue-bg); border-color:var(--blue); color:var(--blue); font-weight:600; }
 .model-row input{ accent-color:var(--blue); flex:0 0 auto; pointer-events:none; }
+.flag{ width:20px; height:14px; flex:0 0 auto; border-radius:2px; box-shadow:0 0 0 1px var(--line); display:inline-block; }
 .model-row-name{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .model-row-actions{
   display:flex; gap:2px; flex:0 0 auto; opacity:0; transition:opacity .12s;
@@ -325,6 +326,23 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 }
 .model-form input:focus{ outline:none; border-color:var(--blue); }
 .model-form input::placeholder{ color:var(--placeholder); opacity:1; }
+
+/* 协议选择:分段控件(替代 native dropdown,样式可控)*/
+.model-form-field{ display:flex; flex-direction:column; gap:5px; font-size:12px; font-weight:600; color:var(--txt-2); }
+.seg-group{
+  display:flex; gap:4px; padding:3px;
+  border:1px solid var(--line); border-radius:8px; background:var(--field-bg);
+}
+.seg-opt{
+  flex:1; display:flex; align-items:center; justify-content:center;
+  padding:7px 10px; border-radius:6px; cursor:pointer;
+  font-size:12px; font-weight:600; color:var(--txt-2);
+  transition:background .12s, color .12s; user-select:none;
+}
+.seg-opt input{ position:absolute; opacity:0; pointer-events:none; }
+.seg-opt:hover{ background:var(--line-soft); color:var(--txt); }
+.seg-opt:has(input:checked){ background:var(--blue); color:var(--on-accent); }
+.seg-opt:has(input:checked):hover{ background:var(--blue); color:var(--on-accent); }
 .model-form .field-hint{ font-size:11px; font-weight:400; color:var(--muted); line-height:1.45; margin-top:2px; }
 #add-model-form .model-form-row{
   display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; width:100%;

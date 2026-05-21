@@ -31,6 +31,7 @@ const I18N = {
     'model.name': '备注', 'model.namePh': '会显示在模型列表',
     'model.apikey': 'API Key', 'model.apikeyPh': 'sk-...', 'model.apikeyKeep': '留空则保持原 Key 不变',
     'model.apibase': 'API 地址', 'model.apibasePh': 'https://.../v1/messages',
+    'model.protocol': '协议', 'model.protocolPick': '请选择…', 'model.protocolOai': 'OpenAI 兼容 (chat/completions)', 'model.protocolClaude': 'Anthropic (Claude /v1/messages)',
     'model.model': '模型', 'model.modelPh': 'model 参数名',
     'model.modelHint': '须与中转站/官方文档中的 model 字段完全一致',
     'model.retries': '重试 (次)', 'model.connTimeout': '连接超时 (s)', 'model.readTimeout': '读取超时 (s)',
@@ -92,6 +93,7 @@ const I18N = {
     'model.name': 'Note', 'model.namePh': 'Shown in the model list',
     'model.apikey': 'API Key', 'model.apikeyPh': 'sk-...', 'model.apikeyKeep': 'Leave blank to keep the current key',
     'model.apibase': 'API base URL', 'model.apibasePh': 'https://.../v1/messages',
+    'model.protocol': 'Protocol', 'model.protocolPick': 'Select…', 'model.protocolOai': 'OpenAI-compatible (chat/completions)', 'model.protocolClaude': 'Anthropic (Claude /v1/messages)',
     'model.model': 'Model', 'model.modelPh': 'model parameter name',
     'model.modelHint': 'Must match the model field in your provider docs exactly',
     'model.retries': 'Retries (×)', 'model.connTimeout': 'Connect (s)', 'model.readTimeout': 'Read (s)',
@@ -181,6 +183,11 @@ function applyI18n() {
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.setAttribute('title', t(el.dataset.i18nTitle)); });
   renderLangList();
 }
+// 语言对应国旗 SVG(en 用美国旗,按要求)
+const FLAGS = {
+  zh: '<svg class="flag" viewBox="0 0 30 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="30" height="20" fill="#ee1c25"/><polygon points="6,3.5 6.9,6.2 9.7,6.2 7.4,7.9 8.3,10.6 6,8.9 3.7,10.6 4.6,7.9 2.3,6.2 5.1,6.2" fill="#ffde00"/><circle cx="11.5" cy="2.6" r=".9" fill="#ffde00"/><circle cx="13.2" cy="4.3" r=".9" fill="#ffde00"/><circle cx="13.2" cy="6.7" r=".9" fill="#ffde00"/><circle cx="11.5" cy="8.4" r=".9" fill="#ffde00"/></svg>',
+  en: '<svg class="flag" viewBox="0 0 38 20" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><rect width="38" height="20" fill="#ffffff"/><g fill="#b22234"><rect width="38" height="1.54"/><rect y="3.08" width="38" height="1.54"/><rect y="6.16" width="38" height="1.54"/><rect y="9.24" width="38" height="1.54"/><rect y="12.32" width="38" height="1.54"/><rect y="15.4" width="38" height="1.54"/><rect y="18.48" width="38" height="1.54"/></g><rect width="15.2" height="10.78" fill="#3c3b6e"/></svg>',
+};
 function renderLangList() {
   const box = document.getElementById('lang-list');
   if (!box) return;
@@ -188,7 +195,7 @@ function renderLangList() {
   LANGS.forEach(code => {
     const row = document.createElement('label');
     row.className = 'model-row' + (lang === code ? ' sel' : '');
-    row.innerHTML = `<input type="radio" name="lang-pick"${lang === code ? ' checked' : ''}><span>${escapeHtml(t('lang.' + code))}</span>`;
+    row.innerHTML = `<input type="radio" name="lang-pick"${lang === code ? ' checked' : ''}>${FLAGS[code] || ''}<span>${escapeHtml(t('lang.' + code))}</span>`;
     row.addEventListener('click', (e) => { e.preventDefault(); selectLang(code); });
     box.appendChild(row);
   });
@@ -773,6 +780,10 @@ async function openEditModelForm(id) {
       form.max_retries.value = p.max_retries ?? 5;
       form.connect_timeout.value = p.connect_timeout ?? 15;
       form.read_timeout.value = p.read_timeout ?? 300;
+      // 编辑模式:按 varName 回填协议分段控件
+      const pv = /claude/i.test(p.varName || '') ? 'claude' : 'oai';
+      const pr = form.querySelector(`input[name="protocol"][value="${pv}"]`);
+      if (pr) pr.checked = true;
     }
     setModelApikeyMode(false);
     openModal('add-model-modal');
