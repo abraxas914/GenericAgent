@@ -106,37 +106,12 @@
                 <div class="page-title" data-i18n="chat.startTitle"></div>
                 <div class="page-sub" data-i18n="chat.startSub"></div>
               </div>
-              <div class="feature-grid">
-                <div class="fcard" data-preset="goal">
-                  <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg>
-                  <div class="fc-t" data-i18n="preset.goal.t"></div><div class="fc-d" data-i18n="preset.goal.d"></div>
-                </div>
-                <div class="fcard" data-preset="explore">
-                  <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="16.2 7.8 14.1 14.1 7.8 16.2 9.9 9.9 16.2 7.8"/></svg>
-                  <div class="fc-t" data-i18n="preset.explore.t"></div><div class="fc-d" data-i18n="preset.explore.d"></div>
-                </div>
-                <div class="fcard" data-preset="hive">
-                  <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/><polygon points="12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3"/></svg>
-                  <div class="fc-t" data-i18n="preset.hive.t"></div><div class="fc-d" data-i18n="preset.hive.d"></div>
-                </div>
-                <div class="fcard" data-preset="review">
-                  <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                  <div class="fc-t" data-i18n="preset.review.t"></div><div class="fc-d" data-i18n="preset.review.d"></div>
-                </div>
-                <div class="fcard" data-preset="mine">
-                  <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-                  <div class="fc-t" data-i18n="preset.mine.t"></div><div class="fc-d" data-i18n="preset.mine.d"></div>
-                </div>
-                <div class="fcard add" data-preset="add">
-                  <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                  <div class="fc-t" data-i18n="preset.add.t"></div><div class="fc-d" data-i18n="preset.add.d"></div>
-                </div>
-              </div>
+              <div class="feature-grid"></div>
             </div>
           </div>
           <div class="composer">
             <div class="composer-top">
-              <button class="ic-btn">
+              <button class="ic-btn" id="upload-btn" data-i18n-title="upload.button" title="">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05 12 20.5a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
               </button>
               <button class="ic-btn" id="preset-btn">
@@ -144,19 +119,22 @@
               </button>
             </div>
             <textarea class="input" data-i18n-ph="composer.placeholder" placeholder=""></textarea>
+            <input type="file" id="img-input" multiple hidden>
+            <div class="thumb-strip" id="thumb-strip" hidden></div>
             <div class="composer-bot">
               <div class="cb-left">
-                <button class="chip" id="model-chip"><span class="model-name"></span> <svg class="chip-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
-                <button class="chip sm">Plan</button>
-                <button class="chip sm">
+                <button class="chip" id="model-chip" data-i18n-title="model.menuLabel" title=""><span class="model-name"></span> <svg class="chip-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></button>
+                <button class="chip sm" id="plan-chip"><span data-i18n="chip.plan"></span></button>
+                <button class="chip sm" id="auto-chip">
                   <svg class="chip-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 10 14 9 22 21 10 14 10 13 2"/></svg>
-                  Auto
+                  <span data-i18n="chip.auto"></span>
                 </button>
               </div>
               <button class="send">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               </button>
             </div>
+            <div class="ga-menu" id="model-menu" hidden></div>
           </div>
         </section>
 
@@ -265,37 +243,13 @@
     <div class="modal-card" role="dialog">
       <div class="modal-head">
         <div class="modal-title" data-i18n="modal.preset"></div>
+        <button id="preset-restore-btn" class="preset-restore" type="button" data-i18n="builtinPreset.restoreBtn" hidden></button>
         <button class="modal-x" data-close data-i18n-title="common.close" title="">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
         </button>
       </div>
       <div class="modal-body preset-pop">
-        <div class="feature-grid">
-          <div class="fcard" data-preset="goal">
-            <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg>
-            <div class="fc-t" data-i18n="preset.goal.t"></div><div class="fc-d" data-i18n="preset.goal.d"></div>
-          </div>
-          <div class="fcard" data-preset="explore">
-            <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="16.2 7.8 14.1 14.1 7.8 16.2 9.9 9.9 16.2 7.8"/></svg>
-            <div class="fc-t" data-i18n="preset.explore.t"></div><div class="fc-d" data-i18n="preset.explore.d"></div>
-          </div>
-          <div class="fcard" data-preset="hive">
-            <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/><polygon points="12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3"/></svg>
-            <div class="fc-t" data-i18n="preset.hive.t"></div><div class="fc-d" data-i18n="preset.hive.d"></div>
-          </div>
-          <div class="fcard" data-preset="review">
-            <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <div class="fc-t" data-i18n="preset.review.t"></div><div class="fc-d" data-i18n="preset.review.d"></div>
-          </div>
-          <div class="fcard" data-preset="mine">
-            <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
-            <div class="fc-t" data-i18n="preset.mine.t"></div><div class="fc-d" data-i18n="preset.mine.d"></div>
-          </div>
-          <div class="fcard add" data-preset="add">
-            <svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            <div class="fc-t" data-i18n="preset.add.t"></div><div class="fc-d" data-i18n="preset.add.d"></div>
-          </div>
-        </div>
+        <div class="feature-grid"></div>
       </div>
     </div>
   </div>
@@ -333,6 +287,28 @@
             <button type="submit" class="set-btn primary"><span data-i18n="model.save"></span></button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- 自定义预设 弹窗 -->
+  <div class="modal" id="custom-preset-modal" hidden>
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog">
+      <div class="modal-head">
+        <div class="modal-title" data-i18n="modal.customPreset"></div>
+        <button class="modal-x" data-close data-i18n-title="common.close" title="">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body cp-body">
+        <input class="cp-input" id="cp-title" type="text" data-i18n-ph="customPreset.titlePh" placeholder="">
+        <textarea class="cp-textarea" id="cp-prompt" rows="6" data-i18n-ph="customPreset.promptPh" placeholder=""></textarea>
+        <div class="cp-error" id="cp-error" hidden></div>
+        <div class="cp-actions">
+          <button class="cp-btn" data-close data-i18n="common.cancel" type="button"></button>
+          <button class="cp-btn cp-btn-primary" id="cp-save" data-i18n="common.save" type="button"></button>
+        </div>
       </div>
     </div>
   </div>
@@ -430,6 +406,13 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- 图片预览 lightbox -->
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lightbox-backdrop" data-close></div>
+  <button class="lightbox-x" data-close data-i18n-title="lightbox.closeTitle" title="">×</button>
+  <img class="lightbox-img" id="lightbox-img" alt="">
 </div>
 
 <div id="toast-root" class="toast-root" aria-live="polite"></div>

@@ -662,7 +662,7 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 .s-n{ font-size:20px; font-weight:700; color:var(--txt-strong); }
 .s-l{ font-size:11px; color:var(--muted); margin-top:4px; }
 
-.composer{ padding:12px 16px 16px; }
+.composer{ position:relative; padding:12px 16px 16px; }
 .composer-top{ display:flex; gap:8px; margin-bottom:8px; }
 .chip{
   border:1px solid var(--line); background:var(--card); border-radius:8px;
@@ -791,3 +791,242 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 .ctx-item:hover{ background:var(--line-soft); }
 .ctx-item.danger{ color:var(--danger); }
 .ctx-item.danger:hover{ background:var(--danger-bg); }
+
+/* ─── chat composer: Plan/Auto toggle ─── */
+.chip.on{
+  background:var(--blue-bg);
+  color:var(--blue);
+  border-color:var(--blue);
+}
+
+/* ─── chat composer: model dropdown menu ─── */
+.ga-menu{
+  position:absolute;
+  background:var(--card);
+  border:1px solid var(--line);
+  border-radius:10px;
+  box-shadow:var(--shadow);
+  padding:4px;
+  min-width:160px;
+  z-index:50;
+}
+.ga-menu-item{
+  display:block;
+  width:100%;
+  text-align:left;
+  background:transparent;
+  border:0;
+  padding:6px 10px;
+  border-radius:6px;
+  font:inherit;
+  color:var(--txt-2);
+  cursor:pointer;
+}
+.ga-menu-item:hover{ background:var(--hover-2); }
+.ga-menu-item.active{ color:var(--blue); }
+
+/* ─── chat composer: image thumb strip ─── */
+.thumb-strip{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  padding:6px 0;
+}
+.thumb{
+  position:relative;
+  width:48px;
+  height:48px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  overflow:hidden;
+  background:var(--field-bg);
+}
+.thumb img{
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  display:block;
+}
+.thumb .x{
+  position:absolute;
+  top:1px;
+  right:1px;
+  width:16px;
+  height:16px;
+  border-radius:50%;
+  border:0;
+  background:var(--card);
+  color:var(--txt-2);
+  font-size:11px;
+  line-height:14px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+}
+.thumb .x:hover{ color:var(--danger); }
+
+.file-chip{
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  height:32px;
+  padding:0 28px 0 10px;
+  border:1px solid var(--line);
+  border-radius:6px;
+  background:var(--field-bg);
+  color:var(--txt);
+  font-size:12px;
+  max-width:220px;
+}
+.file-chip svg{
+  width:14px; height:14px;
+  color:var(--txt-2);
+  flex:0 0 auto;
+}
+.file-chip .fc-name{
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.file-chip .x{
+  position:absolute;
+  top:50%;
+  right:4px;
+  transform:translateY(-50%);
+  width:18px; height:18px;
+  border-radius:50%;
+  border:0;
+  background:transparent;
+  color:var(--txt-2);
+  font-size:13px;
+  line-height:1;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:0;
+}
+.file-chip .x:hover{ color:var(--danger); }
+
+/* ─── chat panel: drag-over overlay ─── */
+.main.dragover{ position:relative; }
+.main.dragover::after{
+  content: attr(data-drop-hint);
+  position:absolute; inset:0;
+  display:flex; align-items:center; justify-content:center;
+  background:var(--blue-bg);
+  color:var(--blue);
+  border:2px dashed var(--blue);
+  border-radius:14px;
+  font-size:15px; font-weight:600;
+  pointer-events:none;
+  z-index:50;
+}
+
+/* ─── message bubble: image attachments ─── */
+.bubble-imgs{
+  display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;
+}
+.bubble-imgs img{
+  width:120px; height:120px;
+  border-radius:8px;
+  border:1px solid var(--line);
+  background:var(--field-bg);
+  object-fit:cover;
+  cursor:zoom-in;
+  display:block;
+}
+
+/* ─── lightbox (image preview) ─── */
+.lightbox{
+  position:fixed; inset:0; z-index:600;
+  display:flex; align-items:center; justify-content:center;
+}
+.lightbox[hidden]{ display:none; }
+.lightbox-backdrop{
+  position:absolute; inset:0;
+  background:var(--overlay);
+}
+.lightbox-img{
+  position:relative;
+  max-width:90vw; max-height:90vh;
+  border-radius:8px;
+  box-shadow:var(--shadow-modal);
+  background:var(--card);
+}
+.lightbox-x{
+  position:absolute; top:16px; right:16px;
+  width:36px; height:36px;
+  border:0; border-radius:50%;
+  background:var(--card); color:var(--txt-2);
+  font-size:20px; line-height:1;
+  cursor:pointer;
+  box-shadow:var(--shadow-pop);
+  display:flex; align-items:center; justify-content:center;
+  padding:0;
+}
+.lightbox-x:hover{ color:var(--danger); }
+.thumb img{ cursor:zoom-in; }
+
+/* ─── 自定义预设：卡上的删除按钮 ─── */
+.fcard{ position:relative; }
+.fcard .fc-x{
+  position:absolute; top:6px; right:6px;
+  width:20px; height:20px;
+  border:0; border-radius:50%;
+  background:var(--card); color:var(--txt-2);
+  font-size:14px; line-height:1;
+  cursor:pointer;
+  box-shadow:var(--shadow);
+  display:none; align-items:center; justify-content:center;
+  padding:0;
+}
+.fcard:hover .fc-x{ display:flex; }
+.fcard .fc-x:hover{ color:var(--danger); }
+
+/* ─── 自定义预设 modal 表单 ─── */
+.cp-body{
+  padding:18px; display:flex; flex-direction:column; gap:12px;
+  min-height:0;
+}
+.cp-input, .cp-textarea{
+  width:100%; box-sizing:border-box;
+  padding:10px 12px;
+  background:var(--field-bg);
+  border:1px solid var(--line); border-radius:8px;
+  color:var(--txt); font:inherit;
+  outline:none;
+}
+.cp-input:focus, .cp-textarea:focus{ border-color:var(--blue); }
+.cp-textarea{ resize:vertical; min-height:120px; }
+.cp-error{
+  font-size:12px; color:var(--danger);
+}
+.cp-actions{
+  display:flex; justify-content:flex-end; gap:8px;
+  margin-top:4px;
+}
+.cp-btn{
+  padding:8px 16px;
+  border:1px solid var(--line); border-radius:8px;
+  background:var(--card); color:var(--txt);
+  cursor:pointer; font:inherit;
+}
+.cp-btn:hover{ background:var(--hover-2); }
+.cp-btn-primary{
+  background:var(--blue); color:var(--on-accent); border-color:var(--blue);
+}
+.cp-btn-primary:hover{ background:var(--blue); opacity:.9; }
+
+.preset-restore{
+  margin-left:auto; margin-right:8px;
+  padding:5px 12px; font-size:12px;
+  border:1px solid var(--line); border-radius:6px;
+  background:var(--card); color:var(--txt-2);
+  cursor:pointer; font-family:inherit;
+}
+.preset-restore:hover{ background:var(--hover-2); color:var(--blue); border-color:var(--blue); }
+.preset-restore[hidden]{ display:none; }

@@ -1062,6 +1062,50 @@ async def path_open_handler(request):
     return json_ok({"ok": True, "path": str(target)})
 
 
+_WEB_UPLOAD_DIR = Path(tempfile.gettempdir()) / "ga_web_uploads"
+import shutil as _shutil
+_shutil.rmtree(_WEB_UPLOAD_DIR, ignore_errors=True)
+_WEB_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+async def upload_handler(request):
+    """Save a file uploaded by the web client and return its absolute path.
+    Body: {name: "<original filename>", dataUrl: "data:<mime>;base64,<...>"}
+    Returns: {ok: true, path: "<abs path>"}
+    """
+    data = await read_json(request)
+    name = (data.get("name") or "file").strip().replace("/", "_").replace("\\", "_")
+    data_url = data.get("dataUrl") or ""
+    if "," in data_url:
+        b64 = data_url.split(",", 1)[1]
+    else:
+        b64 = data_url
+    try:
+        blob = base64.b64decode(b64)
+    except Exception as e:
+        return json_ok({"ok": False, "error": f"decode failed: {e}"})
+    safe_name = name or "file"
+    fpath = _WEB_UPLOAD_DIR / f"{uuid.uuid4().hex[:12]}__{safe_name}"
+    fpath.write_bytes(blob)
+    return json_ok({"ok": True, "path": str(fpath)})
+
+
+async def upload_delete_handler(request):
+    """Delete a previously-uploaded file. Path must live under _WEB_UPLOAD_DIR."""
+    data = await read_json(request)
+    raw = data.get("path") or ""
+    try:
+        target = Path(raw).resolve()
+        upload_root = _WEB_UPLOAD_DIR.resolve()
+        if upload_root not in target.parents:
+            return json_ok({"ok": False, "error": "path outside upload dir"})
+        if target.exists():
+            target.unlink()
+        return json_ok({"ok": True})
+    except Exception as e:
+        return json_ok({"ok": False, "error": str(e)})
+
+
 def _open_path_in_editor(target: Path) -> None:
     """Open a file in the user's editor; Windows .py often has no default association."""
     import platform
@@ -1183,6 +1227,8 @@ def create_app():
     app.router.add_post("/session/{sid}/cancel", cancel_handler)
     app.router.add_post("/session/{sid}/restore", restore_handler)
     app.router.add_post("/path/open", path_open_handler)
+    app.router.add_post("/upload", upload_handler)
+    app.router.add_delete("/upload", upload_delete_handler)
     app.router.add_get("/token-stats", token_stats_handler)
     app.router.add_post("/services/start", service_start_handler)
     app.router.add_post("/services/stop", service_stop_handler)

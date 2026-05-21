@@ -235,6 +235,12 @@ const I18N = {
     'ctx.pin': '置顶', 'ctx.unpin': '取消置顶', 'ctx.del': '删除',
     'common.close': '关闭', 'common.more': '更多', 'common.optional': '选填', 'common.save': '保存',
     'modal.preset': '预设功能', 'modal.addModel': '添加模型', 'modal.editModel': '编辑模型', 'modal.settings': '配置',
+    'modal.customPreset': '自定义预设',
+    'customPreset.titlePh': '标题，例如「写周报」',
+    'customPreset.promptPh': 'Prompt 内容，发送时会作为消息提交',
+    'customPreset.empty': '标题和 Prompt 不能为空',
+    'customPreset.removeTitle': '删除',
+    'builtinPreset.restoreBtn': '恢复默认预设',
     'set.appearance': '外观', 'set.plainUi': '素色', 'set.theme': '颜色', 'set.lang': '语言', 'set.model': '模型', 'set.addModel': '添加模型',
     'appearance.light': '浅色', 'appearance.dark': '深色',
     'set.noModels': '暂无模型，点击下方添加',
@@ -261,9 +267,18 @@ const I18N = {
     'sys.stopRequested': '已请求停止',
     'slash.help': '可用命令：\n/new 新会话  /clear 清屏  /stop 停止  /settings 设置',
     'slash.unknown': '未知命令',
-    'upload.hint': '图片上传：粘贴图片到输入框即可（多模态接入中）',
+    'upload.hint': '上传文件：选择 / 拖拽 / 粘贴',
+    'upload.button': '上传文件',
+    'upload.tooLarge': '文件过大或数量超限',
+    'upload.failed': '上传失败',
+    'upload.removeTitle': '移除',
+    'upload.dropHint': '松开以上传文件',
+    'lightbox.closeTitle': '关闭',
     'fold.thinking': '思考', 'fold.tool': '工具调用', 'fold.toolResult': '工具结果', 'fold.llm': 'LLM Running',
     'model.auto': '自动选择',
+    'model.menuLabel': '选择模型',
+    'chip.plan': 'Plan',
+    'chip.auto': 'Auto',
     'ch.wechat': '微信', 'ch.wecom': '企业微信', 'ch.lark': '飞书', 'ch.dingtalk': '钉钉',
     'ch.qq': 'QQ', 'ch.telegram': 'Telegram', 'ch.discord': 'Discord',
     'ch.loading': '加载中…', 'ch.empty': '未发现 IM 进程脚本',
@@ -284,7 +299,9 @@ const I18N = {
     'tok.colSession': '会话', 'tok.colIn': '输入', 'tok.colOut': '输出', 'tok.colCacheW': '缓存写入', 'tok.colCache': '缓存读取', 'tok.colCost': '成本',
     'tok.from': '从', 'tok.to': '到', 'tok.reset': '重置', 'tok.noData': '暂无记录',
     'presetPrompt.goal': '进入 Goal 模式：读 L3 goal mode SOP，自主达成我接下来描述的目标。',
+    'presetPrompt.planMode': '进入 Plan 模式：读 L3 plan mode SOP，按其中的探索→规划→执行→验证流程完成我接下来描述的任务。',
     'presetPrompt.explore': '进入自主探索模式：自动浏览并定期向我汇总要点。',
+    'presetPrompt.autoMode': '进入 Auto 模式：读 L3 auto mode SOP，按其中规则在 cwd 内自主推进我接下来描述的任务。',
     'presetPrompt.hive': '启动 Goal Hive 模式：按 hive SOP 拉起多个 worker 协同完成我接下来的目标。',
     'presetPrompt.review': '进入监察者模式：对刚才的产出严格挑刺、逐项复核并报告问题。',
     'presetPrompt.mine': '抓取本周的 git 提交并写一份周报。',
@@ -307,6 +324,12 @@ const I18N = {
     'ctx.pin': 'Pin', 'ctx.unpin': 'Unpin', 'ctx.del': 'Delete',
     'common.close': 'Close', 'common.more': 'More', 'common.optional': 'Optional', 'common.save': 'Save',
     'modal.preset': 'Presets', 'modal.addModel': 'Add model', 'modal.editModel': 'Edit model', 'modal.settings': 'Settings',
+    'modal.customPreset': 'Custom preset',
+    'customPreset.titlePh': 'Title, e.g. "Weekly report"',
+    'customPreset.promptPh': 'Prompt body — sent as the message when clicked',
+    'customPreset.empty': 'Title and Prompt cannot be empty',
+    'customPreset.removeTitle': 'Delete',
+    'builtinPreset.restoreBtn': 'Restore defaults',
     'set.appearance': 'Appearance', 'set.plainUi': 'Plain', 'set.theme': 'Color', 'set.lang': 'Language', 'set.model': 'Model', 'set.addModel': 'Add model',
     'appearance.light': 'Light', 'appearance.dark': 'Dark',
     'set.noModels': 'No models yet — add one below',
@@ -333,9 +356,18 @@ const I18N = {
     'sys.stopRequested': 'Stop requested',
     'slash.help': 'Commands:\n/new new chat  /clear clear  /stop stop  /settings settings',
     'slash.unknown': 'Unknown command',
-    'upload.hint': 'Image upload: paste an image into the input box (multimodal WIP)',
+    'upload.hint': 'Upload file: pick / drag / paste',
+    'upload.button': 'Upload file',
+    'upload.tooLarge': 'File too large or limit reached',
+    'upload.failed': 'Upload failed',
+    'upload.removeTitle': 'Remove',
+    'upload.dropHint': 'Drop to upload files',
+    'lightbox.closeTitle': 'Close',
     'fold.thinking': 'Thinking', 'fold.tool': 'Tool call', 'fold.toolResult': 'Tool result', 'fold.llm': 'LLM Running',
     'model.auto': 'Auto',
+    'model.menuLabel': 'Select model',
+    'chip.plan': 'Plan',
+    'chip.auto': 'Auto',
     'ch.wechat': 'WeChat', 'ch.wecom': 'WeCom', 'ch.lark': 'Lark', 'ch.dingtalk': 'DingTalk',
     'ch.qq': 'QQ', 'ch.telegram': 'Telegram', 'ch.discord': 'Discord',
     'ch.loading': 'Loading…', 'ch.empty': 'No IM process scripts found',
@@ -356,7 +388,9 @@ const I18N = {
     'tok.colSession': 'Session', 'tok.colIn': 'Input', 'tok.colOut': 'Output', 'tok.colCacheW': 'Cache write', 'tok.colCache': 'Cache read', 'tok.colCost': 'Cost',
     'tok.from': 'From', 'tok.to': 'To', 'tok.reset': 'Reset', 'tok.noData': 'No records',
     'presetPrompt.goal': 'Enter Goal mode: read the L3 goal-mode SOP and autonomously achieve the goal I describe next.',
+    'presetPrompt.planMode': 'Enter Plan mode: read the L3 plan-mode SOP and follow its explore→plan→execute→verify flow for the task I describe next.',
     'presetPrompt.explore': 'Enter auto-explore mode: browse autonomously and periodically summarize key points to me.',
+    'presetPrompt.autoMode': 'Enter Auto mode: read the L3 auto-mode SOP and follow its rules to autonomously progress the task I describe next within the current working directory.',
     'presetPrompt.hive': 'Start Goal Hive mode: per the hive SOP, spawn multiple workers to collaboratively achieve the goal I describe next.',
     'presetPrompt.review': 'Enter reviewer mode: strictly scrutinize the previous output, review item by item and report issues.',
     'presetPrompt.mine': 'Collect this week\'s git commits and write a weekly report.',
@@ -440,6 +474,7 @@ function selectLang(code) {
   refreshStatusLabel();
   updateModelChip();
   renderSettingsModels();
+  if (typeof renderAllPresets === 'function') renderAllPresets();
   if (document.querySelector('.page[data-page="channels"].active')) renderChannelList(gaServiceStore.list());
   if (document.querySelector('.page[data-page="status"].active')) loadStatusPanel();
 }
@@ -570,6 +605,9 @@ const state = {
   sessions: new Map(), activeId: null, bridgeReady: false,
   llmNo: 0, modelProfiles: [], modelName: null,
   runtime: new Map(),
+  planMode: false, autoMode: false,
+  pendingFiles: [],
+  fileSeq: 0,
 };
 function rt(sess) {
   let r = state.runtime.get(sess.id);
@@ -673,7 +711,12 @@ function refreshEmptyState(sess) {
 function msgNode(msg) {
   const el = document.createElement('div');
   el.className = 'msg ' + (msg.role || 'system');
-  if (msg.role === 'user') el.innerHTML = `<div class="bubble">${escapeHtml(msg.content)}</div>`;
+  if (msg.role === 'user') {
+    const imgsHtml = (msg.images && msg.images.length)
+      ? `<div class="bubble-imgs">${msg.images.map(im => `<img src="${im.dataUrl}" alt="">`).join('')}</div>`
+      : '';
+    el.innerHTML = `<div class="bubble">${escapeHtml(msg.content)}</div>${imgsHtml}`;
+  }
   else if (msg.role === 'assistant') el.innerHTML = `<div class="bubble md">${renderAssistant(msg.content)}</div>`;
   else if (msg.role === 'error') el.innerHTML = `<div class="bubble err">${escapeHtml(msg.content)}</div>`;
   else el.innerHTML = `<div class="bubble sys">${escapeHtml(msg.content)}</div>`;
@@ -921,7 +964,17 @@ async function sendPrompt(text) {
   if (!state.activeId) { await newSession(); if (!state.activeId) return; }
   const sess = activeSess(); const r = rt(sess);
   if (r.busy) return;
+  const planPrefix = state.planMode ? t('presetPrompt.planMode') : '';
+  const autoPrefix = state.autoMode ? t('presetPrompt.autoMode') : '';
+  const expandedText = expandFilePlaceholders(text);
+  const composedPrompt = [planPrefix, autoPrefix, expandedText]
+    .map(s => (s || '').trim())
+    .filter(Boolean)
+    .join('\n\n');
+  const usedFiles = collectUsedFiles(text);
   const userMsg = { role: 'user', content: text };
+  const previewImgs = usedFiles.filter(f => f.isImage && f.dataUrl).map(f => ({ id: 'f-' + f.sid, dataUrl: f.dataUrl }));
+  if (previewImgs.length) userMsg.images = previewImgs;
   sess.messages.push(userMsg); appendMessage(sess, userMsg);
   sess.lastActiveTs = Date.now();
   if (sess.untitled || isUntitled(sess.title)) {
@@ -941,8 +994,10 @@ async function sendPrompt(text) {
         saveSessions();
       }
     }
-    const res = await window.ga.rpc('session/prompt', { sessionId: sid, prompt: text, images: [], llmNo: state.llmNo });
+    const res = await window.ga.rpc('session/prompt', { sessionId: sid, prompt: composedPrompt, llmNo: state.llmNo });
     if (res?.error) throw new Error(res.error.message || res.error);
+    state.pendingFiles = [];
+    renderThumbStrip();
     const uid = Number(res.userMessageId || res.result?.userMessageId || 0);
     if (uid) { r.seen.add(uid); r.lastId = Math.max(r.lastId, uid); }
     pollSession(sess);
@@ -998,10 +1053,28 @@ async function handleSlash(cmd) {
   }
 }
 // 预设卡：按 data-preset 解耦（与翻译后的标题无关）
-document.querySelectorAll('.fcard').forEach(card => {
-  card.addEventListener('click', () => {
+document.querySelectorAll('.feature-grid').forEach(grid => {
+  grid.addEventListener('click', (e) => {
+    const xBtn = e.target.closest('.fc-x');
+    if (xBtn) {
+      e.stopPropagation();
+      const kind = xBtn.dataset.removeKind;
+      const id = xBtn.dataset.removeId;
+      if (kind === 'builtin') hideBuiltinPreset(id);
+      else if (kind === 'custom') removeCustomPreset(id);
+      return;
+    }
+    const card = e.target.closest('.fcard');
+    if (!card || !grid.contains(card)) return;
     const key = card.dataset.preset;
-    if (!key || key === 'add') { inputEl.focus(); closeModals(); return; }
+    if (key === 'add') { closeModals(); openModal('custom-preset-modal'); resetCustomPresetForm(); return; }
+    if (card.classList.contains('fcard-custom')) {
+      const id = card.dataset.id;
+      const cp = state.customPresets.find(p => p.id === id);
+      if (cp) { closeModals(); sendPrompt(cp.prompt); }
+      return;
+    }
+    if (!key) { inputEl.focus(); closeModals(); return; }
     const prompt = I18N[lang]['presetPrompt.' + key] || I18N.zh['presetPrompt.' + key];
     closeModals();
     if (prompt) sendPrompt(prompt);
@@ -1010,7 +1083,7 @@ document.querySelectorAll('.fcard').forEach(card => {
 
 /* ═══════════════ 模型 / 设置 ═══════════════ */
 function updateModelChip() {
-  if (modelNameEl) modelNameEl.textContent = state.modelName || t('model.auto');
+  if (modelNameEl) modelNameEl.textContent = state.modelName || '';
 }
 async function selectModel(id, name) {
   state.llmNo = id;
@@ -1153,12 +1226,58 @@ async function loadModelProfiles() {
 }
 if (modelChip) modelChip.addEventListener('click', (e) => {
   e.preventDefault();
-  const list = state.modelProfiles || [];
-  if (!list.length) { openSettings(); return; }
-  const idx = list.findIndex(p => (p.id ?? 0) === state.llmNo);
-  const next = list[(idx + 1) % list.length];
-  selectModel(next.id ?? 0, next.name);
+  e.stopPropagation();
+  openModelMenu();
 });
+
+/* ═══════════════ 模型菜单 ═══════════════ */
+const modelMenu = document.getElementById('model-menu');
+function renderModelMenu() {
+  if (!modelMenu) return;
+  const list = state.modelProfiles || [];
+  const rows = [];
+  list.forEach((p, i) => {
+    const no = (p.id ?? i);
+    const isActive = (state.llmNo === no) ? ' active' : '';
+    const label = escapeHtml(p.name || '');
+    rows.push(`<div class="ga-menu-item${isActive}" data-llmno="${no}">${label}</div>`);
+  });
+  modelMenu.innerHTML = rows.join('');
+  applyI18n();
+}
+function openModelMenu() {
+  if (!modelMenu || !modelChip) return;
+  if (convMenu) convMenu.hidden = true;
+  renderModelMenu();
+  modelMenu.hidden = false;
+  const chipRect = modelChip.getBoundingClientRect();
+  const composer = modelChip.closest('.composer');
+  if (composer) {
+    const composerRect = composer.getBoundingClientRect();
+    modelMenu.style.left = (chipRect.left - composerRect.left) + 'px';
+    modelMenu.style.bottom = (composerRect.bottom - chipRect.top + 4) + 'px';
+  }
+}
+function closeModelMenu() { if (modelMenu) modelMenu.hidden = true; }
+if (modelMenu) modelMenu.addEventListener('click', (e) => {
+  e.stopPropagation();
+  const item = e.target.closest('.ga-menu-item');
+  if (!item) return;
+  const no = parseInt(item.dataset.llmno, 10);
+  if (Number.isNaN(no)) return;
+  const p = (state.modelProfiles || []).find(x => (x.id ?? 0) === no);
+  selectModel(no, (p && p.name) || '');
+  closeModelMenu();
+});
+document.addEventListener('click', (e) => {
+  if (!modelMenu || modelMenu.hidden) return;
+  if (e.target.closest('#model-menu') || e.target.closest('#model-chip')) return;
+  closeModelMenu();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && modelMenu && !modelMenu.hidden) closeModelMenu();
+});
+
 const themeSwatches = document.getElementById('theme-swatches');
 if (themeSwatches) themeSwatches.addEventListener('click', (e) => {
   const sw = e.target.closest('.swatch[data-theme]');
@@ -1219,8 +1338,251 @@ if (addModelForm) addModelForm.addEventListener('submit', async (e) => {
   }
 });
 
-const uploadBtn = chatPage.querySelector('.composer-top .ic-btn');
-if (uploadBtn) uploadBtn.addEventListener('click', (e) => { e.preventDefault(); showSystem(t('upload.hint')); });
+/* ═══════════════ Plan / Auto toggle ═══════════════ */
+const planChip = document.getElementById('plan-chip');
+const autoChip = document.getElementById('auto-chip');
+function applyToggleClass() {
+  if (planChip) planChip.classList.toggle('on', state.planMode);
+  if (autoChip) autoChip.classList.toggle('on', state.autoMode);
+}
+if (planChip) planChip.addEventListener('click', (e) => {
+  e.preventDefault();
+  state.planMode = !state.planMode;
+  if (state.planMode && state.autoMode) {
+    state.autoMode = false;
+    localStorage.setItem('ga_auto', '0');
+  }
+  localStorage.setItem('ga_plan', state.planMode ? '1' : '0');
+  applyToggleClass();
+});
+if (autoChip) autoChip.addEventListener('click', (e) => {
+  e.preventDefault();
+  state.autoMode = !state.autoMode;
+  if (state.autoMode && state.planMode) {
+    state.planMode = false;
+    localStorage.setItem('ga_plan', '0');
+  }
+  localStorage.setItem('ga_auto', state.autoMode ? '1' : '0');
+  applyToggleClass();
+});
+
+/* ═══════════════ 文件上传（图片+任意文件，tuiapp_v2 模式） ═══════════════ */
+const MAX_UPLOAD_FILES = 10;
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+const imgInput = document.getElementById('img-input');
+const thumbStrip = document.getElementById('thumb-strip');
+const uploadBtn = document.getElementById('upload-btn');
+const chatPanel = document.querySelector('main.main');
+
+function isImageFile(f) {
+  return (f && (f.type || '').startsWith('image/')) || IMG_EXT_RE.test(f?.name || '');
+}
+
+function placeholderFor(file) {
+  return file.isImage ? `[Image #${file.sid}]` : `[File #${file.sid}]`;
+}
+
+function renderThumbStrip() {
+  if (!thumbStrip) return;
+  if (state.pendingFiles.length === 0) {
+    thumbStrip.innerHTML = '';
+    thumbStrip.hidden = true;
+    return;
+  }
+  thumbStrip.innerHTML = state.pendingFiles.map(f => {
+    if (f.isImage && f.dataUrl) {
+      return `<div class="thumb" data-sid="${f.sid}"><img src="${f.dataUrl}"><button class="x" data-sid="${f.sid}" data-i18n-title="upload.removeTitle" title="">×</button></div>`;
+    }
+    const label = (f.name || 'file').replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+    return `<div class="file-chip" data-sid="${f.sid}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg><span class="fc-name">${label}</span><button class="x" data-sid="${f.sid}" data-i18n-title="upload.removeTitle" title="">×</button></div>`;
+  }).join('');
+  thumbStrip.hidden = false;
+  applyI18n();
+}
+
+function insertPlaceholderInComposer(marker) {
+  if (!inputEl) return;
+  const start = inputEl.selectionStart ?? inputEl.value.length;
+  const end = inputEl.selectionEnd ?? inputEl.value.length;
+  const before = inputEl.value.slice(0, start);
+  const after = inputEl.value.slice(end);
+  const needSpace = before && !/\s$/.test(before);
+  const insertion = (needSpace ? ' ' : '') + marker + ' ';
+  inputEl.value = before + insertion + after;
+  const caret = (before + insertion).length;
+  inputEl.setSelectionRange(caret, caret);
+  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+  inputEl.focus();
+}
+
+function removePlaceholderFromComposer(file) {
+  if (!inputEl) return;
+  const marker = placeholderFor(file);
+  const re = new RegExp('\\s?' + marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s?', '');
+  inputEl.value = inputEl.value.replace(re, ' ').replace(/  +/g, ' ').trim();
+  inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function expandFilePlaceholders(text) {
+  return text.replace(/\[(Image|File) #(\d+)\]/g, (m, kind, n) => {
+    const f = state.pendingFiles.find(x => x.sid === Number(n));
+    return (f && f.path) ? f.path : m;
+  });
+}
+
+function collectUsedFiles(text) {
+  const used = [];
+  text.replace(/\[(Image|File) #(\d+)\]/g, (m, kind, n) => {
+    const f = state.pendingFiles.find(x => x.sid === Number(n));
+    if (f) used.push(f);
+    return m;
+  });
+  return used;
+}
+
+async function uploadOne(name, dataUrl) {
+  const res = await fetch(`http://${location.hostname}:14168/upload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, dataUrl }),
+  });
+  const j = await res.json();
+  if (!j.ok) throw new Error(j.error || 'upload failed');
+  return j.path;
+}
+
+async function addFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (files.length === 0) return;
+  let skipped = false;
+  const accepted = [];
+  for (const f of files) {
+    if (f.size > MAX_UPLOAD_BYTES) { skipped = true; continue; }
+    if (state.pendingFiles.length + accepted.length >= MAX_UPLOAD_FILES) { skipped = true; break; }
+    accepted.push(f);
+  }
+  if (accepted.length === 0) {
+    if (skipped) showSystem(t('upload.tooLarge'));
+    return;
+  }
+  for (const f of accepted) {
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result || ''));
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(f);
+      });
+      const path = await uploadOne(f.name || 'file', dataUrl);
+      state.fileSeq += 1;
+      const sid = state.fileSeq;
+      const isImage = isImageFile(f);
+      const entry = {
+        sid, name: f.name || 'file', isImage, path,
+        dataUrl: isImage ? dataUrl : '',
+      };
+      state.pendingFiles.push(entry);
+      insertPlaceholderInComposer(placeholderFor(entry));
+      renderThumbStrip();
+    } catch (e) {
+      showSystem(t('upload.failed') + ': ' + (e.message || e));
+    }
+  }
+  if (skipped) showSystem(t('upload.tooLarge'));
+}
+
+if (uploadBtn && imgInput) uploadBtn.addEventListener('click', (e) => {
+  e.preventDefault();
+  imgInput.click();
+});
+
+if (imgInput) imgInput.addEventListener('change', () => {
+  addFiles(imgInput.files);
+  imgInput.value = '';
+});
+
+if (thumbStrip) thumbStrip.addEventListener('click', (e) => {
+  const x = e.target.closest('.x');
+  if (x) {
+    const sid = Number(x.dataset.sid);
+    const idx = state.pendingFiles.findIndex(f => f.sid === sid);
+    if (idx >= 0) {
+      const removed = state.pendingFiles[idx];
+      state.pendingFiles.splice(idx, 1);
+      removePlaceholderFromComposer(removed);
+      renderThumbStrip();
+      if (removed.path) {
+        fetch(`http://${location.hostname}:14168/upload`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: removed.path }),
+        }).catch(() => {});
+      }
+    }
+    return;
+  }
+  const img = e.target.closest('img');
+  if (img && img.src) openLightbox(img.src);
+});
+
+/* ─── drag & drop on chat panel ─── */
+if (chatPanel) {
+  let dragDepth = 0;
+  const hasFiles = (e) => {
+    const types = e.dataTransfer && e.dataTransfer.types;
+    if (!types) return false;
+    for (let i = 0; i < types.length; i += 1) {
+      if (types[i] === 'Files') return true;
+    }
+    return false;
+  };
+  // Prevent the browser from opening dropped files outside chatPanel.
+  window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+  window.addEventListener('drop',     (e) => { if (hasFiles(e)) e.preventDefault(); });
+  chatPanel.addEventListener('dragenter', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth += 1;
+    chatPanel.classList.add('dragover');
+    chatPanel.dataset.dropHint = t('upload.dropHint');
+  });
+  chatPanel.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  chatPanel.addEventListener('dragleave', (e) => {
+    if (!hasFiles(e)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) chatPanel.classList.remove('dragover');
+  });
+  chatPanel.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    dragDepth = 0;
+    chatPanel.classList.remove('dragover');
+    addFiles(e.dataTransfer.files);
+  });
+}
+
+/* ─── paste file/image into composer ─── */
+if (inputEl) {
+  inputEl.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    const files = [];
+    for (const it of items) {
+      if (it.kind === 'file') {
+        const f = it.getAsFile();
+        if (f) files.push(f);
+      }
+    }
+    if (files.length === 0) return;
+    e.preventDefault();
+    addFiles(files);
+  });
+}
 
 /* ═══════════════ bridge 事件 ═══════════════ */
 window.ga.onBridgeReady(async () => {
@@ -1389,6 +1751,195 @@ if(tokUntil)tokUntil.addEventListener('change',()=>{_tokPage=0;loadTokenPage();}
 const tokResetBtn=document.getElementById('tok-reset');
 if(tokResetBtn)tokResetBtn.addEventListener('click',()=>{if(tokSince)tokSince.value='';if(tokUntil)tokUntil.value='';_tokPage=0;loadTokenPage();});
 nav.addEventListener('click',(e)=>{const item=e.target.closest('.nav-item');if(item&&item.dataset.page==='token')loadTokenPage();if(item&&item.dataset.page==='channels')renderChannelList(gaServiceStore.list());if(item&&item.dataset.page==='status')loadStatusPanel();});
+/* ═══════════════ 自定义预设 ═══════════════ */
+const CP_KEY = 'ga_custom_presets';
+const HB_KEY = 'ga_hidden_builtins';
+
+const BUILTIN_PRESETS = [
+  { key: 'goal',    titleKey: 'preset.goal.t',    descKey: 'preset.goal.d',    promptKey: 'presetPrompt.goal',
+    iconSvg: '<svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.4"/></svg>' },
+  { key: 'explore', titleKey: 'preset.explore.t', descKey: 'preset.explore.d', promptKey: 'presetPrompt.explore',
+    iconSvg: '<svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polygon points="16.2 7.8 14.1 14.1 7.8 16.2 9.9 9.9 16.2 7.8"/></svg>' },
+  { key: 'hive',    titleKey: 'preset.hive.t',    descKey: 'preset.hive.d',    promptKey: 'presetPrompt.hive',
+    iconSvg: '<svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 21 7 21 17 12 22 3 17 3 7"/><polygon points="12 8 16 10.3 16 14.7 12 17 8 14.7 8 10.3"/></svg>' },
+  { key: 'review',  titleKey: 'preset.review.t',  descKey: 'preset.review.d',  promptKey: 'presetPrompt.review',
+    iconSvg: '<svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' },
+  { key: 'mine',    titleKey: 'preset.mine.t',    descKey: 'preset.mine.d',    promptKey: 'presetPrompt.mine',
+    iconSvg: '<svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>' },
+];
+const ADD_ICON_SVG = '<svg class="fc-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
+
+state.customPresets = [];
+state.hiddenBuiltins = new Set();
+
+function loadCustomPresets() {
+  try {
+    const raw = localStorage.getItem(CP_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    state.customPresets = Array.isArray(arr) ? arr.filter(p => p && p.id && p.title && p.prompt) : [];
+  } catch { state.customPresets = []; }
+}
+function saveCustomPresets() {
+  localStorage.setItem(CP_KEY, JSON.stringify(state.customPresets));
+}
+function loadHiddenBuiltins() {
+  try {
+    const raw = localStorage.getItem(HB_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    state.hiddenBuiltins = new Set(Array.isArray(arr) ? arr.filter(k => typeof k === 'string') : []);
+  } catch { state.hiddenBuiltins = new Set(); }
+}
+function saveHiddenBuiltins() {
+  localStorage.setItem(HB_KEY, JSON.stringify([...state.hiddenBuiltins]));
+}
+
+function makeCardEl({ kind, dataAttrs, iconSvg, titleText, descText, removable }) {
+  const card = document.createElement('div');
+  card.className = 'fcard ' + kind;
+  for (const [k, v] of Object.entries(dataAttrs || {})) card.dataset[k] = v;
+  card.innerHTML = iconSvg;
+  if (removable) {
+    const x = document.createElement('button');
+    x.className = 'fc-x';
+    x.type = 'button';
+    x.dataset.removeKind = kind === 'fcard-builtin' ? 'builtin' : 'custom';
+    x.dataset.removeId = dataAttrs?.id || dataAttrs?.preset || '';
+    x.dataset.i18nTitle = 'customPreset.removeTitle';
+    x.title = t('customPreset.removeTitle');
+    x.textContent = '×';
+    card.appendChild(x);
+  }
+  const titleEl = document.createElement('div');
+  titleEl.className = 'fc-t';
+  titleEl.textContent = titleText;
+  card.appendChild(titleEl);
+  const descEl = document.createElement('div');
+  descEl.className = 'fc-d';
+  descEl.textContent = descText;
+  card.appendChild(descEl);
+  return card;
+}
+
+function renderAllPresets() {
+  document.querySelectorAll('.feature-grid').forEach(grid => {
+    grid.innerHTML = '';
+    for (const bp of BUILTIN_PRESETS) {
+      if (state.hiddenBuiltins.has(bp.key)) continue;
+      grid.appendChild(makeCardEl({
+        kind: 'fcard-builtin',
+        dataAttrs: { preset: bp.key },
+        iconSvg: bp.iconSvg,
+        titleText: t(bp.titleKey),
+        descText: t(bp.descKey),
+        removable: true,
+      }));
+    }
+    for (const cp of state.customPresets) {
+      grid.appendChild(makeCardEl({
+        kind: 'fcard-custom',
+        dataAttrs: { id: cp.id },
+        iconSvg: ADD_ICON_SVG,
+        titleText: cp.title,
+        descText: cp.prompt,
+        removable: true,
+      }));
+    }
+    const addCard = makeCardEl({
+      kind: 'add',
+      dataAttrs: { preset: 'add' },
+      iconSvg: ADD_ICON_SVG,
+      titleText: t('preset.add.t'),
+      descText: t('preset.add.d'),
+      removable: false,
+    });
+    grid.appendChild(addCard);
+  });
+  updateRestoreBtnVisibility();
+}
+
+function addCustomPreset(title, prompt) {
+  const id = 'cp-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+  state.customPresets.push({ id, title, prompt });
+  saveCustomPresets();
+  renderAllPresets();
+}
+function removeCustomPreset(id) {
+  const idx = state.customPresets.findIndex(p => p.id === id);
+  if (idx < 0) return;
+  state.customPresets.splice(idx, 1);
+  saveCustomPresets();
+  renderAllPresets();
+}
+function hideBuiltinPreset(key) {
+  if (!BUILTIN_PRESETS.some(bp => bp.key === key)) return;
+  state.hiddenBuiltins.add(key);
+  saveHiddenBuiltins();
+  renderAllPresets();
+}
+function restoreBuiltinPresets() {
+  state.hiddenBuiltins.clear();
+  saveHiddenBuiltins();
+  renderAllPresets();
+}
+function updateRestoreBtnVisibility() {
+  const btn = document.getElementById('preset-restore-btn');
+  if (!btn) return;
+  btn.hidden = state.hiddenBuiltins.size === 0;
+}
+
+const cpModal = document.getElementById('custom-preset-modal');
+const cpTitleInput = document.getElementById('cp-title');
+const cpPromptInput = document.getElementById('cp-prompt');
+const cpSaveBtn = document.getElementById('cp-save');
+const cpError = document.getElementById('cp-error');
+function resetCustomPresetForm() {
+  if (cpTitleInput) cpTitleInput.value = '';
+  if (cpPromptInput) cpPromptInput.value = '';
+  if (cpError) { cpError.hidden = true; cpError.textContent = ''; }
+  setTimeout(() => { if (cpTitleInput) cpTitleInput.focus(); }, 0);
+}
+if (cpSaveBtn) cpSaveBtn.addEventListener('click', () => {
+  const title = (cpTitleInput?.value || '').trim();
+  const prompt = (cpPromptInput?.value || '').trim();
+  if (!title || !prompt) {
+    if (cpError) { cpError.textContent = t('customPreset.empty'); cpError.hidden = false; }
+    return;
+  }
+  addCustomPreset(title, prompt);
+  if (cpModal) cpModal.hidden = true;
+});
+
+const restoreBtn = document.getElementById('preset-restore-btn');
+if (restoreBtn) restoreBtn.addEventListener('click', () => { restoreBuiltinPresets(); });
+
+
+/* ═══════════════ 图片预览 lightbox ═══════════════ */
+const lightbox    = document.getElementById('lightbox');
+const lightboxImg = document.getElementById('lightbox-img');
+function openLightbox(src) {
+  if (!lightbox || !lightboxImg || !src) return;
+  lightboxImg.src = src;
+  lightbox.hidden = false;
+}
+function closeLightbox() {
+  if (!lightbox || !lightboxImg) return;
+  lightbox.hidden = true;
+  lightboxImg.src = '';
+}
+if (lightbox) {
+  lightbox.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close]')) closeLightbox();
+  });
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && lightbox && !lightbox.hidden) closeLightbox();
+});
+if (msgArea) {
+  msgArea.addEventListener('click', (e) => {
+    const img = e.target.closest('.bubble-imgs img');
+    if (img && img.src) openLightbox(img.src);
+  });
+}
 
 /* ═══════════════ 消息通道（复用 gaServiceStore + WS 同步） ═══════════════ */
 const CHAN_ICON = '<svg class="lr-ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
@@ -1723,9 +2274,19 @@ if (chanListEl) {
 loadSessions();
 applyAppearance(appearance, plainUi);
 applyTheme(theme);
+state.planMode = localStorage.getItem('ga_plan') === '1';
+state.autoMode = localStorage.getItem('ga_auto') === '1';
+if (state.planMode && state.autoMode) {
+  state.autoMode = false;
+  localStorage.setItem('ga_auto', '0');
+}
+applyToggleClass();
 applyI18n();
 updateModelChip();
 renderSessionList();
+loadCustomPresets();
+loadHiddenBuiltins();
+renderAllPresets();
 if (state.activeId) setActiveSession(state.activeId);
 else refreshEmptyState(null);
 runLabel.textContent = t('status.connecting');
