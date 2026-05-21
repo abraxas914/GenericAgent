@@ -365,7 +365,7 @@ const I18N = {
 const LANGS = ['zh', 'en'];
 let lang = LANGS.includes(localStorage.getItem('ga_lang')) ? localStorage.getItem('ga_lang') : 'zh';
 let theme = localStorage.getItem('ga_theme') || '1';
-const STORE = { lang: 'ga_lang', theme: 'ga_theme', appearance: 'ga_appearance', plain: 'ga_plain', llmNo: 'ga_llm_no' };
+const STORE = { lang: 'ga_lang', theme: 'ga_theme', appearance: 'ga_appearance', plain: 'ga_plain', llmNo: 'ga_llm_no', sessions: 'ga_sessions', activeId: 'ga_active_id' };
 const APPEARANCE_IDS = ['light', 'dark'];
 const LEGACY_STYLE = { classic: ['light', true], tinted: ['light', false], dark: ['dark', false] };
 
@@ -579,6 +579,32 @@ function rt(sess) {
 const activeSess = () => state.sessions.get(state.activeId) || null;
 const isActive = (sess) => sess && sess.id === state.activeId;
 
+function saveSessions() {
+  try {
+    const arr = [...state.sessions.values()].map(s => ({
+      id: s.id, bridgeSessionId: s.bridgeSessionId, title: s.title,
+      untitled: s.untitled, pinned: s.pinned,
+      lastActiveTs: s.lastActiveTs
+    }));
+    localStorage.setItem(STORE.sessions, JSON.stringify(arr));
+    if (state.activeId) localStorage.setItem(STORE.activeId, state.activeId);
+  } catch (_) {}
+}
+function loadSessions() {
+  try {
+    const raw = localStorage.getItem(STORE.sessions);
+    if (!raw) return;
+    const arr = JSON.parse(raw);
+    for (const s of arr) {
+      s.messages = s.messages || [];
+      state.sessions.set(s.id, s);
+    }
+    const savedActive = localStorage.getItem(STORE.activeId);
+    if (savedActive && state.sessions.has(savedActive)) state.activeId = savedActive;
+    else if (state.sessions.size) state.activeId = state.sessions.keys().next().value;
+  } catch (_) {}
+}
+
 /* ═══════════════ DOM refs ═══════════════ */
 const chatPage   = document.querySelector('.page[data-page="chat"]');
 const msgArea    = chatPage.querySelector('.msg-area');
@@ -704,7 +730,12 @@ function isUntitled(x) { return !x || /^(new chat|新对话|新会话)$/i.test(S
 function renderSessionList() {
   convListEl.innerHTML = '';
   const query = (searchInput ? searchInput.value : '').trim().toLowerCase();
-  const all = [...state.sessions.values()];
+  const all = [...state.sessions.values()]
+    .sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return (b.lastActiveTs || 0) - (a.lastActiveTs || 0);
+    });
   const filtered = query
     ? all.filter(s => {
         const title = (s.title || '').toLowerCase();
@@ -742,10 +773,11 @@ async function ensureBridgeSession(sess) {
 }
 async function newSession() {
   const localId = 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2);
-  const sess = { id: localId, bridgeSessionId: null, title: t('conv.defaultTitle'), messages: [], untitled: true };
+  const sess = { id: localId, bridgeSessionId: null, title: t('conv.defaultTitle'), messages: [], untitled: true, lastActiveTs: Date.now() };
   state.sessions.set(localId, sess);
   try { await ensureBridgeSession(sess); } catch (e) { showError(t('err.newSession') + ': ' + (e.message || e)); }
   setActiveSession(localId);
+  saveSessions();
   renderSessionList();
 }
 function setActiveSession(id) {
@@ -757,6 +789,10 @@ function setActiveSession(id) {
   renderAllMessages(sess);
   setBusy(sess, rt(sess).busy);
   renderSessionList();
+  localStorage.setItem(STORE.activeId, id);
+  if (sess.bridgeSessionId && !sess.messages.length && state.bridgeReady) {
+    pollSession(sess);
+  }
 }
 async function closeSession(id) {
   const sess = state.sessions.get(id);
@@ -770,6 +806,7 @@ async function closeSession(id) {
     if (next) setActiveSession(next);
     else { state.activeId = null; if (msgsEl) msgsEl.innerHTML = ''; refreshEmptyState(null); refreshStatusLabel(); }
   }
+  saveSessions();
   renderSessionList();
 }
 
@@ -816,6 +853,7 @@ convMenu.addEventListener('click', (e) => {
       for (const [k, v] of state.sessions) if (k !== sess.id) m.set(k, v);
       state.sessions = m;
     }
+    saveSessions();
     renderSessionList();
   } else if (sess && act === 'del') {
     closeSession(sess.id);
@@ -834,6 +872,7 @@ function upsert(sess, raw, partial) {
   r.seen.add(m.id); r.lastId = Math.max(r.lastId, m.id);
   if (m.role === 'assistant' && r.draftEl) { r.draftEl.remove(); r.draftEl = null; r.draftText = ''; }
   sess.messages.push(m); appendMessage(sess, m);
+  saveSessions();
 }
 async function pollSession(sess) {
   const r = rt(sess);
@@ -857,6 +896,7 @@ async function pollSession(sess) {
             sess.messages.push(m);
             r.draftEl.remove(); r.draftEl = null; r.draftText = '';
             if (isActive(sess)) appendMessage(sess, m);
+            saveSessions();
           } else {
             r.draftEl.remove(); r.draftEl = null;
           }
@@ -869,6 +909,7 @@ async function pollSession(sess) {
     setBusy(sess, false);
   } finally {
     r.polling = false; renderSessionList();
+    tokPollBridge();
   }
 }
 
@@ -882,13 +923,24 @@ async function sendPrompt(text) {
   if (r.busy) return;
   const userMsg = { role: 'user', content: text };
   sess.messages.push(userMsg); appendMessage(sess, userMsg);
+  sess.lastActiveTs = Date.now();
   if (sess.untitled || isUntitled(sess.title)) {
     sess.title = text.slice(0, 40) + (text.length > 40 ? '…' : '');
     sess.untitled = false; renderSessionList();
   }
+  saveSessions();
   setBusy(sess, true);
   try {
-    const sid = await ensureBridgeSession(sess);
+    let sid = await ensureBridgeSession(sess);
+    try {
+      await bridgeFetch(`/session/${encodeURIComponent(sid)}/restore`, { method: 'POST', body: {} });
+    } catch (restoreErr) {
+      if (/not found/i.test(restoreErr.message || '')) {
+        sess.bridgeSessionId = null;
+        sid = await ensureBridgeSession(sess);
+        saveSessions();
+      }
+    }
     const res = await window.ga.rpc('session/prompt', { sessionId: sid, prompt: text, images: [], llmNo: state.llmNo });
     if (res?.error) throw new Error(res.error.message || res.error);
     const uid = Number(res.userMessageId || res.result?.userMessageId || 0);
@@ -1177,6 +1229,8 @@ window.ga.onBridgeReady(async () => {
   await loadModelProfiles();
   await loadBridgeConfig();
   if (document.querySelector('.page[data-page="channels"].active')) renderChannelList(gaServiceStore.list());
+  const sess = activeSess();
+  if (sess && sess.bridgeSessionId && !sess.messages.length) pollSession(sess);
 });
 window.ga.onBridgeNotification((msg) => {
   if (msg && msg.type === 'session-state') {
@@ -1225,6 +1279,23 @@ function estCost(inp, out, model, cacheRead, cacheCreate) {
 }
 function fmtTok(n) { return n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n); }
 function fmtTime(ts) { return new Date(ts*1000).toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
+function modelPriceTip(model) {
+  if (!model) return '';
+  const m = model.toLowerCase().replace(/\[.*\]/,'');
+  const entry = MODEL_PRICES[m] || Object.entries(MODEL_PRICES).find(([k])=>m.includes(k))?.[1];
+  const known = !!entry;
+  const p = entry || [3,15];
+  const isClaudeOrDS = /claude|deepseek/i.test(m);
+  const cacheReadRate = isClaudeOrDS ? 0.1 : 0.5;
+  const cacheWriteRate = isClaudeOrDS ? 1.25 : 1.0;
+  const lines = [];
+  if (!known) lines.push(lang === 'zh' ? '⚠ 此模型计费规则尚未明确，按默认估算' : '⚠ Pricing not confirmed, using defaults');
+  lines.push((lang === 'zh' ? '输入: $' : 'Input: $') + p[0] + ' /M tokens');
+  lines.push((lang === 'zh' ? '输出: $' : 'Output: $') + p[1] + ' /M tokens');
+  lines.push((lang === 'zh' ? '缓存写入: $' : 'Cache write: $') + (p[0] * cacheWriteRate).toFixed(2) + ' /M tokens');
+  lines.push((lang === 'zh' ? '缓存读取: $' : 'Cache read: $') + (p[0] * cacheReadRate).toFixed(2) + ' /M tokens');
+  return lines.join('\n');
+}
 
 function tokLoadHistory() { try { return JSON.parse(localStorage.getItem(TOK_STORE_KEY)||'[]'); } catch(_) { return []; } }
 function tokSaveHistory(h) { localStorage.setItem(TOK_STORE_KEY, JSON.stringify(h)); }
@@ -1237,13 +1308,13 @@ async function tokPollBridge() {
   if (_tokPolling) return;
   _tokPolling = true;
   try {
-    const res = await bridgeFetch('/token-stats');
-    const data = await res.json();
+    const data = await bridgeFetch('/token-stats');
     const history = tokLoadHistory();
     for (const r of (data.records||[])) {
       const key = r.thread;
       const prev = _tokLastSnap[key] || {input:0,output:0,cacheCreate:0,cacheRead:0};
-      const di = r.input-prev.input, do_ = r.output-prev.output, dc = r.cacheCreate-prev.cacheCreate, dr = r.cacheRead-prev.cacheRead;
+      let di = r.input-prev.input, do_ = r.output-prev.output, dc = r.cacheCreate-prev.cacheCreate, dr = r.cacheRead-prev.cacheRead;
+      if (di<0||do_<0||dc<0||dr<0) { di = r.input; do_ = r.output; dc = r.cacheCreate; dr = r.cacheRead; }
       if (di>0||do_>0||dc>0||dr>0) {
         const sid = key.replace('GA-','');
         const sess = [...state.sessions.values()].find(s=>s.bridgeSessionId===sid);
@@ -1303,7 +1374,8 @@ function tokRenderTable(records) {
     const details=[]; s.prompts.sort((a,b)=>b.ts-a.ts);
     for(const p of s.prompts){
       const dr=document.createElement('tr'); dr.className='tok-detail'; dr.hidden=true;
-      dr.innerHTML=`<td>${fmtTime(p.ts)}${p.model?' · '+escapeHtml(p.model):''}</td><td>${fmtTok(p.input||0)}</td><td>${fmtTok(p.output||0)}</td><td>${fmtTok(p.cacheCreate||0)}</td><td>${fmtTok(p.cacheRead||0)}</td><td>¥${estCost(p.input||0,p.output||0,p.model,p.cacheRead||0,p.cacheCreate||0)}</td>`;
+      const modelHtml = p.model ? ` · <span class="tok-model-tip" data-tip="${escapeHtml(modelPriceTip(p.model))}">${escapeHtml(p.model)}</span>` : '';
+      dr.innerHTML=`<td>${fmtTime(p.ts)}${modelHtml}</td><td>${fmtTok(p.input||0)}</td><td>${fmtTok(p.output||0)}</td><td>${fmtTok(p.cacheCreate||0)}</td><td>${fmtTok(p.cacheRead||0)}</td><td>¥${estCost(p.input||0,p.output||0,p.model,p.cacheRead||0,p.cacheCreate||0)}</td>`;
       tokTbody.appendChild(dr); details.push(dr);
     }
     tr.addEventListener('click',()=>{const o=tr.classList.toggle('open');details.forEach(d=>d.hidden=!o);});
@@ -1648,11 +1720,13 @@ if (chanListEl) {
 }
 
 /* ═══════════════ 启动 ═══════════════ */
+loadSessions();
 applyAppearance(appearance, plainUi);
 applyTheme(theme);
 applyI18n();
 updateModelChip();
 renderSessionList();
-refreshEmptyState(null);
+if (state.activeId) setActiveSession(state.activeId);
+else refreshEmptyState(null);
 runLabel.textContent = t('status.connecting');
 window.ga.startBridge && window.ga.startBridge();

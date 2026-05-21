@@ -637,6 +637,19 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 .tok-detail td{ padding:5px 12px 5px 32px; font-size:11px; color:var(--muted); border-bottom:1px solid var(--line-soft); background:var(--field-bg); }
 .tok-detail td:not(:first-child){ text-align:right; }
 .tok-detail[hidden]{ display:none; }
+.tok-model-tip{
+  position:relative; cursor:help; color:var(--blue);
+  border-bottom:1px dashed var(--muted2);
+}
+.tok-model-tip::after{
+  content:attr(data-tip); position:absolute; bottom:calc(100% + 6px); left:50%;
+  transform:translateX(-50%); white-space:pre-line; font-size:11px; line-height:1.5;
+  background:var(--card); color:var(--txt); border:1px solid var(--line);
+  border-radius:8px; padding:8px 10px; box-shadow:var(--shadow-pop);
+  pointer-events:none; opacity:0; transition:opacity .15s; z-index:100;
+  min-width:160px; text-align:left;
+}
+.tok-model-tip:hover::after{ opacity:1; }
 .tok-pager{ display:flex; gap:4px; justify-content:center; margin-top:12px; }
 .tok-pager button{
   min-width:28px; height:28px; border:1px solid var(--line); border-radius:6px;

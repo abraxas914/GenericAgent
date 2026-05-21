@@ -93,10 +93,44 @@ class AgentManager:
         self.config: Dict[str, Any] = {}
         self.sessions: Dict[str, Session] = {}
         self.active_session_id: Optional[str] = None
+        self._sessions_file = Path(self.ga_root) / "temp" / "desktop_sessions.json"
+        self._load_sessions()
 
     @property
     def mykey_path(self) -> str:
         return str(Path(self.ga_root) / "mykey.py")
+
+    def _persist(self):
+        try:
+            self._sessions_file.parent.mkdir(parents=True, exist_ok=True)
+            arr = []
+            with self.lock:
+                for s in self.sessions.values():
+                    arr.append({"id": s.id, "title": s.title, "cwd": s.cwd,
+                                "created_at": s.created_at, "updated_at": s.updated_at,
+                                "messages": s.messages, "msg_seq": s.msg_seq})
+            self._sessions_file.write_text(json.dumps(arr, ensure_ascii=False, default=str), encoding="utf-8")
+        except Exception as e:
+            print(f"[bridge] persist sessions failed: {e}", file=sys.stderr)
+
+    def _load_sessions(self):
+        try:
+            if not self._sessions_file.exists():
+                return
+            arr = json.loads(self._sessions_file.read_text(encoding="utf-8"))
+            for item in arr:
+                sess = Session(id=item["id"], title=item.get("title", "New chat"),
+                               cwd=item.get("cwd", self.ga_root),
+                               created_at=item.get("created_at", time.time()),
+                               updated_at=item.get("updated_at", time.time()),
+                               messages=item.get("messages", []),
+                               msg_seq=item.get("msg_seq", 0),
+                               status="idle", agent=None)
+                self.sessions[sess.id] = sess
+            if self.sessions:
+                self.active_session_id = max(self.sessions.values(), key=lambda s: s.updated_at).id
+        except Exception as e:
+            print(f"[bridge] load sessions failed: {e}", file=sys.stderr)
 
     def _mykey_file(self) -> Path:
         p = Path(self.ga_root) / "mykey.py"
@@ -286,6 +320,7 @@ class AgentManager:
         sess.updated_at = time.time()
         if role == "user" and content.strip() and sess.title == "New chat":
             sess.title = content.strip().replace("\n", " ")[:40]
+        self._persist()
         return msg
 
     def create_session(self, cwd: Optional[str] = None) -> Session:
@@ -295,6 +330,7 @@ class AgentManager:
             self.sessions[sid] = sess
             self.active_session_id = sid
         emit_session_state(sess, "created")
+        self._persist()
         return sess
 
     def get_session(self, sid: str) -> Session:
@@ -315,6 +351,7 @@ class AgentManager:
                 with contextlib.suppress(Exception):
                     sess.agent.abort()
         emit_session_state(sess, "closed")
+        self._persist()
         return {"ok": True, "sessionId": sid}
 
     def submit_prompt(self, sid: str, prompt: Any, images: Optional[list] = None, llm_no: Optional[int] = None) -> dict:
@@ -447,6 +484,32 @@ class AgentManager:
             sess.updated_at = time.time()
         emit_session_state(sess, "cancelled")
         return {"ok": True, "sessionId": sid}
+
+    def restore_context(self, sid: str) -> dict:
+        with self.lock:
+            sess = self.sessions.get(sid)
+            if not sess:
+                raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
+            if sess.agent is not None:
+                return {"ok": True, "sessionId": sid, "restored": False, "reason": "agent already alive"}
+        agent = self.make_agent(sess)
+        history = []
+        for m in sess.messages:
+            role = m.get("role")
+            content = m.get("content", "")
+            if role == "user":
+                history.append({"role": "user", "content": [{"type": "text", "text": content}]})
+            elif role == "assistant":
+                history.append({"role": "assistant", "content": [{"type": "text", "text": content}]})
+        if history:
+            try:
+                agent.llmclient.backend.history = history
+            except Exception as e:
+                print(f"[bridge] inject history failed: {e}", file=sys.stderr)
+        with self.lock:
+            sess.agent = agent
+            sess.status = "idle"
+        return {"ok": True, "sessionId": sid, "restored": True, "messageCount": len(history)}
 
 
 import base64
@@ -972,6 +1035,11 @@ async def cancel_handler(request):
     return json_ok(manager.cancel(sid))
 
 
+async def restore_handler(request):
+    sid = request.match_info["sid"]
+    return json_ok(manager.restore_context(sid))
+
+
 async def path_open_handler(request):
     data = await read_json(request)
     kind = data.get("kind", "")
@@ -1113,6 +1181,7 @@ def create_app():
     app.router.add_post("/session/{sid}/prompt", prompt_handler)
     app.router.add_get("/session/{sid}/messages", messages_handler)
     app.router.add_post("/session/{sid}/cancel", cancel_handler)
+    app.router.add_post("/session/{sid}/restore", restore_handler)
     app.router.add_post("/path/open", path_open_handler)
     app.router.add_get("/token-stats", token_stats_handler)
     app.router.add_post("/services/start", service_start_handler)
