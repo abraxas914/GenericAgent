@@ -27,6 +27,17 @@
 - **影响范围**: 工具调用(fold-tool)和工具结果(fold-result)的折叠块外观
 - **关联**: app.js L962-964 渲染 `<details class="fold fold-tool/fold-result">`；CSS变量 --fold-tool-border/bg 和 --fold-result-border/bg 仍保留但不再被引用
 
+### 2026-05-28: 折叠框箭头旋转动画
+- **改动**: styles.css L626-630 新增5条规则
+  - `.bubble .fold summary`: 加 list-style:none, display:flex, align-items:center, gap:4px
+  - `summary::-webkit-details-marker`: display:none (Chrome)
+  - `summary::marker`: display:none; content:'' (Firefox)
+  - `summary::before`: content:'▶', font-size:.7em, transition:transform .2s ease
+  - `.fold[open] > summary::before`: transform:rotate(90deg)
+- **原因**: 用户要求展开折叠框时箭头有流畅旋转动画
+- **效果**: 箭头从右(▶)平滑旋转90°变为朝下，0.2s ease过渡
+- **影响范围**: 所有 .bubble 内的 .fold 折叠块（tool/result/thinking/turn）
+
 ## 设计原则
 - 不硬编码颜色/文本，使用 CSS 变量
 - 高内聚低耦合，尽量单文件修改

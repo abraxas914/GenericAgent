@@ -623,7 +623,11 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 .bubble.md th,.bubble.md td{ border:1px solid var(--line); padding:6px 10px; text-align:left; }
 .bubble.md th{ background:var(--line-soft); color:var(--txt-strong); }
 .fold{ margin:6px 0; border:none; border-radius:0; background:transparent; }
-.bubble .fold summary{ cursor:pointer; padding:6px 10px; font-size:.86em; color:var(--muted); user-select:none; }
+.bubble .fold summary{ cursor:pointer; padding:6px 10px; font-size:.86em; color:var(--muted); user-select:none; list-style:none; display:flex; align-items:center; gap:4px; }
+.bubble .fold summary::-webkit-details-marker{ display:none; }
+.bubble .fold summary::marker{ display:none; content:''; }
+.bubble .fold summary::before{ content:'▶'; font-size:.7em; display:inline-block; transition:transform .2s ease; }
+.fold[open] > summary::before{ transform:rotate(90deg); }
 .bubble .fold summary:hover{ color:var(--txt-2); }
 .bubble .fold pre{ margin:0; padding:10px 12px; border:none; background:transparent; font-size:.86em; overflow:auto; }
 .cursor{ display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; margin-left:2px; animation:blink 1s steps(2) infinite; }
