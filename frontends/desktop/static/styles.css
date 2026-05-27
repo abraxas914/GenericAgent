@@ -622,10 +622,10 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 .bubble.md table{ width:100%; border-collapse:collapse; margin:0 0 8px; font-size:.92em; }
 .bubble.md th,.bubble.md td{ border:1px solid var(--line); padding:6px 10px; text-align:left; }
 .bubble.md th{ background:var(--line-soft); color:var(--txt-strong); }
-.fold{ margin:6px 0; border:1px solid var(--line); border-radius:4px; background:var(--field-bg); }
+.fold{ margin:6px 0; border:none; border-radius:0; background:transparent; }
 .bubble .fold summary{ cursor:pointer; padding:6px 10px; font-size:.86em; color:var(--muted); user-select:none; }
 .bubble .fold summary:hover{ color:var(--txt-2); }
-.bubble .fold pre{ margin:0; padding:10px 12px; border:none; border-top:1px solid var(--line); background:transparent; font-size:.86em; overflow:auto; }
+.bubble .fold pre{ margin:0; padding:10px 12px; border:none; background:transparent; font-size:.86em; overflow:auto; }
 .cursor{ display:inline-block; width:7px; height:14px; background:var(--accent); vertical-align:-2px; margin-left:2px; animation:blink 1s steps(2) infinite; }
 @keyframes blink{ 50%{ opacity:0; } }
 .run-state.busy .dot{ animation:blink 1s steps(2) infinite; }
@@ -1399,8 +1399,8 @@ span.flatpickr-weekday{ color:var(--muted) !important; font-size:11px; }
 /* ═══════════════ Markdown 渲染增强 (from PR) ═══════════════ */
 .fold-pre{ white-space:pre-wrap; word-break:break-word; max-height:300px; overflow:auto; }
 .fold.fold-thinking{ border-color:var(--fold-thinking-border); background:var(--fold-thinking-bg); }
-.fold.fold-tool{ border-color:var(--fold-tool-border); background:var(--fold-tool-bg); }
-.fold.fold-result{ border-color:var(--fold-result-border); background:var(--fold-result-bg); }
+.fold.fold-tool{ border:none; background:transparent; }
+.fold.fold-result{ border:none; background:transparent; }
 .fold.fold-turn{ border-color:var(--fold-turn-border); background:var(--fold-turn-bg); }
 .fold.fold-turn > summary{ font-weight:600; color:var(--txt-2); }
 .fold.fold-retry{ border-color:var(--fold-retry-border); background:var(--fold-retry-bg); border-style:dashed; }

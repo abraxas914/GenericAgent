@@ -18,6 +18,15 @@
 - **影响范围**: 仅影响 assistant 消息的 markdown 渲染气泡外观
 - **验证**: CSS规则已确认生效 (background: transparent)
 
+### 2026-05-28: 去掉工具调用/结果的蓝绿色折叠框
+- **改动**: styles.css 3处
+  - L625 `.fold`: border→none, background→transparent, border-radius→0
+  - L628 `.bubble .fold pre`: 去掉 border-top
+  - L1402-1403 `.fold.fold-tool` / `.fold.fold-result`: border→none, background→transparent
+- **原因**: 蓝色/绿色框太丑，改为无框无背景的简洁折叠样式
+- **影响范围**: 工具调用(fold-tool)和工具结果(fold-result)的折叠块外观
+- **关联**: app.js L962-964 渲染 `<details class="fold fold-tool/fold-result">`；CSS变量 --fold-tool-border/bg 和 --fold-result-border/bg 仍保留但不再被引用
+
 ## 设计原则
 - 不硬编码颜色/文本，使用 CSS 变量
 - 高内聚低耦合，尽量单文件修改
