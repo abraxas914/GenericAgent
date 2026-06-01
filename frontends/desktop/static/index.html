@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>GenericAgent</title>
 <link rel="stylesheet" href="assets/fonts/fonts.css">
-<link rel="stylesheet" href="styles.css?v=94">
+<link rel="stylesheet" href="styles.css?v=97">
 <!-- KaTeX: LaTeX 公式渲染 -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
 <!-- highlight.js: 代码高亮 -->
@@ -13,8 +13,6 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css" crossorigin="anonymous">
 <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/l10n/zh.js" crossorigin="anonymous"></script>
-<!-- DEV 脚手架(标注模式)：删本行 + 下方 annot.js 一行即可彻底移除 -->
-<link rel="stylesheet" href="annot.css">
 <script>
 (function(){
   var t=localStorage.getItem('ga_theme'); if(t) document.documentElement.dataset.theme=t;
@@ -93,9 +91,6 @@
       </div>
     </aside>
     <div class="sb-resize" id="sb-resize"></div>
-    <button class="sb-toggle" id="sb-toggle" aria-label="toggle sidebar">
-      <span data-ga-icon="caretLeft"></span>
-    </button>
 
     <!-- 中间主区 -->
     <main class="main">
@@ -106,8 +101,14 @@
         <section class="page active" data-page="chat"
                 >
           <div class="page-top">
+            <button type="button" class="pt-icon pt-sb-toggle" aria-label="toggle sidebar">
+              <span data-ga-icon="caretLeft"></span>
+            </button>
             <button class="run-state" id="run-toggle">
               <i class="dot"></i> <span class="rs-label"></span>
+            </button>
+            <button type="button" class="pt-icon pt-rp-toggle" aria-label="toggle conversations">
+              <span data-ga-icon="caretRight"></span>
             </button>
           </div>
           <div class="msg-area">
@@ -147,6 +148,15 @@
 
         <!-- 后台服务：消息通道 + 状态面板 -->
         <section class="page" data-page="services">
+          <div class="page-top">
+            <button type="button" class="pt-icon pt-sb-toggle" aria-label="toggle sidebar">
+              <span data-ga-icon="caretLeft"></span>
+            </button>
+            <span class="pt-spacer"></span>
+            <button type="button" class="pt-icon pt-rp-toggle" aria-label="toggle conversations">
+              <span data-ga-icon="caretRight"></span>
+            </button>
+          </div>
           <div class="page-pad">
             <div class="page-title" data-i18n="page.services.title"></div>
             <div class="page-sub" data-i18n="page.services.sub"></div>
@@ -172,8 +182,14 @@
           </div>
           <div class="collab-reconnect" id="collab-reconnect" hidden data-i18n="collab.reconnect"></div>
           <div class="page-top">
+            <button type="button" class="pt-icon pt-sb-toggle" aria-label="toggle sidebar">
+              <span data-ga-icon="caretLeft"></span>
+            </button>
             <button class="run-state" id="collab-run-toggle" type="button">
               <i class="dot"></i> <span class="rs-label"></span>
+            </button>
+            <button type="button" class="pt-icon pt-rp-toggle" aria-label="toggle conversations">
+              <span data-ga-icon="caretRight"></span>
             </button>
           </div>
           <div class="msg-area collab-msgs" id="collab-msgs">
@@ -270,6 +286,15 @@
 
         <!-- Token 统计 -->
         <section class="page" data-page="token">
+          <div class="page-top">
+            <button type="button" class="pt-icon pt-sb-toggle" aria-label="toggle sidebar">
+              <span data-ga-icon="caretLeft"></span>
+            </button>
+            <span class="pt-spacer"></span>
+            <button type="button" class="pt-icon pt-rp-toggle" aria-label="toggle conversations">
+              <span data-ga-icon="caretRight"></span>
+            </button>
+          </div>
           <div class="page-pad">
             <div class="page-title" data-i18n="page.token.title"></div>
             <div class="tok-tabs" id="tok-tabs">
@@ -312,9 +337,6 @@
     </main>
 
     <!-- ④ 右侧会话面板 -->
-    <button class="rp-toggle" id="rp-toggle" aria-label="toggle panel">
-      <span data-ga-icon="caretRight"></span>
-    </button>
     <div class="rp-resize" id="rp-resize"></div>
     <aside class="rightpanel" id="rightpanel">
       <div class="search">
@@ -547,7 +569,6 @@
 <!-- highlight.js -->
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js" crossorigin="anonymous"></script>
 <script src="phosphor-icons.js"></script>
-<script src="app.js?v=82"></script>
-<script src="annot.js"></script><!-- DEV 脚手架，可删 -->
+<script src="app.js?v=83"></script>
 </body>
 </html>

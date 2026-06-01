@@ -1291,16 +1291,16 @@ const runLabel   = runToggle?.querySelector('.rs-label');
 const convListEl = document.querySelector('.conv-list');
 const newConvBtn = document.querySelector('.new-conv');
 const searchInput = document.querySelector('.search input');
-const rpToggle   = document.getElementById('rp-toggle');
 const rpResize   = document.getElementById('rp-resize');
 const rpPanel    = document.getElementById('rightpanel');
 const bodyEl     = document.querySelector('.body');
-if (rpToggle) rpToggle.addEventListener('click', () => bodyEl.classList.toggle('rp-collapsed'));
+/* 每个页面的 page-top 各自挂一对 hamburger / 会话 按钮(.pt-sb-toggle / .pt-rp-toggle),
+   全部绑同一个 toggle,效果跟以前的单一 sb-toggle/rp-toggle 一样,只是入口变成顶栏。 */
+document.querySelectorAll('.pt-sb-toggle').forEach(b => b.addEventListener('click', () => bodyEl.classList.toggle('sb-collapsed')));
+document.querySelectorAll('.pt-rp-toggle').forEach(b => b.addEventListener('click', () => bodyEl.classList.toggle('rp-collapsed')));
 
-const sbToggle = document.getElementById('sb-toggle');
 const sbResize = document.getElementById('sb-resize');
 const sbPanel  = document.querySelector('.sidebar');
-if (sbToggle) sbToggle.addEventListener('click', () => bodyEl.classList.toggle('sb-collapsed'));
 
 // 通用拖拽：dir=+1 拖动 →clientX 增大就增宽(左侧栏);dir=-1 反之(右侧)
 function bindResize(handle, panel, dir, min, max) {

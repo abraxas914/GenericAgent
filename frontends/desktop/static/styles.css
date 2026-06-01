@@ -528,9 +528,23 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
 /* 各页面自带的顶栏(融入页面、随页面切换),沿用旧 .topbar 视觉,但归属各 page */
 .page > .page-top{
   height:46px; flex:0 0 46px; display:flex; align-items:center;
-  justify-content:space-between; padding:0 16px;
+  justify-content:space-between; padding:0 4px; gap:10px;
   background:var(--panel);
 }
+/* 顶栏左右两侧的纯图标按钮(无边框、无背景):
+   左 .pt-sb-toggle = 开关左栏,右 .pt-rp-toggle = 开关右栏。
+   收起时 svg 旋转 180°,跟之前那两个箭头 toggle 的视觉行为一致。 */
+.pt-icon{
+  width:28px; height:28px; display:inline-flex; align-items:center; justify-content:center;
+  background:transparent; border:none; padding:0; flex:0 0 auto;
+  color:var(--txt-2); opacity:.7; cursor:pointer;
+  transition:opacity .15s, color .15s;
+}
+.pt-icon:hover{ opacity:1; color:var(--txt); }
+.pt-icon svg{ width:16px; height:16px; transition:transform .2s; }
+.body.sb-collapsed .pt-sb-toggle svg,
+.body.rp-collapsed .pt-rp-toggle svg{ transform:rotate(180deg); }
+.pt-spacer{ flex:1 1 auto; }
 .tb-left{ display:flex; align-items:center; gap:14px; font-size:12px; }
 .pill{
   border:1px solid var(--line); background:var(--card); border-radius:20px;
