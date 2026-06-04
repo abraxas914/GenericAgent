@@ -1873,12 +1873,12 @@ function restoreDraftScroll(root, tops) {
 function bindDraftInteractGuard(el, r) {
   if (!el || el.dataset.gaDraftGuard) return;
   el.dataset.gaDraftGuard = '1';
-  const arm = () => armDraftInteractFreeze(r);
+  const arm = () => { if (!r._suppressToggleFreeze) armDraftInteractFreeze(r); };
   el.addEventListener('mousedown', (e) => {
-    if (e.target.closest('details summary, .code-block pre, .fold-pre')) arm();
+    if (e.target.closest('details summary, .code-block pre, .fold-pre')) armDraftInteractFreeze(r);
   }, true);
   el.addEventListener('wheel', (e) => {
-    if (e.target.closest('.code-block pre, .fold-pre')) arm();
+    if (e.target.closest('.code-block pre, .fold-pre')) armDraftInteractFreeze(r);
   }, { capture: true, passive: true });
   el.addEventListener('toggle', (e) => {
     if (e.target.matches('details')) arm();
@@ -1900,7 +1900,6 @@ function renderDraft(sess) {
   if (!r.draftEl || r.draftEl.parentNode !== box) {
     r.draftEl = document.createElement('div'); r.draftEl.className = 'msg assistant'; box.appendChild(r.draftEl);
     bindDraftInteractGuard(r.draftEl, r);
-    // 正在计时则立即挂载 badge，避免等 1s tick 后才出现导致跳动
     if (r.taskStartedAt) ensureTaskElapsedBadge(r.draftEl, r.taskStartedAt, null);
   }
   if (!r.twState) r.twState = { shown: 0, timer: null };
@@ -1914,8 +1913,21 @@ function renderDraft(sess) {
         return;
       }
       if (isDraftInteractFrozen(r)) return;
-      tw.shown = Math.min(tw.shown + TW_SPEED, cur.length);
+      const t0 = performance.now();
+      // 每 tick 都全量重渲整段，渲染开销随正文增大而升高（实测 140k 字时
+      // 单次可达数百 ms）。步长按「上次渲染耗时」自适应：
+      //  - 轻文档（渲染便宜）：小步、设上限 → 平滑打字；大块到达时在数十帧内
+      //    快速「打」出来，而不是一帧瞬跳一大坨（瞬跳就是用户看到的“突然出一坨”）。
+      //  - 重文档（单次渲染已很贵）：加大步长，用更少次昂贵渲染把积压排空，
+      //    避免在某一帧卡死数百 ms。
+      const backlog = cur.length - tw.shown;
+      const last = tw.lastElapsed || 0;
+      let step;
+      if (last > 80) step = Math.max(TW_SPEED * 6, Math.ceil(backlog / 2));
+      else step = Math.min(Math.max(TW_SPEED, Math.ceil(backlog / 10)), 160);
+      tw.shown = Math.min(tw.shown + step, cur.length);
       rewriteDraftBubble(r, cur.slice(0, tw.shown));
+      tw.lastElapsed = performance.now() - t0;
     }, TW_INTERVAL);
   }
   if (!isDraftInteractFrozen(r)) {
@@ -1940,7 +1952,11 @@ function rewriteDraftBubble(r, visible) {
   r.draftEl.innerHTML = `<div class="bubble md">${renderAssistant(visible)}<span class="cursor"></span></div>`;
   postRenderEnhance(r.draftEl.querySelector('.bubble'));
   const dets = r.draftEl.querySelectorAll('details');
+  // 程序化恢复 open 态会异步触发 toggle 事件；置标记让 guard 忽略，
+  // setTimeout(0) 在已排队的 toggle 任务之后清除（避免自冻结循环）。
+  r._suppressToggleFreeze = true;
   openIdx.forEach(i => { if (dets[i]) dets[i].open = true; });
+  setTimeout(() => { r._suppressToggleFreeze = false; }, 0);
   restoreDraftScroll(r.draftEl, scrollTops);
   // 恢复 badge
   if (badgeText) {
