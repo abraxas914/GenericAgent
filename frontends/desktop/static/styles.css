@@ -547,6 +547,74 @@ html[data-appearance="dark"] .swatch[data-theme="8"].sel::after{
   font-family:var(--font-num); font-variant-numeric:var(--font-num-variant);
 }
 
+/* ── 侧边栏「快速接入官方模型」卡片 ── */
+.provider-quickstart{
+  flex:0 0 auto; margin-top:8px;
+  display:flex; flex-direction:column; gap:6px;
+  padding:10px; border:1px solid var(--line-base); border-radius:var(--radius-sm);
+  background:var(--card);
+}
+.pq-head{
+  display:flex; align-items:center; justify-content:space-between; gap:6px;
+  padding:0 2px; cursor:pointer; user-select:none; border-radius:4px;
+}
+.pq-head-text{ display:flex; flex-direction:column; gap:1px; min-width:0; }
+.pq-title{ font-size:11px; font-weight:700; color:var(--txt-2); font-family:var(--font-title-en); }
+.pq-sub{ font-size:10px; color:var(--muted); line-height:1.3; }
+.pq-collapse{ width:14px; height:14px; flex:0 0 auto; color:var(--muted2); transition:transform .18s; }
+.pq-head:hover .pq-collapse{ color:var(--txt-2); }
+.pq-body{ display:flex; flex-direction:column; gap:6px; }
+/* 折叠：隐藏按钮区，箭头翻转向上 */
+.provider-quickstart.collapsed{ gap:0; }
+.provider-quickstart.collapsed .pq-body{ display:none; }
+.provider-quickstart.collapsed .pq-collapse{ transform:rotate(180deg); }
+.pq-btn{
+  display:flex; align-items:center; gap:8px; width:100%;
+  padding:7px 8px; border:1px solid var(--line-base); border-radius:var(--radius-sm);
+  background:var(--bg-base); cursor:pointer; text-align:left;
+  transition:border-color .15s, background .15s;
+}
+.pq-btn:hover{ background:var(--card); border-color:var(--accent); }
+.pq-logo{
+  flex:0 0 auto; width:26px; height:26px; border-radius:7px;
+  display:flex; align-items:center; justify-content:center;
+}
+.pq-logo svg{ width:16px; height:16px; }
+.pq-btn-text{ flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+.pq-btn-name{ font-size:12px; font-weight:600; color:var(--txt); line-height:1.2; }
+.pq-btn-desc{ font-size:10px; color:var(--muted); line-height:1.2; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.pq-arrow{ flex:0 0 auto; width:13px; height:13px; color:var(--muted2); transition:transform .15s, color .15s; }
+.pq-btn:hover .pq-arrow{ color:var(--accent); transform:translateX(2px); }
+
+/* ── 添加模型弹窗内的接入指引横幅 ── */
+.model-guide{
+  margin:18px 18px 0; padding:12px 14px;
+  border:1px solid var(--accent); border-radius:var(--radius-sm);
+  background:var(--accent-bg);
+}
+.model-guide-head{ display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.model-guide-logo{
+  flex:0 0 auto; width:24px; height:24px; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+}
+.model-guide-logo svg{ width:15px; height:15px; }
+.model-guide-name{ font-size:13px; font-weight:700; color:var(--txt-strong); }
+.model-guide-steps{ margin:0 0 8px; padding-left:18px; display:flex; flex-direction:column; gap:3px; }
+.model-guide-steps li{ font-size:12px; color:var(--txt-2); line-height:1.45; }
+.model-guide-link-row{ display:flex; align-items:center; gap:6px; }
+.model-guide-link{
+  flex:1; min-width:0; font-size:12px; font-weight:600; color:var(--accent);
+  text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+.model-guide-link:hover{ text-decoration:underline; }
+.model-guide-copy{
+  flex:0 0 auto; width:26px; height:26px; border:1px solid var(--line);
+  border-radius:6px; background:var(--panel); color:var(--muted);
+  display:flex; align-items:center; justify-content:center; cursor:pointer;
+}
+.model-guide-copy:hover{ color:var(--accent); border-color:var(--accent); }
+.model-guide-tip{ margin:8px 0 0; font-size:11px; color:var(--muted); line-height:1.4; }
+
 /* ============ 中间主区 ============ */
 .main{
   display:flex; flex-direction:column; min-width:0; min-height:0;

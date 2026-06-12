@@ -287,6 +287,13 @@ const I18N = {
     'model.modelHint': '须与中转站/官方文档中的 model 字段完全一致',
     'model.retries': '重试 (次)', 'model.connTimeout': '连接超时 (s)', 'model.readTimeout': '读取超时 (s)',
     'model.save': '保存', 'common.cancel': '取消', 'common.edit': '编辑', 'common.delete': '删除',
+    'pq.title': '快速接入官方模型', 'pq.sub': '填好 API Key 即可使用', 'pq.toggle': '展开 / 收起',
+    'pq.deepseekDesc': '官方 API · OpenAI 兼容', 'pq.qwenDesc': '通义千问 · 阿里云百炼',
+    'guide.step1': '点击下方链接，登录后创建并复制 API Key',
+    'guide.step2': '把 Key 粘贴到下方「API Key」输入框',
+    'guide.step3': '点击保存，即可在模型列表中选用',
+    'guide.prefillTip': '已为你预填 API 地址、协议与模型，可按需修改',
+    'guide.getKey': '获取 {name} 的 API Key', 'guide.copy': '复制链接', 'guide.copied': '链接已复制',
     'err.modelSave': '保存失败', 'err.modelRequired': '请填写模型、API Key 和 API 地址',
     'err.modelDelete': '删除失败', 'err.modelDeleteLast': '至少保留一个模型',
     'confirm.modelDelete': '确定删除该模型配置？',
@@ -440,6 +447,13 @@ const I18N = {
     'model.modelHint': 'Must match the model field in your provider docs exactly',
     'model.retries': 'Retries (×)', 'model.connTimeout': 'Connect (s)', 'model.readTimeout': 'Read (s)',
     'model.save': 'Save', 'common.cancel': 'Cancel', 'common.edit': 'Edit', 'common.delete': 'Delete',
+    'pq.title': 'Quick connect a model', 'pq.sub': 'Add your API key to get started', 'pq.toggle': 'Expand / collapse',
+    'pq.deepseekDesc': 'Official API · OpenAI-compatible', 'pq.qwenDesc': 'Tongyi Qwen · Aliyun Bailian',
+    'guide.step1': 'Open the link, sign in, then create & copy your API key',
+    'guide.step2': 'Paste the key into the “API Key” field below',
+    'guide.step3': 'Click Save — then pick it from the model list',
+    'guide.prefillTip': 'API base, protocol and model are pre-filled — edit if needed',
+    'guide.getKey': 'Get your {name} API key', 'guide.copy': 'Copy link', 'guide.copied': 'Link copied',
     'err.modelSave': 'Save failed', 'err.modelRequired': 'Model, API Key and base URL are required',
     'err.modelDelete': 'Delete failed', 'err.modelDeleteLast': 'At least one model is required',
     'confirm.modelDelete': 'Delete this model profile?',
@@ -649,6 +663,7 @@ function applyI18n() {
   });
   document.querySelectorAll('[data-i18n-title]').forEach(el => { el.setAttribute('title', t(el.dataset.i18nTitle)); });
   renderLangList();
+  window.gaRefreshModelGuide?.();
   window.collabRetranslate?.();
   syncAskUserUi();
 }
@@ -833,6 +848,42 @@ bindClick('add-model-btn', (e) => {
   openAddModelForm();
 });
 bindClick('settings-btn',  (e) => { e.stopPropagation(); openSettings(); });
+// 侧边栏「快速接入」：点击官方模型按钮 → 打开预填好的添加模型表单
+const pqEl = document.getElementById('provider-quickstart');
+if (pqEl) pqEl.addEventListener('click', (e) => {
+  const btn = e.target.closest('.pq-btn[data-provider]');
+  if (!btn) return;
+  e.preventDefault(); e.stopPropagation();
+  openAddModelFormForProvider(btn.dataset.provider);
+});
+// 「快速接入」卡片折叠/展开（向下箭头），状态记忆到 localStorage
+const pqToggle = document.getElementById('pq-toggle');
+if (pqEl && pqToggle) {
+  const applyPq = (collapsed) => {
+    pqEl.classList.toggle('collapsed', collapsed);
+    pqToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  };
+  let pqCollapsed = false;
+  try { pqCollapsed = localStorage.getItem('ga_pq_collapsed') === '1'; } catch (_) {}
+  applyPq(pqCollapsed);
+  const togglePq = () => {
+    pqCollapsed = !pqEl.classList.contains('collapsed');
+    applyPq(pqCollapsed);
+    try { localStorage.setItem('ga_pq_collapsed', pqCollapsed ? '1' : '0'); } catch (_) {}
+  };
+  pqToggle.addEventListener('click', togglePq);
+  pqToggle.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); togglePq(); }
+  });
+}
+// 接入指引：复制获取 API Key 的链接
+bindClick('model-guide-copy', (e) => {
+  e.preventDefault(); e.stopPropagation();
+  const link = document.getElementById('model-guide-link');
+  const url = link ? link.href : '';
+  if (!url || !navigator.clipboard) return;
+  navigator.clipboard.writeText(url).then(() => showChanToast(t('guide.copied'), '', 'ok')).catch(() => {});
+});
 bindClick('preset-btn',    (e) => { e.stopPropagation(); openModal('preset-modal'); });
 document.querySelectorAll('.modal').forEach(m =>
   m.addEventListener('click', (e) => {
@@ -3214,6 +3265,74 @@ function setModelApikeyMode(isAdd) {
   if (apikeyReq) apikeyReq.hidden = !isAdd;
 }
 
+/* ═══════════════ 官方模型快速接入（DeepSeek / 通义千问）═══════════════ */
+// 预填 API 地址 / 协议 / 模型，用户只需粘贴 API Key。apibase 末尾的 /v1 会被
+// 后端自动补成 /v1/chat/completions（见 mykey_template.py 的拼接规则）。
+const PROVIDER_PRESETS = {
+  deepseek: {
+    label: 'DeepSeek', descKey: 'pq.deepseekDesc',
+    protocol: 'oai', apibase: 'https://api.deepseek.com/v1',
+    model: 'deepseek-chat', name: 'DeepSeek',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
+    color: '#4D6BFE', tint: 'rgba(77,107,254,.12)',
+    logo: '<svg viewBox="0 0 24 24" fill="#4D6BFE" xmlns="http://www.w3.org/2000/svg"><path d="M23.748 4.651c-.254-.124-.364.113-.512.233-.051.04-.094.09-.137.137-.372.397-.806.657-1.373.626-.829-.046-1.537.214-2.163.848-.133-.782-.575-1.248-1.247-1.548-.352-.155-.708-.311-.955-.65-.172-.24-.219-.509-.305-.774-.055-.16-.11-.323-.293-.35-.2-.031-.278.136-.356.276-.313.572-.434 1.202-.422 1.84.027 1.436.633 2.58 1.838 3.393.137.094.172.187.129.323-.082.28-.18.553-.266.833-.055.179-.137.218-.328.14a5.5 5.5 0 0 1-1.737-1.179c-.857-.828-1.631-1.743-2.597-2.46a12 12 0 0 0-.689-.47c-.985-.957.13-1.743.387-1.836.27-.098.094-.433-.778-.428-.872.003-1.67.295-2.687.685a3 3 0 0 1-.465.136 9.6 9.6 0 0 0-2.883-.101c-1.885.21-3.39 1.1-4.497 2.622C.082 8.776-.231 10.854.152 13.02c.403 2.284 1.568 4.175 3.36 5.653 1.857 1.533 3.997 2.284 6.438 2.14 1.482-.085 3.132-.284 4.994-1.86.47.234.962.328 1.78.398.629.058 1.235-.031 1.705-.129.735-.155.684-.836.418-.961-2.155-1.004-1.682-.595-2.112-.926 1.095-1.295 2.768-3.598 3.284-6.733.05-.346.115-.834.108-1.114-.004-.171.035-.238.23-.257a4.2 4.2 0 0 0 1.545-.475c1.397-.763 1.96-2.016 2.093-3.517.02-.23-.004-.467-.247-.588M11.58 18.168c-2.088-1.642-3.101-2.183-3.52-2.16-.39.024-.32.472-.234.763.09.288.207.487.371.74.114.167.192.416-.113.603-.673.416-1.842-.14-1.897-.168-1.361-.801-2.5-1.86-3.301-3.306-.775-1.393-1.225-2.888-1.299-4.482-.02-.385.094-.522.477-.592a4.7 4.7 0 0 1 1.53-.038c2.131.311 3.946 1.264 5.467 2.774.868.86 1.525 1.887 2.202 2.89.72 1.066 1.494 2.082 2.48 2.915.348.291.626.513.892.677-.802.09-2.14.109-3.055-.615zm1.001-6.44a.306.306 0 0 1 .415-.287.3.3 0 0 1 .113.074.3.3 0 0 1 .086.214c0 .17-.136.307-.308.307a.303.303 0 0 1-.306-.307m3.11 1.596c-.2.081-.4.151-.591.16a1.25 1.25 0 0 1-.798-.254c-.274-.23-.47-.358-.551-.758a1.7 1.7 0 0 1 .015-.588c.07-.327-.007-.537-.238-.727-.188-.156-.426-.199-.689-.199a.6.6 0 0 1-.254-.078.253.253 0 0 1-.114-.358 1 1 0 0 1 .192-.21c.356-.202.767-.136 1.146.016.352.144.618.408 1.001.782.392.451.462.576.685.915.176.264.336.536.446.848.066.194-.02.353-.25.45"/></svg>',
+  },
+  qwen: {
+    label: '通义千问', descKey: 'pq.qwenDesc',
+    protocol: 'oai', apibase: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    model: 'qwen-plus', name: '通义千问',
+    keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1',
+    color: '#615CED', tint: 'rgba(97,92,237,.12)',
+    logo: '<svg viewBox="0 0 24 24" fill="#615CED" xmlns="http://www.w3.org/2000/svg"><path d="M23.919 14.545 20.817 9.17l1.47-2.544a.56.56 0 0 0 0-.566l-1.633-2.83a.57.57 0 0 0-.49-.283h-6.207L12.487.402a.57.57 0 0 0-.49-.284H8.732a.56.56 0 0 0-.49.284L5.139 5.775h-2.94a.56.56 0 0 0-.49.284L.077 8.887a.56.56 0 0 0 0 .567L3.18 14.83l-1.47 2.545a.56.56 0 0 0 0 .566l1.634 2.83a.57.57 0 0 0 .49.283h6.205l1.47 2.545a.57.57 0 0 0 .49.284h3.266a.57.57 0 0 0 .49-.284l3.104-5.375h2.94a.57.57 0 0 0 .49-.283l1.634-2.828a.55.55 0 0 0-.004-.568M8.733.686l1.634 2.828-1.634 2.828H21.8L20.164 9.17H7.425L5.63 6.06Zm1.306 19.801-6.205-.002 1.634-2.83h3.265L2.201 6.344h3.267q3.182 5.517 6.367 11.032zm10.124-5.66L18.53 12l-6.532 11.315-1.634-2.83c2.129-3.673 4.25-7.351 6.373-11.028h3.592l3.102 5.374z"/></svg>',
+  },
+};
+window.gaProviderPresets = PROVIDER_PRESETS;
+
+// 在「添加模型」弹窗顶部显示/隐藏接入指引横幅。key 为 null 时隐藏。
+function setModelGuide(key) {
+  const box = document.getElementById('model-guide');
+  if (!box) return;
+  const p = key && PROVIDER_PRESETS[key];
+  if (!p) { box.hidden = true; box.dataset.provider = ''; return; }
+  box.hidden = false;
+  box.dataset.provider = key;
+  const logo = document.getElementById('model-guide-logo');
+  if (logo) { logo.innerHTML = p.logo || ''; logo.style.background = p.tint || ''; }
+  const nameEl = document.getElementById('model-guide-name');
+  if (nameEl) nameEl.textContent = p.label;
+  const link = document.getElementById('model-guide-link');
+  if (link) { link.href = p.keyUrl; link.textContent = t('guide.getKey').replace('{name}', p.label); }
+}
+window.gaRefreshModelGuide = () => {
+  const box = document.getElementById('model-guide');
+  if (box && !box.hidden && box.dataset.provider) setModelGuide(box.dataset.provider);
+};
+
+function openAddModelFormForProvider(key) {
+  const p = PROVIDER_PRESETS[key];
+  if (!p) return openAddModelForm();
+  editingModelId = null;
+  const form = document.getElementById('add-model-form');
+  const title = document.getElementById('model-form-title');
+  const errEl = document.getElementById('add-model-err');
+  if (title) title.dataset.i18n = 'modal.addModel';
+  if (form) {
+    form.reset();
+    form.model.value = p.model || '';
+    form.apibase.value = p.apibase || '';
+    form.name.value = p.name || '';
+    const pr = form.querySelector(`input[name="protocol"][value="${p.protocol}"]`);
+    if (pr) pr.checked = true;
+  }
+  setModelApikeyMode(true);
+  if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+  setModelGuide(key);
+  openModal('add-model-modal');
+  applyI18n();
+  const apikey = document.getElementById('model-apikey-input');
+  if (apikey) setTimeout(() => apikey.focus(), 60);
+}
+
 function openAddModelForm() {
   editingModelId = null;
   const form = document.getElementById('add-model-form');
@@ -3222,12 +3341,14 @@ function openAddModelForm() {
   if (title) title.dataset.i18n = 'modal.addModel';
   if (form) form.reset();
   setModelApikeyMode(true);
+  setModelGuide(null);
   if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
   openModal('add-model-modal');
   applyI18n();
 }
 async function openEditModelForm(id) {
   editingModelId = id;
+  setModelGuide(null);
   const errEl = document.getElementById('add-model-err');
   if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
   try {
@@ -4973,7 +5094,10 @@ loadHiddenBuiltins();
 renderAllPresets();
 if (state.activeId) setActiveSession(state.activeId);
 else refreshEmptyState(null);
-chatStatus.setConnecting();
+// bridge-ready 可能在上面的 await 期间就已到达（WS 一连上 bridge 即推送），
+// 此时 state.bridgeReady 已为 true，直接按真实状态渲染，避免把「就绪」覆盖回「连接中」。
+if (state.bridgeReady) refreshStatusLabel();
+else chatStatus.setConnecting();
 window.ga.startBridge && window.ga.startBridge();
 })();
 
