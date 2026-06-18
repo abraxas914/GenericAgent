@@ -158,6 +158,8 @@ jobs:
           GenericAgent-Desktop-macOS/
           ├── GenericAgent.app
           ├── Start GenericAgent.command   一键启动（自动解除隔离）
+          ├── Mac安装教程(中文).txt        中文安装教程（含 xattr 命令）
+          ├── Mac_Install_Guide(English).txt  英文安装教程
           ├── README_MACOS.md
           ├── SHA256SUMS.txt
           └── runtime/
@@ -171,9 +173,71 @@ jobs:
           EOF
           sed -i '' 's/^          //' "$PKG_ROOT/README_MACOS.md"
 
+          # Plain-text install guide focused on the quarantine workaround, for users
+          # who would rather run one Terminal command than use the launcher.
+          cat > "$PKG_ROOT/Mac安装教程(中文).txt" <<'EOF'
+          GenericAgent Desktop — macOS 安装教程
+          ======================================
+
+          因为本 App 未经过 Apple 公证，从网上下载后 macOS 会给它打上“隔离”标记，
+          直接双击可能提示“GenericAgent.app 已损坏，无法打开”。这并不是文件真的损坏，
+          只需清除隔离标记即可。
+
+          操作步骤
+          --------
+          1. 解压后，把整个 “GenericAgent-Desktop-macOS” 文件夹放到你想存放的位置
+             （例如“应用程序”或“下载”）。
+          2. 打开“终端”(Terminal)。
+          3. 输入 xattr -dr com.apple.quarantine 后面加一个空格，
+             然后把 “GenericAgent-Desktop-macOS” 文件夹直接拖进终端窗口（会自动补全路径），
+             回车执行。示例：
+
+                 xattr -dr com.apple.quarantine "GenericAgent-Desktop-macOS"
+
+          4. 之后双击 GenericAgent.app 即可正常打开。
+
+          注意事项
+          --------
+          - 请保持目录结构不变：GenericAgent.app 与 runtime/ 必须在同一目录下，
+            runtime/ 内含内置 Python、依赖和运行源码。
+          - 首次启动会做一次离线环境准备（创建虚拟环境、安装依赖），稍等片刻属正常现象。
+          EOF
+          sed -i '' 's/^          //' "$PKG_ROOT/Mac安装教程(中文).txt"
+
+          cat > "$PKG_ROOT/Mac_Install_Guide(English).txt" <<'EOF'
+          GenericAgent Desktop — macOS Install Guide
+          ==========================================
+
+          This app is not notarized by Apple, so after downloading, macOS tags it as
+          "quarantined" and double-clicking may show "GenericAgent.app is damaged and
+          can't be opened." The file is not actually damaged — you just need to clear
+          the quarantine attribute.
+
+          Steps
+          -----
+          1. Unzip the package and move the whole "GenericAgent-Desktop-macOS" folder
+             wherever you want to keep it (e.g. Applications or Downloads).
+          2. Open Terminal.
+          3. Type  xattr -dr com.apple.quarantine  followed by a space, then drag the
+             "GenericAgent-Desktop-macOS" folder into the Terminal window (its path is
+             filled in automatically) and press Enter. Example:
+
+                 xattr -dr com.apple.quarantine "GenericAgent-Desktop-macOS"
+
+          4. Now double-click GenericAgent.app to launch it normally.
+
+          Notes
+          -----
+          - Keep the folder layout intact: GenericAgent.app and runtime/ must stay in the
+            same directory. runtime/ holds the bundled Python, dependencies and source.
+          - The first launch performs a one-time offline setup (creating a virtualenv and
+            installing dependencies); a short wait is normal.
+          EOF
+          sed -i '' 's/^          //' "$PKG_ROOT/Mac_Install_Guide(English).txt"
+
           (
             cd "$PKG_ROOT"
-            shasum -a 256 README_MACOS.md "Start GenericAgent.command" > SHA256SUMS.txt
+            shasum -a 256 README_MACOS.md "Start GenericAgent.command" "Mac安装教程(中文).txt" "Mac_Install_Guide(English).txt" > SHA256SUMS.txt
             find GenericAgent.app runtime -type f -print0 | sort -z | xargs -0 shasum -a 256 >> SHA256SUMS.txt
           )
 
