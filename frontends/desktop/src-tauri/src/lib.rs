@@ -787,7 +787,10 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
                 let label = window.label();
                 if label == "main" {
-                    request_stop_extras();
+                    // Model A (persistent backend): closing the window does NOT stop the
+                    // bridge or its conductor/scheduler, so IM bots / scheduled / in-flight
+                    // tasks keep running and a relaunch reuses the warm backend. Stale/foreign
+                    // bridges are handled on next start by takeover_stale_bridge.
                     window.app_handle().exit(0);
                 } else if label == "setup" {
                     // Setup closed -> exit if main is not visible
