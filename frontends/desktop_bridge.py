@@ -1463,9 +1463,11 @@ async def mykey_save_handler(request):
     content = data.get("content")
     if content is None:
         return json_ok({"ok": False, "error": "missing_content"}, status=400)
-    target = _mykey_file()
-    target.write_text(str(content), encoding="utf-8")
-    return json_ok({"ok": True, "path": str(target)})
+    try:
+        profiles = manager._save_mykey_text(str(content))
+    except Exception as e:
+        return json_ok({"ok": False, "error": str(e)}, status=400)
+    return json_ok({"ok": True, "path": str(manager._mykey_file()), "profiles": profiles})
 
 
 async def service_start_handler(request):
