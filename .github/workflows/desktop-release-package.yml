@@ -117,7 +117,7 @@ jobs:
           # Drop python debug symbols (.pdb) to slim the package (~80MB)
           find "$RUNTIME/python" -name '*.pdb' -delete 2>/dev/null || true
 
-          cat > "$PKG/安装使用说明_Install_Guide.txt" <<'EOF'
+          cat > "$PKG/readme.txt" <<'EOF'
           ================ 中文 ================
           GenericAgent Desktop — Windows 便携版（自包含）
 
@@ -159,7 +159,7 @@ jobs:
           - Do not move this folder after the first setup; if you did, delete runtime\app\.venv and relaunch to rebuild.
           - runtime\ holds the bundled runtime and source; no need to touch it.
           EOF
-          sed -i 's/^          //' "$PKG/安装使用说明_Install_Guide.txt"
+          sed -i 's/^          //' "$PKG/readme.txt"
 
           echo "Package tree (top levels):"
           find "$PKG" -maxdepth 2 -printf '%y %p\n' | sort | head -40
@@ -204,8 +204,8 @@ jobs:
             Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
           - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
             Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `如果无法打开先运行.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `如果无法打开先运行.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
+            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
 
           ## 首次启动 / First launch
           首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
@@ -214,7 +214,7 @@ jobs:
           ## 说明 / Notes
           - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
           - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附「安装使用说明_Install_Guide.txt」（中英）。Windows/Linux packages include a bilingual install guide.
+          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
           EOF
           # Create the shared release if it does not exist yet (another OS job may win the race).
           # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
@@ -330,7 +330,7 @@ jobs:
           # Drop python debug/cache bits to slim the package
           find "$RUNTIME/python" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
-          cat > "$PKG/安装使用说明_Install_Guide.txt" <<'EOF'
+          cat > "$PKG/readme.txt" <<'EOF'
           ================ 中文 ================
           GenericAgent Desktop — Linux 便携版（自包含）
 
@@ -376,7 +376,7 @@ jobs:
           - Do not move this folder after the first setup; if you did, delete runtime/app/.venv and relaunch to rebuild.
           - runtime/ holds the bundled runtime and source; no need to touch it.
           EOF
-          sed -i 's/^          //' "$PKG/安装使用说明_Install_Guide.txt"
+          sed -i 's/^          //' "$PKG/readme.txt"
 
           mkdir -p artifacts/linux/out
           tar -C artifacts/linux -czf artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz GenericAgent-Desktop-Linux-Portable
@@ -416,8 +416,8 @@ jobs:
             Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
           - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
             Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `如果无法打开先运行.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `如果无法打开先运行.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
+            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
 
           ## 首次启动 / First launch
           首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
@@ -426,7 +426,7 @@ jobs:
           ## 说明 / Notes
           - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
           - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附「安装使用说明_Install_Guide.txt」（中英）。Windows/Linux packages include a bilingual install guide.
+          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
           EOF
           # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
           # actually exists (a simultaneous create from another job can fail), so the
@@ -551,7 +551,7 @@ jobs:
           EOF
           chmod +x "$PORTABLE/Start GenericAgent.command"
 
-          cat > "$PORTABLE/安装使用说明_Install_Guide.txt" <<'EOF'
+          cat > "$PORTABLE/readme.txt" <<'EOF'
           ================ 中文 ================
           GenericAgent Desktop — macOS 便携版（自包含）
 
@@ -576,7 +576,7 @@ jobs:
           Uninstall
           Double-click uninstall.command, or quit the app and delete the whole portable folder.
           EOF
-          sed -i '' 's/^          //' "$PORTABLE/安装使用说明_Install_Guide.txt"
+          sed -i '' 's/^          //' "$PORTABLE/readme.txt"
 
           codesign --force --deep --sign - "$PORTABLE/GenericAgent.app"
           codesign --verify --deep --strict "$PORTABLE/GenericAgent.app" || true
@@ -589,7 +589,7 @@ jobs:
           codesign --verify --deep --strict "$DMG_APP" || true
           ln -s /Applications "$DMG_STAGE/Applications"
 
-          cat > "$DMG_STAGE/如果无法打开先运行.command" <<'EOF'
+          cat > "$DMG_STAGE/open_anyway.command" <<'EOF'
           #!/bin/bash
           set -e
           DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -600,9 +600,9 @@ jobs:
           xattr -cr "$TARGET" 2>/dev/null || true
           osascript -e 'display dialog "GenericAgent 已处理完成。请将 GenericAgent.app 拖入 Applications 后，从 Applications 中启动；如果已经安装，可以直接重新打开。" buttons {"OK"} default button "OK"' >/dev/null 2>&1 || true
           EOF
-          chmod +x "$DMG_STAGE/如果无法打开先运行.command"
+          chmod +x "$DMG_STAGE/open_anyway.command"
 
-          cat > "$DMG_STAGE/安装说明_Install_Guide.txt" <<'EOF'
+          cat > "$DMG_STAGE/readme.txt" <<'EOF'
           ================ 中文 ================
           GenericAgent Desktop — macOS DMG 安装版
 
@@ -613,7 +613,7 @@ jobs:
 
           若出现“无法验证开发者”“Apple 无法检查其是否包含恶意软件”或无法打开：
           1. 回到 DMG 窗口。
-          2. 双击“如果无法打开先运行.command”。
+          2. 双击“open_anyway.command”。
           3. 再从 Applications 中打开 GenericAgent.app。
           也可以右键 GenericAgent.app，选择“打开”。
 
@@ -630,17 +630,17 @@ jobs:
 
           If macOS says the developer cannot be verified, Apple cannot check it for malicious software, or the app cannot be opened:
           1. Go back to the DMG window.
-          2. Double-click "如果无法打开先运行.command".
+          2. Double-click "open_anyway.command".
           3. Launch GenericAgent.app from Applications again.
           You can also right-click GenericAgent.app and choose Open.
 
           Uninstall
           Quit GenericAgent, then delete GenericAgent.app from Applications.
           EOF
-          sed -i '' 's/^          //' "$DMG_STAGE/安装说明_Install_Guide.txt"
+          sed -i '' 's/^          //' "$DMG_STAGE/readme.txt"
 
           ( cd "$DMG_STAGE" && \
-            shasum -a 256 "安装说明_Install_Guide.txt" "如果无法打开先运行.command" > SHA256SUMS-macos.txt && \
+            shasum -a 256 "readme.txt" "open_anyway.command" > SHA256SUMS-macos.txt && \
             find GenericAgent.app -type f -print0 | sort -z | xargs -0 shasum -a 256 >> SHA256SUMS-macos.txt )
 
           mkdir -p artifacts/macos/out
@@ -684,8 +684,8 @@ jobs:
             Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
           - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
             Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `如果无法打开先运行.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `如果无法打开先运行.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
+            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
 
           ## 首次启动 / First launch
           首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
@@ -694,7 +694,7 @@ jobs:
           ## 说明 / Notes
           - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
           - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附「安装使用说明_Install_Guide.txt」（中英）。Windows/Linux packages include a bilingual install guide.
+          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
           EOF
           # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
           # actually exists (a simultaneous create from another job can fail), so the
