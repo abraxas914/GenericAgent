@@ -418,21 +418,26 @@ class AgentManager:
         except Exception as e:
             print(f"get model profiles failed: {e}", file=sys.stderr)
             return []
-        _, mcfg = self._mixin_entry(keys, mk)
-        members = [str(m) for m in (mcfg.get("llm_nos") or [])] if mcfg else []
         active = self.config.get("llmNo", 0)
+        # collect all mixin members for inMixin check
+        all_mixin_members: set = set()
+        for k in keys:
+            if "mixin" in k:
+                c = mk.get(k) if isinstance(mk.get(k), dict) else {}
+                all_mixin_members.update(str(m) for m in (c.get("llm_nos") or []))
         out = []
         for i, k in enumerate(keys):
             cfg = mk.get(k) if isinstance(mk.get(k), dict) else {}
             if "mixin" in k:
+                mems = [str(m) for m in (cfg.get("llm_nos") or [])]
                 out.append({"id": i, "varName": k, "kind": "mixin", "name": "",
-                            "members": members, "active": i == active})
+                            "members": mems, "active": i == active})
             else:
                 name = self._base_display_name(k, cfg)
                 out.append({"id": i, "varName": k, "kind": "native", "name": name,
                             "model": cfg.get("model", ""),
                             "group": "native" if "native" in k else "std",
-                            "inMixin": name in members, "active": i == active})
+                            "inMixin": name in all_mixin_members, "active": i == active})
         return out
 
     def add_to_mixin(self, profile_id: int) -> dict:

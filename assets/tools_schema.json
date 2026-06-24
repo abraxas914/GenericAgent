@@ -60,10 +60,10 @@
   }},
   {"type": "function", "function": {
     "name": "ask_user",
-    "description": "Interrupt task to ask user when needing decisions, extra info, or facing unresolvable blockers. For multiple questions, use one call and put all in question—do not call repeatedly.",
+    "description": "Interrupt task to ask user when needing decisions, extra info, or facing unresolvable blockers. Multiple questions should in one call",
     "parameters": {"type": "object", "properties": {
-      "question": {"type": "string", "description": "Question for the user. For multiple questions, one per line (e.g. \"1. …\" / \"2. …\" or \"Q1: …\"); put A/B/C options under each question in this field. Do not cram multiple questions on one line. candidates is for single-question quick picks only."},
-      "candidates": {"type": "array", "items": {"type": "string"}, "description": "Optional quick-select choices for a single question only. Leave empty for multi-question prompts; put per-question options in question instead."}}}
+      "question": {"type": "string", "description": "For multiple questions, one per line (contain candidates)"},
+      "candidates": {"type": "array", "items": {"type": "string"}, "description": "Optional quick-select choices for a single question only. Leave empty for multi-questions"}}}
   }},
   {"type": "function", "function": {
     "name": "start_long_term_update",
