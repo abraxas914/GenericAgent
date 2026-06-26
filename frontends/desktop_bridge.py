@@ -1121,6 +1121,37 @@ class ServiceManager:
             with contextlib.suppress(Exception):
                 self.stop_service(sid)
 
+    def _extra_is_broken(self, sid: str) -> bool:
+        """判断一个 extra 是否「已经坏掉、需要重启才能恢复」:
+          - 进程异常退出(非用户主动停)→ 坏(覆盖 scheduler 那种进程级崩溃);
+          - 进程还活着,但捕获日志里出现 `Exception in thread conductor-agent`
+            → 内部 agent 线程已崩死,uvicorn 还在跑但再也处理不了任务 → 坏。
+        健康运行中的进程返回 False:它会在下个任务靠自身 mtime 热重载读到新 mykey,
+        不该被打断。每次 start_service 都会换新缓冲,故缓冲里的崩溃签名只反映当前进程。"""
+        proc = self.procs.get(sid)
+        if proc is None:
+            return False                       # 没起过 / 用户主动停掉 → 不复活
+        if proc.poll() is not None:
+            return sid not in self._stopping   # 意外退出 = 坏
+        buf = self.buffers.get(sid)
+        return bool(buf) and any("Exception in thread conductor-agent" in ln for ln in buf)
+
+    def restart_broken_extras(self) -> None:
+        """mykey 被整体重写(导入密钥/编辑渠道配置)后,只重启「已经坏掉」的
+        conductor/scheduler。健康运行中的进程不动——它们会在下个任务靠自身 mtime
+        热重载新 key,强行重启反而会打断正在跑的任务。"""
+        for sid in sorted(set(self._catalog) - set(self._im_catalog)):
+            if not self._extra_is_broken(sid):
+                continue
+            with contextlib.suppress(Exception):
+                self.stop_service(sid)
+            try:
+                res = self.start_service(sid)
+                tag = "ok" if res.get("ok") else f"fail: {res.get('error')}"
+            except Exception as e:
+                tag = f"exception {type(e).__name__}: {e}"
+            print(f"[restart-broken] {sid}: {tag}", file=sys.stderr)
+
     def stop_service(self, sid: str) -> dict:
         if sid not in self._catalog:
             raise KeyError(sid)
@@ -1693,6 +1724,9 @@ async def mykey_save_handler(request):
         profiles = manager._save_mykey_text(str(content))
     except Exception as e:
         return json_ok({"ok": False, "error": str(e)}, status=400)
+    # 导入/整体重写 mykey 后,只有「已崩坏」的 conductor/scheduler 才重启(死了才救);
+    # 健康运行中的进程不打断,它们会在下个任务靠自身 mtime 热重载读到新 key。
+    services.restart_broken_extras()
     return json_ok({"ok": True, "path": str(manager._mykey_file()), "profiles": profiles})
 
 
