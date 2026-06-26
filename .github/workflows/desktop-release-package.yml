@@ -176,7 +176,7 @@ jobs:
           Get-ChildItem artifacts/windows/out | Format-Table Name, Length
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: GenericAgent-Desktop-Windows-Portable-${{ github.run_number }}
           path: |
@@ -388,7 +388,7 @@ jobs:
           ls -lh artifacts/linux/out
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: GenericAgent-Desktop-Linux-Portable-${{ github.run_number }}
           path: |
@@ -653,7 +653,7 @@ jobs:
           find "$DMG_STAGE" -maxdepth 2 -print | sort
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: GenericAgent-Desktop-macOS-DMG-${{ github.run_number }}
           path: artifacts/macos/out/*
