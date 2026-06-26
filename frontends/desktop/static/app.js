@@ -3895,6 +3895,12 @@ async function loadModelProfiles() {
       state.llmNo = active.id ?? 0;
       state.modelName = modelDisplayName(active);
     }
+    // conductor chip 的显示名只在 loadBridgeConfig/selectConductorModel 更新；导入密钥等
+    // 仅刷新 profiles 的路径若不在此一并重算，会让 conductor chip 停在旧文案(如空渠道组)。
+    if (state.conductorLlmNo != null) {
+      const cp = state.modelProfiles.find(p => (p.id ?? 0) === state.conductorLlmNo);
+      if (cp) state.conductorModelName = modelDisplayName(cp);
+    }
     updateModelChip();
     renderSettingsModels();
   } catch (_) {}
