@@ -1035,7 +1035,7 @@ async function importMemoryFromDir() {
     + `, ${t('sys.memorySessions')}: ${res.sessionsAdded || 0}`
     + (res.backupDir ? `\n${t('sys.memoryImportBackup')}: ${res.backupDir}` : '');
   if (res.sessionsAdded) {
-    try { await loadSessions(); } catch (_) {}
+    try { await loadSessions(); renderSessionList(); } catch (_) {}
   }
   showChanToast(t('sys.memoryImported'), detail, 'ok');
 }
