@@ -36,7 +36,7 @@ WS API (state sync):
 """
 from __future__ import annotations
 
-import asyncio, atexit, contextlib, importlib, json, os, re, subprocess, sys
+import asyncio, atexit, contextlib, importlib, json, os, re, shutil, subprocess, sys
 from collections import Counter, deque
 import threading, time, traceback, uuid
 from dataclasses import dataclass, field
@@ -187,6 +187,49 @@ class AgentManager:
                 self.active_session_id = max(self.sessions.values(), key=lambda s: s.updated_at).id
         except Exception as e:
             print(f"[bridge] load sessions failed: {e}", file=sys.stderr)
+
+    def import_sessions(self, source_dir: str) -> dict:
+        """把 source_dir/temp/desktop_sessions.json 合并进当前会话列表(按 id 去重)。
+
+        既更新内存(立即在侧边栏可见)又落盘。返回新增/跳过计数。
+        """
+        src = Path(source_dir).expanduser().resolve()
+        src_file = src / "temp" / "desktop_sessions.json"
+        if not src_file.is_file():
+            return {"sessionsAdded": 0, "sessionsSkipped": 0, "sessionsFileFound": False}
+        try:
+            arr = json.loads(src_file.read_text(encoding="utf-8"))
+            if not isinstance(arr, list):
+                raise ValueError("desktop_sessions.json is not a list")
+        except Exception as e:
+            raise ValueError(f"cannot read desktop_sessions.json: {e}")
+        added = 0
+        skipped = 0
+        with self.lock:
+            for item in arr:
+                sid = item.get("id")
+                if not sid or sid in self.sessions:
+                    skipped += 1
+                    continue
+                msgs = item.get("messages", [])
+                sess = Session(id=sid, title=item.get("title", "New chat"),
+                               cwd=item.get("cwd", self.ga_root),
+                               created_at=item.get("created_at", time.time()),
+                               updated_at=item.get("updated_at", time.time()),
+                               messages=msgs,
+                               msg_seq=item.get("msg_seq", 0),
+                               pinned=item.get("pinned", False),
+                               untitled=item.get("untitled", True),
+                               plan_scan_baseline=_load_plan_baseline(item, msgs),
+                               plan_path=_sanitize_desktop_plan_path(sid, item.get("plan_path") or ""),
+                               status="idle", agent=None,
+                               llm_history=item.get("llm_history"),
+                               llm_no=item.get("llm_no"))
+                self.sessions[sid] = sess
+                added += 1
+        if added:
+            self._persist()
+        return {"sessionsAdded": added, "sessionsSkipped": skipped, "sessionsFileFound": True}
 
     def _mykey_file(self) -> Path:
         p = Path(self.ga_root) / "mykey.py"
@@ -1737,6 +1780,87 @@ async def mykey_save_handler(request):
     return json_ok({"ok": True, "path": str(manager._mykey_file()), "profiles": profiles})
 
 
+def _import_memory_from(source_dir: str, ga_root: str) -> dict:
+    """把 source_dir 的 memory/ 与 temp/model_responses/ 导入到 ga_root。
+
+    memory/: 先整体备份现有 ga_root/memory 到 temp/memory_import_backup_<ts>/,再覆盖同名文件、补齐新文件。
+    temp/model_responses/: 文件名带 pid/logid 天然唯一,只拷目标端不存在的,已存在的跳过。
+    """
+    src = Path(source_dir).expanduser().resolve()
+    dst_root = Path(ga_root).resolve()
+    if not src.is_dir():
+        raise ValueError(f"source is not a directory: {src}")
+    if src == dst_root:
+        raise ValueError("source is the same as current GA root")
+
+    src_mem = src / "memory"
+    src_resp = src / "temp" / "model_responses"
+    if not src_mem.is_dir() and not src_resp.is_dir():
+        raise ValueError("not a GA directory (no memory/ or temp/model_responses/)")
+
+    memory_copied = 0
+    responses_copied = 0
+    responses_skipped = 0
+    backup_dir = ""
+
+    # --- memory/: 备份后覆盖 ---
+    if src_mem.is_dir():
+        dst_mem = dst_root / "memory"
+        if dst_mem.is_dir() and any(dst_mem.iterdir()):
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            backup_root = dst_root / "temp" / f"memory_import_backup_{ts}"
+            backup_root.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(dst_mem, backup_root / "memory")
+            backup_dir = str(backup_root)
+        dst_mem.mkdir(parents=True, exist_ok=True)
+        for item in src_mem.rglob("*"):
+            rel = item.relative_to(src_mem)
+            target = dst_mem / rel
+            if item.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, target)
+                memory_copied += 1
+
+    # --- temp/model_responses/: 补齐缺失 ---
+    if src_resp.is_dir():
+        dst_resp = dst_root / "temp" / "model_responses"
+        dst_resp.mkdir(parents=True, exist_ok=True)
+        for item in src_resp.rglob("*"):
+            if item.is_dir():
+                continue
+            rel = item.relative_to(src_resp)
+            target = dst_resp / rel
+            if target.exists():
+                responses_skipped += 1
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+            responses_copied += 1
+
+    return {
+        "ok": True,
+        "memoryCopied": memory_copied,
+        "responsesCopied": responses_copied,
+        "responsesSkipped": responses_skipped,
+        "backupDir": backup_dir,
+    }
+
+
+async def memory_import_handler(request):
+    data = await read_json(request)
+    source_dir = (data.get("sourceDir") or "").strip()
+    if not source_dir:
+        return json_ok({"ok": False, "error": "missing_sourceDir"}, status=400)
+    try:
+        result = _import_memory_from(source_dir, manager.ga_root)
+        result.update(manager.import_sessions(source_dir))
+    except Exception as e:
+        return json_ok({"ok": False, "error": str(e)}, status=400)
+    return json_ok(result)
+
+
 async def conductor_model_get_handler(request):
     return json_ok({"model": _conductor_settings()})
 
@@ -1911,6 +2035,7 @@ def create_app():
     app.router.add_get("/services/panel", service_panel_handler)
     app.router.add_get("/services/mykey", mykey_get_handler)
     app.router.add_post("/services/mykey", mykey_save_handler)
+    app.router.add_post("/memory/import", memory_import_handler)
     app.router.add_get("/services/conductor/model", conductor_model_get_handler)
     app.router.add_post("/services/conductor/model", conductor_model_save_handler)
     app.router.add_post("/services/stop-extras", stop_extras_handler)

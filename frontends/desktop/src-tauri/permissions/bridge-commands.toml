@@ -19,6 +19,11 @@ description = "Save mykey.py via native file dialog."
 commands.allow = ["export_mykey"]
 
 [[permission]]
+identifier = "allow-pick-directory"
+description = "Pick a source directory via native folder dialog (import memory)."
+commands.allow = ["pick_directory"]
+
+[[permission]]
 identifier = "allow-shortcut-should-ask"
 description = "Check whether to show the first-run desktop-shortcut prompt."
 commands.allow = ["shortcut_should_ask"]
