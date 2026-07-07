@@ -141,6 +141,78 @@ def _sanitize_desktop_plan_path(session_id: str, plan_path: str) -> str:
     return ""
 
 
+def _extract_first_timestamp(content: str) -> float:
+    m = re.search(r'^=== Prompt === (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})', content, re.MULTILINE)
+    if m:
+        try:
+            from datetime import datetime
+            return datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S").timestamp()
+        except Exception:
+            pass
+    return 0.0
+
+
+def _extract_title(pairs) -> str:
+    for p, _ in pairs[:1]:
+        try:
+            msg = json.loads(p)
+            for blk in msg.get("content", []):
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    t = blk.get("text", "").strip()
+                    if t and "<history>" not in t and "### [WORKING MEMORY]" not in t:
+                        return t[:60]
+        except Exception:
+            pass
+    return ""
+
+
+def _build_display_messages(content: str, pairs: list) -> list:
+    import ast as _ast
+    block_re = re.compile(r'^=== (Prompt|Response) === (\S+ \S+)', re.MULTILINE)
+    ts_list = []
+    for m in block_re.finditer(content):
+        ts_str = m.group(2).split(' model=')[0].strip()
+        try:
+            from datetime import datetime
+            ts_list.append(datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").timestamp())
+        except Exception:
+            ts_list.append(0.0)
+
+    messages = []
+    seq = 0
+    ts_idx = 0
+    for prompt_json, response_repr in pairs:
+        # user message
+        try:
+            user_msg = json.loads(prompt_json)
+            user_text = ""
+            for blk in user_msg.get("content", []):
+                if isinstance(blk, dict) and blk.get("type") == "text":
+                    user_text += blk.get("text", "")
+            if user_text.strip() and "<history>" not in user_text and "### [WORKING MEMORY]" not in user_text:
+                seq += 1
+                messages.append({"id": seq, "role": "user", "content": user_text.strip(),
+                                 "ts": ts_list[ts_idx] if ts_idx < len(ts_list) else 0})
+        except Exception:
+            pass
+        ts_idx += 1
+        # assistant message
+        try:
+            blocks = _ast.literal_eval(response_repr)
+            text_parts = []
+            for block in (blocks if isinstance(blocks, list) else []):
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+            if text_parts:
+                seq += 1
+                messages.append({"id": seq, "role": "assistant", "content": "\n".join(text_parts),
+                                 "ts": ts_list[ts_idx] if ts_idx < len(ts_list) else 0})
+        except Exception:
+            pass
+        ts_idx += 1
+    return messages
+
+
 class AgentManager:
     def __init__(self):
         self.lock = threading.RLock()
@@ -202,6 +274,8 @@ class AgentManager:
         with self.lock:
             sessions = list(self.sessions.values())
         for s in sessions:
+            if s.id.startswith("tui_") and s.agent is None and s.status == "idle":
+                continue
             self._persist_session(s)
 
     def _session_from_item(self, item: dict) -> "Session":
@@ -256,6 +330,60 @@ class AgentManager:
 
         if self.sessions:
             self.active_session_id = max(self.sessions.values(), key=lambda s: s.updated_at).id
+        self._import_tui_sessions()
+
+    def _import_tui_sessions(self):
+        if str(APP_DIR) not in sys.path:
+            sys.path.insert(0, str(APP_DIR))
+        try:
+            from continue_cmd import _pairs, _parse_native_history
+            from session_names import name_for
+        except ImportError:
+            return
+        log_dir = Path(self.ga_root) / "temp" / "model_responses"
+        if not log_dir.is_dir():
+            return
+        import glob as _glob
+        files = _glob.glob(str(log_dir / "model_responses_*.txt"))
+        imported = 0
+        for fpath in files:
+            basename = os.path.basename(fpath)
+            logid = basename.removeprefix("model_responses_").removesuffix(".txt")
+            session_id = f"tui_{logid}"
+            if session_id in self.sessions:
+                continue
+            try:
+                st = os.stat(fpath)
+                if st.st_size < 32:
+                    continue
+                content = Path(fpath).read_text(encoding="utf-8", errors="replace")
+                pairs = _pairs(content)
+                if not pairs:
+                    continue
+                llm_history = _parse_native_history(pairs)
+                if not llm_history:
+                    continue
+                messages = _build_display_messages(content, pairs)
+                title = name_for(fpath) or _extract_title(pairs)
+                sess = Session(
+                    id=session_id,
+                    title=title or "TUI session",
+                    cwd=self.ga_root,
+                    created_at=_extract_first_timestamp(content) or st.st_mtime,
+                    updated_at=st.st_mtime,
+                    messages=messages,
+                    msg_seq=len(messages),
+                    llm_history=llm_history,
+                    pinned=False,
+                    untitled=False,
+                    status="idle",
+                )
+                self.sessions[session_id] = sess
+                imported += 1
+            except Exception as e:
+                print(f"[bridge] import TUI session {basename} failed: {e}", file=sys.stderr)
+        if imported:
+            print(f"[bridge] imported {imported} TUI sessions", file=sys.stderr)
 
     def import_sessions(self, source_dir: str) -> dict:
         """把 source 的桌面会话合并进当前列表(按 id 去重)。
@@ -732,14 +860,50 @@ class AgentManager:
             sess.last_error = ""
             sess.partial = {"id": sess.msg_seq + 1, "role": "assistant", "content": "", "ts": time.time(), "partial": True,
                             "curr_turn": 0, "turn_segs": []}  # turn_segs[i]=第i轮全文(权威结构化,前端按轮渲染);content保留双轨兜底
-            t = threading.Thread(target=self.run_agent_turn, args=(sess, prompt, None), daemon=True, name=f"Turn-{sid}")
+            image_paths = [m["path"] for m in (image_metas or []) if m.get("path")]
+            t = threading.Thread(target=self.run_agent_turn, args=(sess, prompt, image_paths or None, llm_no), daemon=True, name=f"Turn-{sid}")
             sess.thread = t
             t.start()
             seq = sess.msg_seq
         emit_session_state(sess, "running")
         return {"ok": True, "sessionId": sid, "accepted": True, "userMessageId": user_msg["id"], "seq": seq}
 
-    def run_agent_turn(self, sess: Session, prompt: str, images: Optional[list] = None):
+    @staticmethod
+    def _patch_chat_for_images(client, image_paths):
+        """Monkey-patch backend.ask to inject image blocks on the first LLM call.
+        Injects AFTER NativeToolClient.chat's filter (which drops non-text blocks),
+        directly into the merged message that goes to the session."""
+        import base64 as b64, mimetypes
+        try:
+            from llmcore import NativeToolClient
+        except ImportError:
+            return
+        if not isinstance(client, NativeToolClient):
+            return
+        backend = client.backend
+        original_ask = backend.ask
+
+        def patched_ask(msg):
+            try:
+                del backend.ask
+            except AttributeError:
+                backend.ask = original_ask
+            if isinstance(msg, dict) and isinstance(msg.get("content"), list):
+                for p in image_paths:
+                    try:
+                        with open(p, 'rb') as f:
+                            raw = f.read()
+                        data = b64.b64encode(raw).decode()
+                        mime = mimetypes.guess_type(p)[0] or 'image/png'
+                        msg["content"].append({"type": "image", "source": {"type": "base64", "media_type": mime, "data": data}})
+                    except Exception as e:
+                        print(f"[ImagePatch] Failed to read {p}: {e}")
+            resp = yield from original_ask(msg)
+            return resp
+
+        backend.ask = patched_ask
+
+    def run_agent_turn(self, sess: Session, prompt: str, images: Optional[list] = None, llm_no: Optional[int] = None):
         try:
             if sess.agent is None:
                 sess.agent = self.make_agent(sess)
@@ -749,6 +913,8 @@ class AgentManager:
             if no is not None and hasattr(agent, "next_llm"):
                 with contextlib.suppress(Exception):
                     agent.next_llm(int(no))
+            if images:
+                self._patch_chat_for_images(agent.llmclient, images)
             full = ""
             done_outputs = None  # done时agent给的全量轮文本(turn_resps.copy())
             if hasattr(agent, "put_task"):
