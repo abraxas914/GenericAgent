@@ -411,7 +411,9 @@ API: {base}；requests，GET /readme查用法，GET /chat读未读对话，GET /
                 _apply_desktop_model(self.agent)
                 dq = self.agent.put_task(prompt, source="conductor")
                 self._drain(dq, events)
-            except Exception as e: print(f"Conductor error: {e}")
+            except Exception as e:
+                print(f"Conductor error: {e}")
+                add_chat(f"⚠ 回复失败：{e}", role="error")
 
     def start(self): threading.Thread(target=self._run, name="conductor-loop", daemon=True).start()
 
