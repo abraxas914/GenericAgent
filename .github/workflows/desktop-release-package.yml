@@ -646,10 +646,6 @@ jobs:
             -ov \
             -format UDZO \
             "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
-
-          # Hide ghost files (.VolumeIcon.icns, .background, .fseventsd) from Finder
-          bash frontends/desktop/scripts/post-dmg.sh "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
-
           shasum -a 256 "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg" \
             > "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg.sha256"
 
