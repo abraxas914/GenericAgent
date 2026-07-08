@@ -330,11 +330,53 @@ fn running_inside_app_bundle() -> bool {
         .unwrap_or(false)
 }
 
+/// User-set external GenericAgent source directory (design A: desktop as a thin shell).
+/// Returns the path only when it is a valid GA checkout (has agentmain.py AND
+/// frontends/desktop_bridge.py). An invalid/missing override returns None so callers fall
+/// back to the bundle's own runtime/app — this is the "本体 moved/deleted" safety net.
+fn valid_ga_source_override() -> Option<String> {
+    let s = read_settings()
+        .get("ga_source_override")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if s.is_empty() {
+        return None;
+    }
+    let p = PathBuf::from(&s);
+    if p.join("agentmain.py").exists() && p.join("frontends").join("desktop_bridge.py").exists() {
+        Some(p.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+/// Remove a single key from the settings file (merge_settings can only add/overwrite).
+fn remove_setting(key: &str) {
+    let mut obj = read_settings();
+    obj.remove(key);
+    let val = serde_json::Value::Object(obj);
+    if let Ok(text) = serde_json::to_string_pretty(&val) {
+        let _ = std::fs::write(settings_path(), text);
+    }
+}
+
 /// Read config from settings file, or auto-discover and save.
 /// Self-contained bundles always prefer their own runtime/app over stale user settings,
 /// otherwise an old ~/.ga_desktop_settings.json can silently point the UI at a different checkout.
 pub fn get_or_discover_config() -> (String, String) {
     let path = settings_path();
+
+    // A user-set, still-valid external GA source wins over everything — including the bundle's
+    // own runtime/app. This is what turns the desktop app into a thin shell over a separate 本体.
+    // Uses the bundle python (which has deps installed) to run the external source.
+    if let Some(src) = valid_ga_source_override() {
+        let python = find_python();
+        if !python.is_empty() {
+            return (python, src);
+        }
+    }
 
     if bundle_root().is_some() {
         let python = find_python();
@@ -669,7 +711,7 @@ fn spawn_bridge_process(python_path: &str, project_dir: &str) -> Result<(), Stri
 
 fn show_bridge_window(app_handle: &tauri::AppHandle) {
     if let Some(main_win) = app_handle.get_webview_window("main") {
-        let url = tauri::Url::parse("http://127.0.0.1:14168/").unwrap();
+        let url = tauri::Url::parse("tauri://localhost/index.html").unwrap();
         let _ = main_win.navigate(url);
         let _ = main_win.show();
         let _ = main_win.set_focus();
@@ -726,28 +768,103 @@ fn export_mykey(content: String) -> Result<Option<String>, String> {
     }
 }
 
+#[tauri::command]
+fn pick_directory(title: Option<String>) -> Option<String> {
+    let mut dlg = rfd::FileDialog::new();
+    if let Some(t) = title {
+        if !t.is_empty() {
+            dlg = dlg.set_title(&t);
+        }
+    }
+    dlg.pick_folder().map(|p| p.to_string_lossy().into_owned())
+}
+
+/// Stop the current bridge (ours or a stale one) and free :14168 before respawning.
+fn stop_current_bridge() {
+    request_bridge_shutdown();
+    if let Some(mut child) = BRIDGE_PROCESS.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let start = Instant::now();
+    while is_bridge_running() && start.elapsed() < Duration::from_secs(6) {
+        thread::sleep(Duration::from_millis(150));
+    }
+    if is_bridge_running() {
+        force_free_bridge_port();
+        let start = Instant::now();
+        while is_bridge_running() && start.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(150));
+        }
+    }
+}
+
+/// Restart the bridge with whatever get_or_discover_config() now resolves to, then reload the
+/// webview so it reconnects. Shared by set_ga_source / clear_ga_source.
+fn switch_bridge(app_handle: &tauri::AppHandle) -> Result<String, String> {
+    stop_current_bridge();
+    let (py, project) = get_or_discover_config();
+    if project.is_empty() {
+        return Err("no GenericAgent source resolved".into());
+    }
+    spawn_bridge_process(&py, &project)?;
+    if !wait_for_port(14168, Duration::from_secs(20)) {
+        return Err("bridge did not become ready within 20s".into());
+    }
+    show_bridge_window(app_handle);
+    Ok(project)
+}
+
+#[tauri::command]
+fn get_ga_source() -> String {
+    read_settings()
+        .get("ga_source_override")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+#[tauri::command]
+fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
+    let p = PathBuf::from(&dir);
+    if !p.join("agentmain.py").exists() {
+        return Err("not a GenericAgent source: agentmain.py not found".into());
+    }
+    if !p.join("frontends").join("desktop_bridge.py").exists() {
+        return Err("frontends/desktop_bridge.py not found in the selected directory".into());
+    }
+    merge_settings(serde_json::json!({ "ga_source_override": dir }));
+    switch_bridge(&app_handle)
+}
+
+#[tauri::command]
+fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
+    remove_setting("ga_source_override");
+    switch_bridge(&app_handle)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     let no_autostart = args.iter().any(|a| a == "--no-autostart");
     let dev_mode = args.iter().any(|a| a == "--dev");
 
-    let project_dir = find_project_dir().unwrap_or_default();
-    let needs_prepare = needs_first_run_prepare(&project_dir);
+    // Resolve the effective config once (honors a user-set external GA source over the bundle).
+    // Use it for takeover + spawn so identity checks match what we actually launch.
+    let (eff_py, eff_project) = get_or_discover_config();
+    let needs_prepare = needs_first_run_prepare(&eff_project);
 
-    takeover_stale_bridge(&project_dir);
+    takeover_stale_bridge(&eff_project);
 
     let bridge_ok = is_bridge_running();
     let mut spawned_bridge = false;
     // Skip the early spawn when a first-run prepare is required (no venv yet);
     // the setup thread prepares the env first and then starts the bridge.
     if !bridge_ok && !no_autostart && !needs_prepare {
-        // Try to start bridge with saved/discovered config
-        let (py_str, dir_str) = get_or_discover_config();
-        let dir = PathBuf::from(&dir_str);
+        let dir = PathBuf::from(&eff_project);
         let script = dir.join("frontends").join("desktop_bridge.py");
         if script.exists() {
-            let mut cmd = Command::new(&py_str);
+            let mut cmd = Command::new(&eff_py);
             cmd.arg(&script).current_dir(&dir);
             sanitize_bundle_env(&mut cmd);
             #[cfg(windows)]
@@ -767,7 +884,7 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![start_bridge_with_config, start_bridge, get_config, export_mykey, shortcut_should_ask, shortcut_decide])
+        .invoke_handler(tauri::generate_handler![start_bridge_with_config, start_bridge, get_config, export_mykey, pick_directory, get_ga_source, set_ga_source, clear_ga_source, shortcut_should_ask, shortcut_decide])
         .setup(move |app| {
             // Show the loading window immediately so the first-run prepare isn't a blank screen.
             // The window starts on loading.html (a local page), so no "connection refused" flash.
@@ -776,7 +893,7 @@ pub fn run() {
             }
 
             let handle = app.handle().clone();
-            let project_dir = project_dir.clone();
+            let project_dir = eff_project.clone();
             thread::spawn(move || {
                 // Progress reporter: push status into the loading window (window.gaProgress).
                 let main_win = handle.get_webview_window("main");
@@ -844,9 +961,9 @@ pub fn run() {
                         }
                         return;
                     }
-                    // Navigate to the bridge HTTP only after it is ready.
+                    // Navigate to the local React SPA after bridge is ready.
                     if let Some(w) = handle.get_webview_window("main") {
-                        if let Ok(url) = tauri::Url::parse("http://127.0.0.1:14168/") {
+                        if let Ok(url) = tauri::Url::parse("tauri://localhost/index.html") {
                             let _ = w.navigate(url);
                         }
                         if dev_mode {
