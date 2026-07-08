@@ -1,7 +1,7 @@
 import os, sys, re, time, json, uuid, queue, asyncio, threading
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
@@ -18,28 +18,60 @@ PORT = 8900
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conductor.html")
 
 
-def _desktop_llm_no() -> Optional[int]:
-    """Read the model index the user picked in the desktop UI.
-    Persisted by the bridge at ~/.ga_desktop_settings.json under ui.llmNo.
-    Returns None when unavailable, so callers keep the agent's default model."""
+def _settings_doc() -> dict:
     try:
         from pathlib import Path
         doc = json.loads((Path.home() / ".ga_desktop_settings.json").read_text(encoding="utf-8"))
-        no = (doc.get("ui") or {}).get("llmNo")
-        return int(no) if no is not None else None
+        return doc if isinstance(doc, dict) else {}
     except Exception:
-        return None
+        return {}
+
+
+def _conductor_llm_no() -> Optional[int]:
+    """Read the model index bound to the conductor session.
+    Falls back to the legacy desktop default ui.llmNo for existing installs."""
+    doc = _settings_doc()
+    for section in (doc.get("conductor"), doc.get("ui")):
+        if isinstance(section, dict) and section.get("llmNo") is not None:
+            try:
+                return int(section.get("llmNo"))
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _client_usable(agent: "GenericAgent") -> bool:
+    return hasattr(getattr(agent, "llmclient", None), "backend")
+
+
+def _fallback_usable_model(agent: "GenericAgent") -> None:
+    for i, client in enumerate(getattr(agent, "llmclients", []) or []):
+        if not hasattr(client, "backend"):
+            continue
+        agent.llm_no = i
+        agent.llmclient = client
+        with suppress(Exception):
+            agent.llmclient.last_tools = ''
+        return
 
 
 def _apply_desktop_model(agent: "GenericAgent") -> None:
-    """Switch a freshly built agent to the desktop-selected model (if any)."""
-    no = _desktop_llm_no()
-    if no is None:
-        return
-    try:
-        agent.next_llm(int(no))
-    except Exception as e:
-        print(f"[conductor] failed to apply desktop model #{no}: {e}", file=sys.stderr)
+    """Make the conductor's session reflect the current desktop config before a task:
+    switch to its bound model if one is set, otherwise still refresh sessions from
+    mykey so live key/model edits (e.g. importing keys) take effect without a restart.
+    next_llm() already reloads internally; the no-bound-model branch must reload too,
+    or a conductor started on an empty/stale mykey would never pick up imported keys."""
+    no = _conductor_llm_no()
+    if no is not None:
+        try:
+            agent.next_llm(int(no))
+        except Exception as e:
+            print(f"[conductor] failed to apply conductor model #{no}: {e}", file=sys.stderr)
+    else:
+        agent.load_llm_sessions()  # mtime-guarded; rebuilds only when mykey changed
+    if not _client_usable(agent):
+        print("[conductor] selected model is unavailable; falling back to first usable model", file=sys.stderr)
+        _fallback_usable_model(agent)
 
 
 @asynccontextmanager
