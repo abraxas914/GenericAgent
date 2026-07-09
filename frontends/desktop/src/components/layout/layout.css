@@ -14,29 +14,8 @@
   --ga-titlebar-controls-top: 6px;
 }
 
-/* Drag strips — Hermes-style carve-out: only blank gaps get drag, never full-width overlay */
-.ga-drag-strip {
-  display: none;
-}
-
-:root[data-platform="macos"] .ga-drag-strip {
-  display: block;
-  position: absolute;
-  top: 0;
-  height: var(--ga-titlebar-height, 38px);
-  z-index: 50;
-  cursor: default;
-}
-
-.ga-drag-strip--left {
-  left: 0;
-  width: var(--ga-titlebar-controls-left, 72px);
-}
-
-.ga-drag-strip--main {
-  left: calc(var(--ga-titlebar-controls-left, 72px) + 36px);
-  right: 0;
-}
+/* Drag strips removed — drag is now handled by event delegation on .ga-app-layout
+   via useDragWindow() which checks y < 38px and filters out interactive elements */
 
 /* Titlebar controls — positioned after macOS traffic lights */
 .ga-titlebar-controls {
@@ -74,8 +53,6 @@
 }
 
 .ga-app-body {
-  position: relative;
-  z-index: 1;
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -598,6 +575,10 @@
   padding: 0;
   align-items: stretch;
   justify-content: stretch;
+}
+
+:root[data-platform="macos"] .ga-body-collapsed .ga-main-area.ga-main-full {
+  padding-top: var(--ga-titlebar-height, 38px);
 }
 
 .ga-main-placeholder {

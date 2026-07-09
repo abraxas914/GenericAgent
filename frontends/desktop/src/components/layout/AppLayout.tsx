@@ -9,6 +9,12 @@ import './layout.css';
 
 function useDragWindow() {
   return useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest('button, a, input, [data-no-drag]')) return;
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    if (y > 38) return;
     e.preventDefault();
     const tauri = (window as any).__TAURI__;
     tauri?.window?.getCurrentWindow?.()?.startDragging?.();
@@ -20,9 +26,7 @@ export function AppLayout() {
   const onDrag = useDragWindow();
 
   return (
-    <div className="ga-app-layout">
-      <div className="ga-drag-strip ga-drag-strip--left" aria-hidden="true" onMouseDown={onDrag} />
-      <div className="ga-drag-strip ga-drag-strip--main" aria-hidden="true" onMouseDown={onDrag} />
+    <div className="ga-app-layout" onMouseDown={onDrag}>
       <TitlebarControls />
       <div className="ga-app-body">
         {sidebarCollapsed ? (

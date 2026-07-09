@@ -503,8 +503,6 @@
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
-  position: relative;
-  z-index: 60;
 }
 
 .collab-rail-panel-toggle:hover {
@@ -520,8 +518,6 @@
   border-bottom: 1px solid var(--semi-color-border, #e0e0e0);
   height: var(--ga-titlebar-height, 38px);
   box-sizing: border-box;
-  position: relative;
-  z-index: 60;
 }
 
 .collab-worker-panel--collapsed .collab-worker-panel-head {
