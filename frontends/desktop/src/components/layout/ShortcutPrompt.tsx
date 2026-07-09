@@ -10,6 +10,9 @@ export function ShortcutPrompt() {
     if (asked.current) return;
     asked.current = true;
 
+    // macOS apps are discoverable via Spotlight/Launchpad — no shortcut prompt needed.
+    if (document.documentElement.dataset.platform === 'macos') return;
+
     const invoke = (window as any).__TAURI__?.core?.invoke;
     if (!invoke) return;
 
