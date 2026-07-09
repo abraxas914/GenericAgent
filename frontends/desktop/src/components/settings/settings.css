@@ -279,13 +279,7 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--semi-color-text-0, #1c1f23);
-}
-
-.ga-data-row-desc {
-  margin-top: 2px;
-  font-size: 12px;
-  color: var(--semi-color-text-3, #8f959e);
-  line-height: 1.4;
+  cursor: default;
 }
 
 .ga-data-divider {

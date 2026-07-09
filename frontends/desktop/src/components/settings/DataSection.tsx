@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Button, Toast } from '@douyinfe/semi-ui';
+import { Button, Toast, Tooltip } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import * as bridge from '../../services/bridge';
 import { useChatStore } from '../../stores/chat';
@@ -9,18 +9,19 @@ const isTauri = !!(window as any).__TAURI__;
 
 interface OpRowProps {
   label: string;
-  desc: string;
+  tip: string;
   btnText: string;
   onClick: () => void;
   disabled?: boolean;
 }
 
-function OpRow({ label, desc, btnText, onClick, disabled }: OpRowProps) {
+function OpRow({ label, tip, btnText, onClick, disabled }: OpRowProps) {
   return (
     <div className="ga-data-row">
       <div className="ga-data-row-info">
-        <div className="ga-data-row-label">{label}</div>
-        <div className="ga-data-row-desc">{desc}</div>
+        <Tooltip content={tip}>
+          <span className="ga-data-row-label">{label}</span>
+        </Tooltip>
       </div>
       <Button size="small" type="tertiary" onClick={onClick} disabled={disabled}>
         {btnText}
@@ -33,7 +34,7 @@ export function DataSection() {
   const { t } = useI18n();
   const [importing, setImporting] = useState(false);
 
-  const handleImportMykey = useCallback(() => {
+  const handleImportKey = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.py,text/plain';
@@ -43,35 +44,35 @@ export function DataSection() {
       const text = await file.text();
       try {
         await bridge.saveMykeyContent(text);
-        Toast.success({ content: t('data.importMykeySuccess') });
+        Toast.success({ content: t('data.importKeySuccess') });
       } catch {
-        Toast.error({ content: t('data.importMykeyError') });
+        Toast.error({ content: t('data.importKeyError') });
       }
     };
     input.click();
   }, [t]);
 
-  const handleExportMykey = useCallback(async () => {
+  const handleExportKey = useCallback(async () => {
     try {
       const content = await bridge.getMykeyContent();
       if (isTauri) {
         try {
           const path = await bridge.tauriInvoke('export_mykey', { content });
-          if (path) Toast.success({ content: t('data.exportMykeySuccess') });
+          if (path) Toast.success({ content: t('data.exportKeySuccess') });
         } catch {
           downloadAsFile(content, 'mykey.py');
-          Toast.success({ content: t('data.exportMykeySuccess') });
+          Toast.success({ content: t('data.exportKeySuccess') });
         }
       } else {
         downloadAsFile(content, 'mykey.py');
-        Toast.success({ content: t('data.exportMykeySuccess') });
+        Toast.success({ content: t('data.exportKeySuccess') });
       }
     } catch {
-      Toast.error({ content: t('data.exportMykeyError') });
+      Toast.error({ content: t('data.exportKeyError') });
     }
   }, [t]);
 
-  const handleImportMemory = useCallback(async () => {
+  const handleImportData = useCallback(async () => {
     try {
       const picked = await bridge.tauriInvoke('pick_directory', {}) as string | null;
       if (!picked) return;
@@ -85,19 +86,19 @@ export function DataSection() {
         });
         const data = await res.json();
         if (!res.ok) {
-          Toast.error({ content: data?.error || t('data.importMemoryError') });
+          Toast.error({ content: data?.error || t('data.importDataError') });
           return;
         }
         const copied = (data.memoryCopied || 0) + (data.responsesCopied || 0) + (data.sessionsAdded || 0);
         const skipped = data.responsesSkipped || 0;
-        Toast.success({ content: t('data.importMemorySuccess', { copied, skipped }) });
+        Toast.success({ content: t('data.importDataSuccess', { copied, skipped }) });
         useChatStore.getState().loadSessions();
       } finally {
         setImporting(false);
       }
     } catch {
       setImporting(false);
-      Toast.error({ content: t('data.importMemoryError') });
+      Toast.error({ content: t('data.importDataError') });
     }
   }, [t]);
 
@@ -105,24 +106,24 @@ export function DataSection() {
     <div className="ga-set-block">
       <div className="ga-set-sec-t">{t('data.title')}</div>
       <OpRow
-        label={t('data.importMykey')}
-        desc={t('data.importMykeyDesc')}
-        btnText={t('data.importMykeyBtn')}
-        onClick={handleImportMykey}
+        label={t('data.importKey')}
+        tip={t('data.importKeyTip')}
+        btnText={t('data.importKeyBtn')}
+        onClick={handleImportKey}
       />
       <OpRow
-        label={t('data.exportMykey')}
-        desc={t('data.exportMykeyDesc')}
-        btnText={t('data.exportMykeyBtn')}
-        onClick={handleExportMykey}
+        label={t('data.exportKey')}
+        tip={t('data.exportKeyTip')}
+        btnText={t('data.exportKeyBtn')}
+        onClick={handleExportKey}
       />
       {isTauri && (
         <>
           <OpRow
-            label={t('data.importMemory')}
-            desc={t('data.importMemoryDesc')}
-            btnText={t('data.importMemoryBtn')}
-            onClick={handleImportMemory}
+            label={t('data.importData')}
+            tip={t('data.importDataTip')}
+            btnText={t('data.importDataBtn')}
+            onClick={handleImportData}
             disabled={importing}
           />
           <div className="ga-data-divider" />

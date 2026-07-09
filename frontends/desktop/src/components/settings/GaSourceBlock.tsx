@@ -44,12 +44,12 @@ export function GaSourceBlock() {
         await bridge.tauriInvoke('set_ga_source', { dir: picked });
         setState('connected');
         setSourcePath(picked);
-        Toast.success({ content: t('data.gaSourceSuccess') });
+        Toast.success({ content: t('data.localRepoSuccess') });
         refreshSessions();
       } catch (e: any) {
         setState(prevState);
         setSourcePath(prevPath);
-        Toast.error({ content: e?.message || t('data.gaSourceError') });
+        Toast.error({ content: e?.message || t('data.localRepoError') });
       }
     } catch {
       // pick_directory cancelled or errored
@@ -62,11 +62,11 @@ export function GaSourceBlock() {
       await bridge.tauriInvoke('clear_ga_source', {});
       setState('idle');
       setSourcePath(null);
-      Toast.info({ content: t('data.gaSourceCleared') });
+      Toast.info({ content: t('data.localRepoCleared') });
       refreshSessions();
     } catch {
       setState('connected');
-      Toast.error({ content: t('data.gaSourceSwitchFailed') });
+      Toast.error({ content: t('data.localRepoSwitchFailed') });
     }
   }, [t, refreshSessions]);
 
@@ -74,15 +74,14 @@ export function GaSourceBlock() {
 
   return (
     <div className="ga-source-block">
-      <div className="ga-data-row-label">{t('data.gaSource')}</div>
-      {state === 'idle' && (
-        <div className="ga-data-row-desc">{t('data.gaSourceDesc')}</div>
-      )}
+      <Tooltip content={t('data.localRepoTip')}>
+        <span className="ga-data-row-label">{t('data.localRepo')}</span>
+      </Tooltip>
       {state !== 'idle' && (
         <div className="ga-source-status">
           <span className={`ga-source-dot ${state === 'connected' ? 'ga-source-dot--on' : 'ga-source-dot--switching'}`} />
           <span className="ga-source-status-text">
-            {state === 'connected' ? t('data.gaSourceConnected') : t('data.gaSourceSwitching')}
+            {state === 'connected' ? t('data.localRepoConnected') : t('data.localRepoSwitching')}
           </span>
           {sourcePath && state === 'connected' && (
             <Tooltip content={sourcePath}>
@@ -93,11 +92,11 @@ export function GaSourceBlock() {
       )}
       <div className="ga-source-actions">
         <Button size="small" type="tertiary" onClick={handlePick} disabled={disabled}>
-          {state === 'connected' ? t('data.gaSourceChange') : t('data.gaSourcePick')}
+          {state === 'connected' ? t('data.localRepoChange') : t('data.localRepoPick')}
         </Button>
         {state === 'connected' && (
           <Button size="small" type="tertiary" onClick={handleDisconnect} disabled={disabled}>
-            {t('data.gaSourceDisconnect')}
+            {t('data.localRepoDisconnect')}
           </Button>
         )}
       </div>
