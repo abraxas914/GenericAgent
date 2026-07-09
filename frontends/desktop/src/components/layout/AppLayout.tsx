@@ -5,6 +5,7 @@ import { MainArea } from './MainArea';
 import { Statusbar } from './Statusbar';
 import { TitlebarControls } from './TitlebarControls';
 import { WindowControls } from './WindowControls';
+import { ShortcutPrompt } from './ShortcutPrompt';
 import { useAppStore } from '../../stores/app';
 import './layout.css';
 
@@ -60,6 +61,7 @@ export function AppLayout() {
         )}
       </div>
       <Statusbar />
+      <ShortcutPrompt />
     </div>
   );
 }
