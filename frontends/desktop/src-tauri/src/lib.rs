@@ -324,17 +324,6 @@ fn shortcut_decide(create: bool) {
 /// Used to refuse stale ~/.ga_desktop_settings.json that could point at an old checkout
 /// when App Translocation hides our own runtime/ from current_exe().
 #[cfg(target_os = "macos")]
-fn running_inside_app_bundle() -> bool {
-    std::env::current_exe()
-        .ok()
-        .map(|p| {
-            p.components().any(|c| {
-                c.as_os_str().to_string_lossy().ends_with(".app")
-            })
-        })
-        .unwrap_or(false)
-}
-
 /// User-set external GenericAgent source directory (design A: desktop as a thin shell).
 /// Returns the path only when it is a valid GA checkout (has agentmain.py AND
 /// frontends/desktop_bridge.py). An invalid/missing override returns None so callers fall
@@ -396,17 +385,9 @@ pub fn get_or_discover_config() -> (String, String) {
     }
 
     // Try reading existing settings.
-    // On macOS, a packaged .app must never trust ~/.ga_desktop_settings.json: App
-    // Translocation can run the bundle from a random read-only copy where bundle_root()
-    // fails to see our own runtime/, and an old settings file would then silently point
-    // the bridge at a previously installed checkout. In that case fall through to
-    // auto-discovery (which still resolves the bundle via .app-relative search below).
-    #[cfg(target_os = "macos")]
-    let trust_settings = !running_inside_app_bundle();
-    #[cfg(not(target_os = "macos"))]
-    let trust_settings = true;
-
-    if trust_settings && path.exists() {
+    // On macOS inside a .app, validate that the saved project_dir still has a bridge script
+    // before trusting it — App Translocation can make old settings point nowhere.
+    if path.exists() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                 let python = val.get("python_path")
@@ -418,7 +399,11 @@ pub fn get_or_discover_config() -> (String, String) {
                     .unwrap_or("")
                     .to_string();
                 if !python.is_empty() && !project.is_empty() {
-                    return (python, project);
+                    let bridge_script = PathBuf::from(&project)
+                        .join("frontends").join("desktop_bridge.py");
+                    if bridge_script.exists() {
+                        return (python, project);
+                    }
                 }
             }
         }
@@ -895,6 +880,10 @@ pub fn run() {
             // Show the loading window immediately so the first-run prepare isn't a blank screen.
             // The window starts on loading.html (a local page), so no "connection refused" flash.
             if let Some(w) = app.get_webview_window("main") {
+                // Windows: remove native decorations at runtime (config keeps them for macOS
+                // traffic lights). titleBarStyle:"Overlay" is macOS-only in Tauri v2.
+                #[cfg(windows)]
+                let _ = w.set_decorations(false);
                 let _ = w.show();
             }
 
