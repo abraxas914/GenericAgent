@@ -60,12 +60,16 @@ export const UserMessage = memo(function UserMessage({ content, msgId, images, f
   const textRef = useRef<HTMLDivElement>(null);
   const [clamped, setClamped] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const expandedRef = useRef(false);
+  expandedRef.current = expanded;
 
   useLayoutEffect(() => {
     const el = textRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      setClamped(el.scrollHeight > el.clientHeight + 2);
+      if (!expandedRef.current) {
+        setClamped(el.scrollHeight > el.clientHeight + 2);
+      }
     });
     observer.observe(el);
     return () => observer.disconnect();
