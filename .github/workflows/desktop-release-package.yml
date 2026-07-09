@@ -465,7 +465,7 @@ jobs:
         run: npm install
 
       - name: Install Python packaging tools
-        run: pip3 install ds_store
+        run: python3 -m pip install --break-system-packages ds_store
 
       - name: Build macOS .app
         working-directory: frontends/desktop
