@@ -3,6 +3,7 @@ import { Button, Toast, Tooltip } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import * as bridge from '../../services/bridge';
 import { useChatStore } from '../../stores/chat';
+import { useSettingsStore } from '../../stores/settings';
 import { GaSourceBlock } from './GaSourceBlock';
 
 const isTauri = !!(window as any).__TAURI__;
@@ -39,13 +40,15 @@ export function DataSection() {
     input.type = 'file';
     input.accept = '.py,text/plain';
     input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      const text = await file.text();
       try {
+        const file = input.files?.[0];
+        if (!file) return;
+        const text = await file.text();
         await bridge.saveMykeyContent(text);
+        await useSettingsStore.getState().loadFromBridge();
         Toast.success({ content: t('data.importKeySuccess') });
-      } catch {
+      } catch (e) {
+        console.error('[DataSection] importKey failed:', e);
         Toast.error({ content: t('data.importKeyError') });
       }
     };
@@ -67,7 +70,8 @@ export function DataSection() {
         downloadAsFile(content, 'mykey.py');
         Toast.success({ content: t('data.exportKeySuccess') });
       }
-    } catch {
+    } catch (e) {
+      console.error('[DataSection] exportKey failed:', e);
       Toast.error({ content: t('data.exportKeyError') });
     }
   }, [t]);
@@ -96,8 +100,10 @@ export function DataSection() {
       } finally {
         setImporting(false);
       }
-    } catch {
+    } catch (e: any) {
       setImporting(false);
+      console.error('[DataSection] importData failed:', e);
+      if (e?.message?.includes('Tauri')) return;
       Toast.error({ content: t('data.importDataError') });
     }
   }, [t]);
