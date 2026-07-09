@@ -10,7 +10,7 @@
 :root[data-platform="macos"] {
   --ga-titlebar-height: 38px;
   --ga-titlebar-controls-left: 72px;
-  --ga-titlebar-controls-top: 5px;
+  --ga-titlebar-controls-top: 6px;
 }
 
 /* Drag strips — Hermes-style carve-out: only blank gaps get drag, never full-width overlay */
