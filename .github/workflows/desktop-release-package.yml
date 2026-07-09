@@ -464,6 +464,9 @@ jobs:
         working-directory: frontends/desktop
         run: npm install
 
+      - name: Install Python packaging tools
+        run: pip3 install ds_store
+
       - name: Build macOS .app
         working-directory: frontends/desktop
         run: npm run tauri build -- --bundles app
