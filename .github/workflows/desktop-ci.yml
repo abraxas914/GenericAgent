@@ -7,12 +7,14 @@ on:
       - "frontends/desktop/src/**"
       - "frontends/desktop/package.json"
       - "frontends/desktop/vite.config.ts"
+      - ".github/workflows/desktop-ci.yml"
   pull_request:
     branches: [main, desktop-react-rewrite]
     paths:
       - "frontends/desktop/src/**"
       - "frontends/desktop/package.json"
       - "frontends/desktop/vite.config.ts"
+      - ".github/workflows/desktop-ci.yml"
 
 permissions:
   contents: read
