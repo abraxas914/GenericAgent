@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
  *
  * Output is excluded — it's generated content, not cacheable input-side context.
  */
-function cacheHitRate(input: number, output: number, cacheWrite: number, cacheRead: number): string {
+function cacheHitRate(input: number, _output: number, cacheWrite: number, cacheRead: number): string {
   const inputSide = input + cacheWrite + cacheRead;
   return inputSide > 0 ? ((cacheRead / inputSide) * 100).toFixed(1) : '0';
 }
