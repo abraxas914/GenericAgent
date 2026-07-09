@@ -10,6 +10,11 @@ use tauri::Manager;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+#[cfg(windows)]
+use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent};
+#[cfg(windows)]
+use tauri::menu::{MenuBuilder, MenuItemBuilder};
+
 static BRIDGE_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Get project root (parent of frontends/)
@@ -703,7 +708,7 @@ fn spawn_bridge_process(python_path: &str, project_dir: &str) -> Result<(), Stri
     cmd.arg(&script).current_dir(&dir);
     sanitize_bundle_env(&mut cmd);
     #[cfg(windows)]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    cmd.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
     let child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
     *BRIDGE_PROCESS.lock().unwrap() = Some(child);
     Ok(())
@@ -722,7 +727,7 @@ fn show_bridge_window(app_handle: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, project_dir: String) -> Result<(), String> {
+async fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, project_dir: String) -> Result<(), String> {
     // Save to settings (merge so sibling keys like desktop_shortcut survive).
     merge_settings(serde_json::json!({"python_path": python_path, "project_dir": project_dir}));
 
@@ -738,7 +743,7 @@ fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, p
 }
 
 #[tauri::command]
-fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
     let (python_path, project_dir) = get_or_discover_config();
     spawn_bridge_process(&python_path, &project_dir)?;
     if !wait_for_port(14168, Duration::from_secs(20)) {
@@ -825,7 +830,7 @@ fn get_ga_source() -> String {
 }
 
 #[tauri::command]
-fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
+async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
     let p = PathBuf::from(&dir);
     if !p.join("agentmain.py").exists() {
         return Err("not a GenericAgent source: agentmain.py not found".into());
@@ -838,7 +843,7 @@ fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, St
 }
 
 #[tauri::command]
-fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
+async fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     remove_setting("ga_source_override");
     switch_bridge(&app_handle)
 }
@@ -868,7 +873,7 @@ pub fn run() {
             cmd.arg(&script).current_dir(&dir);
             sanitize_bundle_env(&mut cmd);
             #[cfg(windows)]
-            cmd.creation_flags(0x08000000);
+            cmd.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
             if let Ok(child) = cmd.spawn() {
                 *BRIDGE_PROCESS.lock().unwrap() = Some(child);
                 spawned_bridge = true;
@@ -877,6 +882,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
@@ -890,6 +896,48 @@ pub fn run() {
             // The window starts on loading.html (a local page), so no "connection refused" flash.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
+            }
+
+            // Windows: system tray so the app can hide-on-close instead of exiting.
+            #[cfg(windows)]
+            {
+                let show_item = MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
+                let quit_item = MenuItemBuilder::with_id("quit", "退出").build(app)?;
+                let menu = MenuBuilder::new(app)
+                    .item(&show_item)
+                    .separator()
+                    .item(&quit_item)
+                    .build()?;
+
+                let _tray = TrayIconBuilder::new()
+                    .icon(app.default_window_icon().unwrap().clone())
+                    .tooltip("GenericAgent")
+                    .menu(&menu)
+                    .on_menu_event(|app, event| {
+                        match event.id().as_ref() {
+                            "show" => {
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            _ => {}
+                        }
+                    })
+                    .on_tray_icon_event(|tray, event| {
+                        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                            if let Some(w) = tray.app_handle().get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.unminimize();
+                                let _ = w.set_focus();
+                            }
+                        }
+                    })
+                    .build(app)?;
             }
 
             let handle = app.handle().clone();
@@ -929,7 +977,7 @@ pub fn run() {
                             cmd.arg(&script).current_dir(&dir);
                             sanitize_bundle_env(&mut cmd);
                             #[cfg(windows)]
-                            cmd.creation_flags(0x08000000);
+                            cmd.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
                             if let Ok(child) = cmd.spawn() {
                                 *BRIDGE_PROCESS.lock().unwrap() = Some(child);
                             }
@@ -1002,12 +1050,20 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let label = window.label();
                 if label == "main" {
-                    // Persistent backend: closing the window does NOT stop the bridge or its
-                    // services, so relaunching attaches to the warm backend on 14168.
-                    window.app_handle().exit(0);
+                    #[cfg(windows)]
+                    {
+                        // Windows: hide to tray instead of exiting. Bridge stays alive.
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    #[cfg(not(windows))]
+                    {
+                        let _ = api;
+                        window.app_handle().exit(0);
+                    }
                 } else if label == "setup" {
                     // Setup closed -> exit if main is not visible
                     if let Some(main_win) = window.app_handle().get_webview_window("main") {

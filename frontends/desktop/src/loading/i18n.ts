@@ -1,7 +1,7 @@
 const ZH = (navigator.language || '').toLowerCase().startsWith('zh');
 
 const messages = {
-  starting: ZH ? '正在启动 GenericAgent…' : 'Starting GenericAgent…',
+  starting: ZH ? '正在启动…' : 'Starting…',
   preparing: ZH ? '首次启动，正在准备运行环境…' : 'First run: preparing the runtime…',
   stage_start: ZH ? '检查运行环境' : 'Checking runtime',
   stage_venv: ZH ? '创建运行环境' : 'Creating runtime environment',
@@ -14,8 +14,8 @@ const messages = {
   retry: ZH ? '重试' : 'Retry',
   configure: ZH ? '手动配置' : 'Configure',
   pythonPath: ZH ? 'Python 解释器路径' : 'Python interpreter path',
-  projectDir: ZH ? '项目目录' : 'Project directory',
-  projectDirHint: ZH ? '包含 frontends/desktop_bridge.py 的目录' : 'Folder containing frontends/desktop_bridge.py',
+  projectDir: ZH ? 'GenericAgent 位置' : 'GenericAgent location',
+  projectDirHint: ZH ? '你的 GA 仓库路径，已有记忆和自定义代码都会保留' : 'Path to your GA repository. Memory and custom code will be preserved.',
   start: ZH ? '启动' : 'Start',
   startingBridge: ZH ? '正在启动…' : 'Starting…',
   connected: ZH ? '已连接' : 'Connected',

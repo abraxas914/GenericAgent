@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { createSession, sendPrompt, pollMessages, cancelGeneration, listSessions, deleteSession as apiDeleteSession, renameSession as apiRenameSession, pinSession as apiPinSession, type Message, type SessionInfo } from '../services/chat';
+import { createSession, sendPrompt, pollMessages, cancelGeneration, listSessions, deleteSession as apiDeleteSession, renameSession as apiRenameSession, pinSession as apiPinSession, setSessionModel as apiSetSessionModel, type Message, type SessionInfo } from '../services/chat';
 import { subscribe, onBridgeStatusChange } from '../services/ws';
 import { useSettingsStore } from './settings';
 
@@ -24,6 +24,7 @@ interface ChatState {
   runningSessions: Set<string>;
   turnStartedAt: number | null;
   pendingQueue: QueuedMessage[];
+  sessionModelNo: number | null;
 
   newSession: () => Promise<void>;
   sendMessage: (text: string, opts?: SendOptions) => Promise<void>;
@@ -34,6 +35,7 @@ interface ChatState {
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   pinSession: (id: string, pinned: boolean) => Promise<void>;
+  selectSessionModel: (llmNo: number) => Promise<void>;
 }
 
 // rAF throttle state for partial updates (WS path)
@@ -118,6 +120,9 @@ export const useChatStore = create<ChatState>((set, get) => {
         }));
         if (result.model) {
           useSettingsStore.getState().setLiveModel(result.model);
+          if (result.model.llmNo != null) {
+            set({ sessionModelNo: result.model.llmNo });
+          }
         }
         if (result.status !== 'running') {
           clearTurnStart(activeSessionId);
@@ -198,6 +203,9 @@ export const useChatStore = create<ChatState>((set, get) => {
           }));
           if (result.model) {
             useSettingsStore.getState().setLiveModel(result.model);
+            if (result.model.llmNo != null) {
+              set({ sessionModelNo: result.model.llmNo });
+            }
           }
           const { pendingQueue, status: curStatus } = get();
           if (curStatus === 'idle' && pendingQueue.length > 0) {
@@ -231,6 +239,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     runningSessions: new Set(),
     turnStartedAt: null,
     pendingQueue: [],
+    sessionModelNo: null,
 
     async newSession() {
       set({ activeSessionId: null, messages: [], status: 'idle', turnStartedAt: null, pendingQueue: [] });
@@ -254,8 +263,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       set((s) => ({ messages: [...s.messages, userMsg], status: 'running' }));
       setTurnStart(activeSessionId, now);
       startPolling();
-      const llmNo = useSettingsStore.getState().selectedModelNo;
-      await sendPrompt(activeSessionId, text, llmNo, opts?.files, opts?.images);
+      await sendPrompt(activeSessionId, text, opts?.files, opts?.images);
     },
 
     cancelQueued(index: number) {
@@ -270,15 +278,19 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     setActiveSession(id: string | null) {
       stopPolling();
-      // Restore turnStartedAt from map if switching to a running session
       const restoredTs = id ? turnStartMap.get(id) ?? null : null;
-      set({ activeSessionId: id, messages: [], status: 'idle', turnStartedAt: restoredTs, pendingQueue: [] });
+      set({ activeSessionId: id, messages: [], status: 'idle', turnStartedAt: restoredTs, pendingQueue: [], sessionModelNo: null });
       if (id) {
         pollMessages(id).then((result) => {
           const merged = mergeMessages([], result.messages, result.partial);
           set({ messages: merged, status: result.status });
+          if (result.model) {
+            useSettingsStore.getState().setLiveModel(result.model);
+            if (result.model.llmNo != null) {
+              set({ sessionModelNo: result.model.llmNo });
+            }
+          }
           if (result.status === 'running') {
-            // Use existing map entry, or infer from last user message
             if (!turnStartMap.has(id)) {
               const inferred = inferTurnStart(result.messages);
               setTurnStart(id, inferred);
@@ -327,6 +339,22 @@ export const useChatStore = create<ChatState>((set, get) => {
         ),
       }));
       try { await apiPinSession(id, pinned); } catch {}
+    },
+
+    async selectSessionModel(llmNo: number) {
+      const { activeSessionId } = get();
+      if (!activeSessionId) return;
+      const prev = get().sessionModelNo;
+      set({ sessionModelNo: llmNo });
+      try {
+        const res = await apiSetSessionModel(activeSessionId, llmNo);
+        if (res.model) {
+          useSettingsStore.getState().setLiveModel(res.model);
+          if (res.model.llmNo != null) set({ sessionModelNo: res.model.llmNo });
+        }
+      } catch {
+        set({ sessionModelNo: prev });
+      }
     },
   };
 });

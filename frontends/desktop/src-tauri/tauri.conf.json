@@ -22,13 +22,14 @@
         "resizable": true,
         "maximized": false,
         "visible": false,
+        "decorations": false,
         "titleBarStyle": "Overlay",
         "trafficLightPosition": { "x": 13, "y": 22 },
         "dragDropEnabled": false,
         "url": "loading.html"
       },
       {
-        "title": "GenericAgent — Setup",
+        "title": "",
         "label": "setup",
         "width": 600,
         "height": 580,

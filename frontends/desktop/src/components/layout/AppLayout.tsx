@@ -4,8 +4,13 @@ import { LeftSidebar } from './LeftSidebar';
 import { MainArea } from './MainArea';
 import { Statusbar } from './Statusbar';
 import { TitlebarControls } from './TitlebarControls';
+import { WindowControls } from './WindowControls';
+import { ShortcutPrompt } from './ShortcutPrompt';
 import { useAppStore } from '../../stores/app';
 import './layout.css';
+
+const isWindows = document.documentElement.dataset.platform === 'windows';
+const TITLEBAR_H = isWindows ? 32 : 38;
 
 function useDragWindow() {
   return useCallback((e: React.MouseEvent) => {
@@ -14,7 +19,7 @@ function useDragWindow() {
     if (target.closest('button, a, input, [data-no-drag]')) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const y = e.clientY - rect.top;
-    if (y > 38) return;
+    if (y > TITLEBAR_H) return;
     e.preventDefault();
     const tauri = (window as any).__TAURI__;
     tauri?.window?.getCurrentWindow?.()?.startDragging?.();
@@ -27,6 +32,11 @@ export function AppLayout() {
 
   return (
     <div className="ga-app-layout" onMouseDown={onDrag}>
+      {isWindows && (
+        <div className="ga-win-titlebar">
+          <WindowControls />
+        </div>
+      )}
       <TitlebarControls />
       <div className="ga-app-body">
         {sidebarCollapsed ? (
@@ -51,6 +61,7 @@ export function AppLayout() {
         )}
       </div>
       <Statusbar />
+      <ShortcutPrompt />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { memo, useRef, useState, useLayoutEffect } from 'react';
+import { memo, useCallback, useRef, useState, useLayoutEffect } from 'react';
 import { matchSkillPrefix } from '../Composer/skills';
 import { BRIDGE_BASE } from '../../../services/constants';
 
@@ -18,6 +18,37 @@ function iconForExt(name: string): string {
   return '◎';
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const handleCopy = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 2000);
+    });
+  }, [text]);
+
+  if (typeof navigator === 'undefined' || !navigator.clipboard) return null;
+
+  return (
+    <button data-slot="user-bubble-copy" onClick={handleCopy} title={copied ? 'Copied' : 'Copy'}>
+      {copied ? (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <path d="M3 8.5l3 3 7-7" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ) : (
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+          <rect x="5.5" y="5.5" width="7" height="7" rx="1" stroke="currentColor" strokeWidth="1.2" />
+          <path d="M3.5 10.5v-7a1 1 0 011-1h7" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
 interface Props {
   content: string;
   msgId?: string;
@@ -28,12 +59,17 @@ interface Props {
 export const UserMessage = memo(function UserMessage({ content, msgId, images, files }: Props) {
   const textRef = useRef<HTMLDivElement>(null);
   const [clamped, setClamped] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const expandedRef = useRef(false);
+  expandedRef.current = expanded;
 
   useLayoutEffect(() => {
     const el = textRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
-      setClamped(el.scrollHeight > el.clientHeight + 2);
+      if (!expandedRef.current) {
+        setClamped(el.scrollHeight > el.clientHeight + 2);
+      }
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -69,7 +105,12 @@ export const UserMessage = memo(function UserMessage({ content, msgId, images, f
         </div>
       )}
       <div data-slot="aui_user-message-root" id={msgId ? `msg-${msgId}` : undefined} data-msg-id={msgId || undefined} data-role="user">
-        <div data-slot="user-bubble" data-clamped={clamped || undefined}>
+        <div
+          data-slot="user-bubble"
+          data-clamped={clamped || undefined}
+          data-expanded={expanded || undefined}
+        >
+          <CopyButton text={content} />
           <div ref={textRef} data-slot="user-bubble-text">
             {skill ? (
               <>
@@ -80,6 +121,18 @@ export const UserMessage = memo(function UserMessage({ content, msgId, images, f
               content
             )}
           </div>
+          {clamped && (
+            <button
+              data-slot="user-bubble-expand"
+              aria-expanded={expanded}
+              aria-label={expanded ? 'Collapse' : 'Expand'}
+              onClick={() => setExpanded(v => !v)}
+            >
+              <svg viewBox="0 0 16 16" fill="none">
+                <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
     </>

@@ -53,18 +53,20 @@ export function getProviderIcon(key: string): ProviderIconDef | undefined {
 }
 
 export function providerFromModel(model: string): string | null {
-  const m = (model || '').toLowerCase();
-  if (m.startsWith('claude') || m.includes('anthropic')) return 'anthropic';
+  const raw = (model || '').toLowerCase();
+  const slash = raw.lastIndexOf('/');
+  const m = slash >= 0 ? raw.slice(slash + 1) : raw;
+  if (m.startsWith('claude') || raw.includes('anthropic')) return 'anthropic';
   if (m.startsWith('gpt') || m.startsWith('o1') || m.startsWith('o3') || m.startsWith('o4')) return 'openai';
-  if (m.includes('deepseek')) return 'deepseek';
+  if (raw.includes('deepseek')) return 'deepseek';
   if (m.startsWith('qwen')) return 'qwen';
   if (m.startsWith('moonshot')) return 'moonshot';
   if (m.startsWith('glm')) return 'zhipu';
   if (m.startsWith('step-')) return 'stepfun';
   if (m.startsWith('doubao')) return 'doubao';
   if (m.startsWith('minimax') || m.startsWith('abab')) return 'minimax';
-  if (m.includes('gemini')) return 'google';
-  if (m.startsWith('llama') || m.includes('meta-llama')) return 'meta';
+  if (raw.includes('gemini')) return 'google';
+  if (m.startsWith('llama') || raw.includes('meta-llama')) return 'meta';
   if (m.startsWith('mistral') || m.startsWith('mixtral') || m.startsWith('codestral')) return 'mistral';
   if (m.startsWith('command')) return 'cohere';
   if (m.startsWith('grok')) return 'xai';

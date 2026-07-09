@@ -148,7 +148,7 @@ export const useTokenStore = create<TokenState>((set, get) => {
     startPolling() {
       if (pollTimer) return;
       pollTimer = setInterval(() => {
-        get().fetchLiveStats();
+        get().fetchHistory();
       }, POLL_INTERVAL_MS);
     },
 

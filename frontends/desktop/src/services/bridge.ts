@@ -35,6 +35,11 @@ interface GaApi {
   tauriInvoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
 }
 
+// ── Tauri IPC — direct access to Rust commands ──
+function getTauriInvoke(): ((cmd: string, args?: Record<string, unknown>) => Promise<unknown>) | null {
+  return (window as any).__TAURI__?.core?.invoke || null;
+}
+
 // ── Dev-mode HTTP fallback ──
 // When window.ga is not available (browser dev server without Tauri shell),
 // call the backend REST API directly.
@@ -45,7 +50,12 @@ async function devFetch(path: string, opts?: RequestInit): Promise<unknown> {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    let msg = `${res.status} ${res.statusText}`;
+    try { const j = JSON.parse(body); msg = j.error || j.message || msg; } catch {}
+    throw new Error(msg);
+  }
   return res.json();
 }
 
@@ -194,9 +204,14 @@ export async function getMykeyContent(): Promise<string> {
     try {
       const res = await ga()!.getMykeyContent();
       return res.content;
-    } catch { return ''; }
+    } catch { /* fall through */ }
   }
-  return '';
+  try {
+    const res = await devFetch('/services/mykey') as { content: string };
+    return res.content || '';
+  } catch {
+    return '';
+  }
 }
 
 export async function saveMykeyContent(content: string): Promise<void> {
@@ -204,9 +219,21 @@ export async function saveMykeyContent(content: string): Promise<void> {
     await ga()!.saveMykeyContent(content);
     return;
   }
+  await devFetch('/services/mykey', {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  });
 }
 
 export async function tauriInvoke(cmd: string, args: Record<string, unknown>): Promise<unknown> {
-  if (!isBridgeAvailable()) throw new Error('Tauri not available in browser dev mode');
-  return ga()!.tauriInvoke(cmd, args);
+  // Prefer window.ga.tauriInvoke if the vanilla bridge script is loaded
+  if (isBridgeAvailable()) {
+    return ga()!.tauriInvoke(cmd, args);
+  }
+  // Direct Tauri IPC — works in packaged app without app.js
+  const invoke = getTauriInvoke();
+  if (invoke) {
+    return invoke(cmd, args);
+  }
+  throw new Error('Tauri IPC not available');
 }

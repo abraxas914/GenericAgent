@@ -186,7 +186,7 @@ jobs:
             -DestinationPath artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip -Force
           $h = Get-FileHash artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip -Algorithm SHA256
           "{0}  GenericAgent-Desktop-Windows-Portable.zip" -f $h.Hash.ToLowerInvariant() |
-            Set-Content -Encoding ASCII artifacts/windows/out/SHA256SUMS-windows.txt
+            Set-Content -Encoding ASCII artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip.sha256
           Get-ChildItem artifacts/windows/out | Format-Table Name, Length
 
       - name: Upload workflow artifact
@@ -195,7 +195,7 @@ jobs:
           name: GenericAgent-Desktop-Windows-Portable-${{ github.run_number }}
           path: |
             artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip
-            artifacts/windows/out/SHA256SUMS-windows.txt
+            artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip.sha256
           if-no-files-found: error
 
       - name: Publish into unified Release (tag push only)
@@ -394,7 +394,7 @@ jobs:
 
           mkdir -p artifacts/linux/out
           tar -C artifacts/linux -czf artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz GenericAgent-Desktop-Linux-Portable
-          ( cd artifacts/linux/out && sha256sum GenericAgent-Desktop-Linux-Portable.tar.gz > SHA256SUMS-linux.txt )
+          ( cd artifacts/linux/out && sha256sum GenericAgent-Desktop-Linux-Portable.tar.gz > GenericAgent-Desktop-Linux-Portable.tar.gz.sha256 )
 
           tar -tzf artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz > /tmp/pkglist.txt
           echo "Package contents (first 40 of $(wc -l < /tmp/pkglist.txt) entries):"
@@ -407,7 +407,7 @@ jobs:
           name: GenericAgent-Desktop-Linux-Portable-${{ github.run_number }}
           path: |
             artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz
-            artifacts/linux/out/SHA256SUMS-linux.txt
+            artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz.sha256
           if-no-files-found: error
 
       - name: Publish into unified Release (tag push only)

@@ -6,8 +6,23 @@ if (document.documentElement.dataset.appearance === 'dark') {
   document.body.setAttribute('theme-mode', 'dark');
 }
 
-if ((window as any).__TAURI__ && navigator.platform.startsWith('Mac')) {
-  document.documentElement.dataset.platform = 'macos';
+if ((window as any).__TAURI__) {
+  if (navigator.platform.startsWith('Mac')) {
+    document.documentElement.dataset.platform = 'macos';
+  } else if (navigator.platform.startsWith('Win')) {
+    document.documentElement.dataset.platform = 'windows';
+  }
+
+  document.addEventListener('click', (e) => {
+    const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
+    if (!anchor) return;
+    const href = anchor.href;
+    if (!href || href.startsWith('javascript:')) return;
+    const url = new URL(href, location.href);
+    if (url.origin === location.origin) return;
+    e.preventDefault();
+    (window as any).__TAURI__.opener.openUrl(href);
+  });
 }
 
 setTimeout(() => {

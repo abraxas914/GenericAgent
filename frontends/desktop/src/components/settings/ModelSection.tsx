@@ -31,8 +31,8 @@ interface Props {
 export function ModelSection({ onAdd, onEdit }: Props) {
   const { t } = useI18n();
   const modelProfiles = useSettingsStore((s) => s.modelProfiles);
-  const selectedModelNo = useSettingsStore((s) => s.selectedModelNo);
-  const selectModel = useSettingsStore((s) => s.selectModel);
+  const selectedModelNo = useSettingsStore((s) => s.defaultModelNo);
+  const setDefaultModel = useSettingsStore((s) => s.setDefaultModel);
   const setModelProfiles = useSettingsStore((s) => s.setModelProfiles);
 
   const [mixinExpanded, setMixinExpanded] = useState(true);
@@ -42,8 +42,8 @@ export function ModelSection({ onAdd, onEdit }: Props) {
   const mixinIdx = mixin ? modelProfiles.indexOf(mixin) : -1;
 
   const handleSelect = useCallback((idx: number) => {
-    selectModel(idx);
-  }, [selectModel]);
+    setDefaultModel(idx);
+  }, [setDefaultModel]);
 
   const handleDelete = useCallback(async (id: number, name: string) => {
     if (!confirm(`${t('common.delete')} "${name}"？`)) return;
