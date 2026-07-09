@@ -23,6 +23,7 @@
         "maximized": false,
         "visible": false,
         "titleBarStyle": "Overlay",
+        "trafficLightPosition": { "x": 13, "y": 22 },
         "dragDropEnabled": false,
         "url": "loading.html"
       },

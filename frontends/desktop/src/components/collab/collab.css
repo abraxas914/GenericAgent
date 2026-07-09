@@ -419,7 +419,7 @@
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--semi-color-border, #e0e0e0);
   flex-shrink: 0;
-  height: 2.5rem;
+  height: var(--ga-titlebar-height, 38px);
   box-sizing: border-box;
 }
 
@@ -518,7 +518,7 @@
   gap: 0.375rem;
   padding: 0.5rem 0.5rem;
   border-bottom: 1px solid var(--semi-color-border, #e0e0e0);
-  height: 2.5rem;
+  height: var(--ga-titlebar-height, 38px);
   box-sizing: border-box;
   position: relative;
   z-index: 60;
@@ -536,10 +536,10 @@
 
 .collab-panel-collapse-btn {
   margin-left: auto;
-  width: 1.5rem;
-  height: 1.5rem;
+  width: 28px;
+  height: 28px;
   border: none;
-  border-radius: 0.25rem;
+  border-radius: 6px;
   background: transparent;
   color: var(--semi-color-text-2, #4e5969);
   display: grid;
