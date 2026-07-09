@@ -13,7 +13,8 @@
     "test:bundle": "node scripts/assert-dist-built.mjs",
     "test:packaging": "node scripts/test-packaging.mjs",
     "test:all": "vitest run && node scripts/assert-dist-built.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "postbuild:dmg": "bash scripts/post-dmg.sh src-tauri/target/release/bundle/dmg/*.dmg"
   },
   "dependencies": {
     "@douyinfe/semi-icons": "^2.71.1",
