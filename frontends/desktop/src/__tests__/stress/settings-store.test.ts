@@ -69,12 +69,12 @@ describe('settings store logic', () => {
       llmNo: 'ga_llm_no',
     } as const;
 
-    function syncBootCache(state: { lang: string; appearance: string; chatFontSize: number; selectedModelNo: number }) {
+    function syncBootCache(state: { lang: string; appearance: string; chatFontSize: number; defaultModelNo: number }) {
       const store = new Map<string, string>();
       store.set(STORE_KEYS.lang, state.lang);
       store.set(STORE_KEYS.appearance, state.appearance);
       store.set(STORE_KEYS.fontSize, String(state.chatFontSize));
-      store.set(STORE_KEYS.llmNo, String(state.selectedModelNo));
+      store.set(STORE_KEYS.llmNo, String(state.defaultModelNo));
       return store;
     }
 
@@ -83,12 +83,12 @@ describe('settings store logic', () => {
         lang: store.get(STORE_KEYS.lang) || 'zh',
         appearance: store.get(STORE_KEYS.appearance) || 'light',
         chatFontSize: parseInt(store.get(STORE_KEYS.fontSize) || '14', 10),
-        selectedModelNo: parseInt(store.get(STORE_KEYS.llmNo) || '0', 10),
+        defaultModelNo: parseInt(store.get(STORE_KEYS.llmNo) || '0', 10),
       };
     }
 
     it('round-trips all settings correctly', () => {
-      const original = { lang: 'en', appearance: 'dark', chatFontSize: 16, selectedModelNo: 3 };
+      const original = { lang: 'en', appearance: 'dark', chatFontSize: 16, defaultModelNo: 3 };
       const store = syncBootCache(original);
       const restored = readFromCache(store);
       expect(restored).toEqual(original);
@@ -97,12 +97,12 @@ describe('settings store logic', () => {
     it('handles missing keys with defaults', () => {
       const empty = new Map<string, string>();
       const defaults = readFromCache(empty);
-      expect(defaults).toEqual({ lang: 'zh', appearance: 'light', chatFontSize: 14, selectedModelNo: 0 });
+      expect(defaults).toEqual({ lang: 'zh', appearance: 'light', chatFontSize: 14, defaultModelNo: 0 });
     });
 
     it('survives rapid update cycles', () => {
       for (let i = 0; i < 50; i++) {
-        const state = { lang: i % 2 === 0 ? 'zh' : 'en', appearance: i % 3 === 0 ? 'dark' : 'light', chatFontSize: 10 + (i % 11), selectedModelNo: i % 5 };
+        const state = { lang: i % 2 === 0 ? 'zh' : 'en', appearance: i % 3 === 0 ? 'dark' : 'light', chatFontSize: 10 + (i % 11), defaultModelNo: i % 5 };
         const store = syncBootCache(state);
         const restored = readFromCache(store);
         expect(restored).toEqual(state);
