@@ -486,6 +486,10 @@
   transition: width 0.2s ease;
 }
 
+.collab-worker-panel--collapsed {
+  width: 2.5rem;
+}
+
 .collab-rail-panel-toggle {
   margin-left: auto;
   width: 1.5rem;
@@ -499,6 +503,8 @@
   cursor: pointer;
   flex-shrink: 0;
   transition: background 0.12s, color 0.12s;
+  position: relative;
+  z-index: 60;
 }
 
 .collab-rail-panel-toggle:hover {
@@ -516,6 +522,16 @@
   box-sizing: border-box;
   position: relative;
   z-index: 60;
+}
+
+.collab-worker-panel--collapsed .collab-worker-panel-head {
+  justify-content: center;
+  padding: 0.5rem 0;
+  border-bottom: none;
+}
+
+.collab-worker-panel--collapsed .collab-panel-collapse-btn {
+  margin-left: 0;
 }
 
 .collab-panel-collapse-btn {

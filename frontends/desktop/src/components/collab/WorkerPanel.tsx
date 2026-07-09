@@ -5,10 +5,11 @@ import { WorkerCard } from './WorkerCard';
 import { WorkerDrawer } from './WorkerDrawer';
 
 interface Props {
-  onCollapse: () => void;
+  collapsed: boolean;
+  onToggle: () => void;
 }
 
-export function WorkerPanel({ onCollapse }: Props) {
+export function WorkerPanel({ collapsed, onToggle }: Props) {
   const workers = useConductorStore((s) => s.workers);
   const [selectedWorker, setSelectedWorker] = useState<Worker | null>(null);
 
@@ -22,26 +23,35 @@ export function WorkerPanel({ onCollapse }: Props) {
 
   return (
     <>
-      <div className="collab-worker-panel" data-slot="collab-worker-panel">
+      <div
+        className={`collab-worker-panel ${collapsed ? 'collab-worker-panel--collapsed' : ''}`}
+        data-slot="collab-worker-panel"
+      >
         <div className="collab-worker-panel-head">
-          <span className="collab-worker-panel-title">Agents</span>
-          <span className="collab-worker-panel-count">{workers.length}</span>
+          {!collapsed && (
+            <>
+              <span className="collab-worker-panel-title">Agents</span>
+              <span className="collab-worker-panel-count">{workers.length}</span>
+            </>
+          )}
           <button
             className="collab-panel-collapse-btn"
-            onClick={onCollapse}
-            aria-label="Hide agents panel"
+            onClick={onToggle}
+            aria-label={collapsed ? 'Show agents panel' : 'Hide agents panel'}
           >
-            <Codicon name="layout-sidebar-right" size="1rem" />
+            <Codicon name={collapsed ? 'layout-sidebar-right-off' : 'layout-sidebar-right'} size="1rem" />
           </button>
         </div>
-        {workers.length > 0 ? (
-          <div className="collab-worker-list">
-            {workers.map((w) => (
-              <WorkerCard key={w.id} worker={w} onClick={handleCardClick} />
-            ))}
-          </div>
-        ) : (
-          <div className="collab-worker-empty">No agents yet</div>
+        {!collapsed && (
+          workers.length > 0 ? (
+            <div className="collab-worker-list">
+              {workers.map((w) => (
+                <WorkerCard key={w.id} worker={w} onClick={handleCardClick} />
+              ))}
+            </div>
+          ) : (
+            <div className="collab-worker-empty">No agents yet</div>
+          )
         )}
       </div>
       {selectedWorker && (

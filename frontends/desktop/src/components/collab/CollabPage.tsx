@@ -44,13 +44,13 @@ export function CollabPage() {
   return (
     <div className="collab-page" data-slot="collab-page" data-empty={isEmpty || undefined}>
       <div className="collab-main">
-        <WorkerRail panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} />
+        <WorkerRail />
         <div className="collab-chat-area">
           {isEmpty ? <CollabWelcome onChipClick={handleChipClick} /> : <CollabMessageList />}
           <CollabComposer />
         </div>
       </div>
-      {panelOpen && <WorkerPanel onCollapse={() => setPanelOpen(false)} />}
+      <WorkerPanel collapsed={!panelOpen} onToggle={() => setPanelOpen((o) => !o)} />
     </div>
   );
 }

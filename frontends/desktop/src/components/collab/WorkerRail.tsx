@@ -1,12 +1,6 @@
 import { useConductorStore } from '../../stores/conductor';
-import { Codicon } from '../../lib/icons';
 
-interface Props {
-  panelOpen: boolean;
-  onTogglePanel: () => void;
-}
-
-export function WorkerRail({ panelOpen, onTogglePanel }: Props) {
+export function WorkerRail() {
   const workers = useConductorStore((s) => s.workers);
   const running = workers.filter((w) => w.status === 'running').length;
   const done = workers.filter((w) => w.status === 'reported').length;
@@ -34,15 +28,6 @@ export function WorkerRail({ panelOpen, onTogglePanel }: Props) {
           <span className="collab-rail-n">{issue}</span>
           <span className="collab-rail-label">failed</span>
         </span>
-      )}
-      {!panelOpen && (
-        <button
-          className="collab-rail-panel-toggle"
-          onClick={onTogglePanel}
-          aria-label="Show agents panel"
-        >
-          <Codicon name="layout-sidebar-right-off" size="1rem" />
-        </button>
       )}
     </div>
   );
