@@ -90,6 +90,20 @@ jobs:
           PY="$RUNTIME/python/python.exe"
           "$PY" --version
 
+          # App-local UCRT: python-build-standalone links the Universal CRT dynamically
+          # and does NOT bundle it. Win10/11 ship UCRT in-box, but stripped/older images
+          # may not -> python.exe fails to load (missing api-ms-win-crt-*.dll). Copy the
+          # redistributable UCRT DLLs next to python.exe (Microsoft-supported app-local
+          # deployment). Pure SDK source, no System32 fallback, hard-fail if absent so we
+          # never ship a bundle from an unexpected source.
+          UCRT_SRC="$(ls -d "/c/Program Files (x86)/Windows Kits/10/Redist/"*/ucrt/DLLs/x64 2>/dev/null | sort -V | tail -1)"
+          [[ -n "$UCRT_SRC" ]] || { echo "Windows SDK UCRT redist dir not found on runner" >&2; exit 1; }
+          echo "UCRT source: $UCRT_SRC"
+          cp "$UCRT_SRC"/api-ms-win-crt-*.dll "$RUNTIME/python/"
+          cp "$UCRT_SRC"/ucrtbase.dll "$RUNTIME/python/"
+          test -f "$RUNTIME/python/api-ms-win-crt-runtime-l1-1-0.dll" \
+            || { echo "UCRT DLLs missing after copy" >&2; exit 1; }
+
           # Offline wheels (native win_amd64 wheels for the embedded python)
           mkdir -p "$RUNTIME/wheels"
           "$PY" -m pip download --dest "$RUNTIME/wheels" \
