@@ -371,6 +371,7 @@ export const en: Record<string, string> = {
   'bridge.connected': 'Connected',
   'bridge.connecting': 'Connecting',
   'bridge.offline': 'Offline',
+  'bridge.offlineHint': 'Backend service is not responding. Make sure it is running.',
   'bridge.staleData': 'Bridge offline — showing last known state',
   'bridge.notRunning': 'Bridge not running',
   'bridge.notRunningHint': 'Run from project root: python frontends/desktop_bridge.py',

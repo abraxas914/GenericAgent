@@ -14,6 +14,54 @@
   --ga-titlebar-controls-top: 6px;
 }
 
+/* Windows: stacked titlebar "lid" — sits above business area */
+:root[data-platform="windows"] {
+  --ga-titlebar-height: 32px;
+}
+
+.ga-win-titlebar {
+  height: 32px;
+  flex-shrink: 0;
+  width: 100%;
+  background: hsl(0 0% 4%);
+  display: flex;
+  justify-content: flex-end;
+  align-items: stretch;
+}
+
+.ga-win-controls {
+  display: flex;
+  height: 100%;
+}
+
+.ga-win-btn {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: hsl(0 0% 82%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.ga-win-btn:hover {
+  background: hsl(0 0% 18%);
+  color: white;
+}
+
+.ga-win-btn--close:hover {
+  background: #c42b1c;
+  color: white;
+}
+
+:root[data-platform="windows"] .ga-titlebar-controls {
+  left: 8px;
+  top: 2px;
+}
+
 /* Drag strips removed — drag is now handled by event delegation on .ga-app-layout
    via useDragWindow() which checks y < 38px and filters out interactive elements */
 

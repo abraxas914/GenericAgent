@@ -57,10 +57,10 @@ export function TokenStats({ snapshot: snapshotProp, history: historyProp, cards
   }, [history]);
 
   const totalTokens = filteredStats.totalInput + filteredStats.totalOutput;
-  const totalCache = filteredStats.totalCacheWrite + filteredStats.totalCacheRead;
+  const inputSide = filteredStats.totalInput + filteredStats.totalCacheWrite + filteredStats.totalCacheRead;
   const cacheRate =
-    totalTokens > 0
-      ? ((filteredStats.totalCacheRead / (totalTokens + totalCache)) * 100).toFixed(1)
+    inputSide > 0
+      ? ((filteredStats.totalCacheRead / inputSide) * 100).toFixed(1)
       : '0';
 
   const defaultCards: StatCard[] = [

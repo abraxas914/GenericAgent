@@ -722,7 +722,7 @@ fn show_bridge_window(app_handle: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, project_dir: String) -> Result<(), String> {
+async fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, project_dir: String) -> Result<(), String> {
     // Save to settings (merge so sibling keys like desktop_shortcut survive).
     merge_settings(serde_json::json!({"python_path": python_path, "project_dir": project_dir}));
 
@@ -738,7 +738,7 @@ fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, p
 }
 
 #[tauri::command]
-fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
+async fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
     let (python_path, project_dir) = get_or_discover_config();
     spawn_bridge_process(&python_path, &project_dir)?;
     if !wait_for_port(14168, Duration::from_secs(20)) {
@@ -825,7 +825,7 @@ fn get_ga_source() -> String {
 }
 
 #[tauri::command]
-fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
+async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
     let p = PathBuf::from(&dir);
     if !p.join("agentmain.py").exists() {
         return Err("not a GenericAgent source: agentmain.py not found".into());
@@ -838,7 +838,7 @@ fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, St
 }
 
 #[tauri::command]
-fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
+async fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     remove_setting("ga_source_override");
     switch_bridge(&app_handle)
 }
@@ -889,6 +889,8 @@ pub fn run() {
             // Show the loading window immediately so the first-run prepare isn't a blank screen.
             // The window starts on loading.html (a local page), so no "connection refused" flash.
             if let Some(w) = app.get_webview_window("main") {
+                #[cfg(windows)]
+                let _ = w.set_decorations(false);
                 let _ = w.show();
             }
 

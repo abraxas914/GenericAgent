@@ -33,7 +33,7 @@ export function ConnectingOverlay() {
         <div className="ga-connecting-overlay-card">
           <h2 className="ga-connecting-overlay-title">{t('bridge.offline')}</h2>
           <p className="ga-connecting-overlay-sub">
-            python frontends/desktop_bridge.py
+            {t('bridge.offlineHint')}
           </p>
           <button
             className="ga-connecting-overlay-retry"

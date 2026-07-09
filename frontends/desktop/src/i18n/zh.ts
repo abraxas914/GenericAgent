@@ -371,6 +371,7 @@ export const zh: Record<string, string> = {
   'bridge.connected': '已连接',
   'bridge.connecting': '连接中',
   'bridge.offline': '离线',
+  'bridge.offlineHint': '后端服务未响应，请确认已正确启动',
   'bridge.staleData': 'Bridge 离线，显示最后已知状态',
   'bridge.notRunning': 'Bridge 未启动',
   'bridge.notRunningHint': '请在项目根目录运行：python frontends/desktop_bridge.py',

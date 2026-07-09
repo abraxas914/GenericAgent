@@ -160,8 +160,8 @@ export function TokenTable({ dataSource, loading: loadingProp }: Props) {
       key: 'cacheRate',
       width: 100,
       render: (_text: unknown, record: AggregatedEntry) => {
-        const total = record.input + record.output + record.cacheWrite + record.cacheRead;
-        const rate = total > 0 ? ((record.cacheRead / total) * 100).toFixed(1) : '0';
+        const inputSide = record.input + record.cacheWrite + record.cacheRead;
+        const rate = inputSide > 0 ? ((record.cacheRead / inputSide) * 100).toFixed(1) : '0';
         return <span className="ga-token-mono">{rate}%</span>;
       },
     },

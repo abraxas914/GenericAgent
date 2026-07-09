@@ -55,12 +55,14 @@ export function GaSourceBlock() {
         Toast.success({ content: t('data.localRepoSuccess') });
         refreshSessions();
       } catch (e: any) {
+        console.error('[GaSource] set_ga_source failed:', e);
         setState(prevState);
         setSourcePath(prevPath);
         Toast.error({ content: mapSourceError(e?.message || '', t) });
       }
-    } catch {
-      // pick_directory cancelled or errored
+    } catch (e: any) {
+      console.error('[GaSource] pick_directory failed:', e);
+      if (e?.message?.includes('Tauri')) return;
     }
   }, [state, sourcePath, t, refreshSessions]);
 
