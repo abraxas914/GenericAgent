@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useSettingsStore } from '../../../stores/settings';
+import { useChatStore } from '../../../stores/chat';
 import { useI18n } from '../../../i18n';
 import type { ModelProfile } from '../../../services/bridge';
 import { getProviderIcon, providerFromModel } from '../../../data/provider-icons';
@@ -124,9 +125,11 @@ export function ModelSelector() {
   const { lang, t } = useI18n();
 
   const profiles = useSettingsStore((s) => s.modelProfiles);
-  const selectedNo = useSettingsStore((s) => s.selectedModelNo);
-  const selectModel = useSettingsStore((s) => s.selectModel);
+  const defaultModelNo = useSettingsStore((s) => s.defaultModelNo);
+  const sessionModelNo = useChatStore((s) => s.sessionModelNo);
+  const selectSessionModel = useChatStore((s) => s.selectSessionModel);
 
+  const selectedNo = sessionModelNo ?? defaultModelNo;
   const isLoading = profiles.length === 0;
   const currentProfile = profiles[selectedNo];
 
@@ -164,9 +167,9 @@ export function ModelSelector() {
   }, []);
 
   const handleSelect = useCallback((idx: number) => {
-    selectModel(idx);
+    selectSessionModel(idx);
     setOpen(false);
-  }, [selectModel]);
+  }, [selectSessionModel]);
 
   useEffect(() => {
     if (open && searchRef.current) {
@@ -212,13 +215,13 @@ export function ModelSelector() {
         const idx = parseInt(e.key) - 1;
         if (idx < profiles.length) {
           e.preventDefault();
-          selectModel(idx);
+          selectSessionModel(idx);
         }
       }
     }
     document.addEventListener('keydown', onHotkey);
     return () => document.removeEventListener('keydown', onHotkey);
-  }, [profiles, selectModel]);
+  }, [profiles, selectSessionModel]);
 
   const handleOpenSettings = useCallback(() => {
     setOpen(false);

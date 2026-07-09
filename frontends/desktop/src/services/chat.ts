@@ -28,7 +28,7 @@ export interface PollResult {
   partial?: Message;
   status: 'running' | 'idle';
   plan?: unknown;
-  model?: { isMixin: boolean; current: string };
+  model?: { isMixin: boolean; current: string; llmNo?: number };
 }
 
 function useMock(): boolean {
@@ -107,7 +107,6 @@ export async function uploadFile(name: string, dataUrl: string): Promise<string>
 export async function sendPrompt(
   sessionId: string,
   prompt: string,
-  llmNo: number = 0,
   files?: { name: string; path: string; size?: number }[],
   images?: { name: string; path: string; base64?: string }[],
 ): Promise<string> {
@@ -157,7 +156,7 @@ export async function sendPrompt(
   const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, prompt, display: prompt, llmNo, files: filesMeta, imageMetas }),
+    body: JSON.stringify({ sessionId, prompt, display: prompt, files: filesMeta, imageMetas }),
   });
   const data = await res.json();
   return data.userMessageId;
@@ -196,6 +195,18 @@ export async function cancelGeneration(sessionId: string): Promise<void> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId }),
   });
+}
+
+export async function setSessionModel(
+  sessionId: string,
+  llmNo: number,
+): Promise<{ ok: boolean; llmNo: number; model: { isMixin: boolean; current: string; llmNo?: number } }> {
+  const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/model`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ llmNo }),
+  });
+  return res.json();
 }
 
 export async function listSessions(): Promise<SessionInfo[]> {

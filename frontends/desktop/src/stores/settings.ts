@@ -16,7 +16,7 @@ function syncBootCache(state: SettingsState) {
     localStorage.setItem(STORE_KEYS.lang, state.lang);
     localStorage.setItem(STORE_KEYS.appearance, state.appearance);
     localStorage.setItem(STORE_KEYS.fontSize, String(state.chatFontSize));
-    localStorage.setItem(STORE_KEYS.llmNo, String(state.selectedModelNo));
+    localStorage.setItem(STORE_KEYS.llmNo, String(state.defaultModelNo));
   } catch (_) { /* private browsing */ }
 }
 
@@ -39,8 +39,8 @@ interface SettingsState {
   chatFontSize: number;
   lang: 'zh' | 'en';
   modelProfiles: ModelProfile[];
-  selectedModelNo: number;
-  liveModel: { isMixin: boolean; current: string } | null;
+  defaultModelNo: number;
+  liveModel: { isMixin: boolean; current: string; llmNo?: number } | null;
 
   open: () => void;
   close: () => void;
@@ -48,8 +48,8 @@ interface SettingsState {
   setChatFontSize: (size: number) => void;
   setLang: (lang: 'zh' | 'en') => void;
   setModelProfiles: (profiles: ModelProfile[]) => void;
-  selectModel: (no: number) => void;
-  setLiveModel: (model: { isMixin: boolean; current: string } | null) => void;
+  setDefaultModel: (no: number) => void;
+  setLiveModel: (model: { isMixin: boolean; current: string; llmNo?: number } | null) => void;
   loadFromBridge: () => Promise<void>;
   persist: () => Promise<void>;
 }
@@ -60,7 +60,7 @@ function readInitialState() {
     appearance: (root.dataset.appearance === 'dark' ? 'dark' : 'light') as 'light' | 'dark',
     chatFontSize: parseInt(root.dataset.chatFont || '14', 10) || 14,
     lang: (root.lang === 'en' ? 'en' : 'zh') as 'zh' | 'en',
-    selectedModelNo: parseInt(localStorage.getItem(STORE_KEYS.llmNo) || '0', 10),
+    defaultModelNo: parseInt(localStorage.getItem(STORE_KEYS.llmNo) || '0', 10),
   };
 }
 
@@ -97,11 +97,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   setModelProfiles: (profiles) => set({ modelProfiles: profiles }),
 
-  selectModel: (no) => {
+  setDefaultModel: (no) => {
     const profiles = get().modelProfiles;
     const profile = profiles[no];
     if (!profile) return;
-    set({ selectedModelNo: no, liveModel: null });
+    set({ defaultModelNo: no });
     legacy.selectModel(no, profile.name || profile.model);
     get().persist();
   },
@@ -118,7 +118,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         appearance: config.appearance === 'dark' ? 'dark' : 'light',
         chatFontSize: config.fontSize || 14,
         lang: config.lang === 'en' ? 'en' : 'zh',
-        selectedModelNo: config.llmNo || 0,
+        defaultModelNo: config.llmNo || 0,
         modelProfiles: profiles,
       });
       const s = get();
@@ -136,7 +136,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         appearance: s.appearance,
         plain: false,
         fontSize: s.chatFontSize,
-        llmNo: s.selectedModelNo,
+        llmNo: s.defaultModelNo,
       });
     } catch (_) { /* bridge offline */ }
   },
