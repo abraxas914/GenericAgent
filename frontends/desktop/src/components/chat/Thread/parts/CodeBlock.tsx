@@ -1,4 +1,4 @@
-import { memo, useCallback, useRef, useState } from 'react';
+import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
 import { resolveLanguage, exceedsHighlightBudget, highlightCode } from '../../../../lib/prism-setup';
 import './CodeBlock.css';
 
@@ -13,19 +13,45 @@ export const CodeBlock = memo(function CodeBlock({ language: rawLang, code, isSt
   const displayLang = rawLang || '';
   const shouldHighlight = !isStreaming && lang !== 'plaintext' && !exceedsHighlightBudget(code);
 
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const measure = () => setOverflowing(el.scrollHeight > 121);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
     <div data-slot="code-card" data-streaming={isStreaming || undefined}>
       <div data-slot="code-card-header">
         {displayLang && <span data-slot="code-card-lang">{displayLang}</span>}
         <CopyButton text={code} />
       </div>
-      <div data-slot="code-card-body">
+      <div data-slot="code-card-body" ref={bodyRef} data-expanded={expanded || undefined}>
         {shouldHighlight ? (
           <code dangerouslySetInnerHTML={{ __html: highlightCode(code, lang) }} />
         ) : (
           <code>{code}</code>
         )}
       </div>
+      {overflowing && (
+        <button
+          data-slot="code-card-expand"
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          onClick={() => setExpanded(v => !v)}
+        >
+          <svg viewBox="0 0 16 16" fill="none">
+            <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 });

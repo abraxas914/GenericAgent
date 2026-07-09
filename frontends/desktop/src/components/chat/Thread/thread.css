@@ -134,7 +134,79 @@
 [data-slot="user-bubble"][data-clamped] [data-slot="user-bubble-text"] {
   -webkit-mask-image: linear-gradient(to bottom, #000 55%, transparent);
   mask-image: linear-gradient(to bottom, #000 55%, transparent);
+}
+
+/* ─── Expanded state overrides clamp ─── */
+[data-slot="user-bubble"][data-expanded] [data-slot="user-bubble-text"] {
+  max-height: 40dvh;
+  overflow-y: auto;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* ─── Expand toggle button ─── */
+[data-slot="user-bubble-expand"] {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  display: flex;
+  height: 1.75rem;
   cursor: pointer;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 0.25rem;
+  border: none;
+  background: linear-gradient(to top, var(--ui-chat-bubble-background), transparent);
+  color: var(--ui-text-tertiary);
+  transition: color 120ms ease-out;
+}
+
+[data-slot="user-bubble-expand"]:hover {
+  color: var(--foreground);
+}
+
+[data-slot="user-bubble-expand"] svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: transform 150ms ease-out;
+}
+
+[data-slot="user-bubble"][data-expanded] [data-slot="user-bubble-expand"] {
+  background: none;
+}
+
+[data-slot="user-bubble"][data-expanded] [data-slot="user-bubble-expand"] svg {
+  transform: rotate(180deg);
+}
+
+/* ─── Copy button (hover reveal) ─── */
+[data-slot="user-bubble-copy"] {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  place-items: center;
+  border: none;
+  border-radius: 0.25rem;
+  background: var(--ui-chat-bubble-background);
+  color: var(--ui-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-out, color 100ms, background 100ms;
+}
+
+[data-slot="user-bubble"]:hover [data-slot="user-bubble-copy"],
+[data-slot="user-bubble"]:focus-within [data-slot="user-bubble-copy"] {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+[data-slot="user-bubble-copy"]:hover {
+  background: var(--ui-control-hover-background);
+  color: var(--foreground);
 }
 
 [data-slot="user-images"] {
