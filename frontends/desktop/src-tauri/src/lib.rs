@@ -889,8 +889,6 @@ pub fn run() {
             // Show the loading window immediately so the first-run prepare isn't a blank screen.
             // The window starts on loading.html (a local page), so no "connection refused" flash.
             if let Some(w) = app.get_webview_window("main") {
-                #[cfg(windows)]
-                let _ = w.set_decorations(false);
                 let _ = w.show();
             }
 
