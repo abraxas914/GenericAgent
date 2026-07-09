@@ -1,0 +1,46 @@
+name: Desktop Frontend Tests
+
+on:
+  push:
+    branches: [main, desktop-react-rewrite, "fix/**", "feat/**"]
+    paths:
+      - "frontends/desktop/src/**"
+      - "frontends/desktop/package.json"
+      - "frontends/desktop/vite.config.ts"
+  pull_request:
+    branches: [main, desktop-react-rewrite]
+    paths:
+      - "frontends/desktop/src/**"
+      - "frontends/desktop/package.json"
+      - "frontends/desktop/vite.config.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontends/desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
+
+      - run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npx vitest run
+
+      - name: Lint
+        run: npx eslint src --ext .ts,.tsx --max-warnings 0
+        continue-on-error: true
