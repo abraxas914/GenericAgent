@@ -412,5 +412,10 @@ export const en: Record<string, string> = {
   'data.localRepoSuccess': 'Connected — runtime switched',
   'data.localRepoCleared': 'Disconnected — using built-in runtime',
   'data.localRepoError': 'Invalid repository',
+  'data.localRepoErrNoAgent': 'Invalid — agentmain.py not found',
+  'data.localRepoErrNoBridge': 'Invalid — desktop_bridge.py not found',
+  'data.localRepoErrTimeout': 'Startup timed out — environment may be incomplete',
+  'data.localRepoErrNoResolve': 'Cannot resolve runtime',
+  'data.localRepoFallback': 'Previously linked repository unavailable — using built-in runtime',
   'data.localRepoSwitchFailed': 'Switch failed',
 };

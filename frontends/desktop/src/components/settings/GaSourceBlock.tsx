@@ -13,6 +13,14 @@ function truncatePath(p: string, max = 40): string {
   return `${head}…${tail}`;
 }
 
+function mapSourceError(msg: string, t: (k: string) => string): string {
+  if (msg.includes('agentmain.py')) return t('data.localRepoErrNoAgent');
+  if (msg.includes('desktop_bridge.py')) return t('data.localRepoErrNoBridge');
+  if (msg.includes('20s') || msg.includes('ready')) return t('data.localRepoErrTimeout');
+  if (msg.includes('no GenericAgent source')) return t('data.localRepoErrNoResolve');
+  return t('data.localRepoSwitchFailed');
+}
+
 export function GaSourceBlock() {
   const { t } = useI18n();
   const [state, setState] = useState<SourceState>('idle');
@@ -49,7 +57,7 @@ export function GaSourceBlock() {
       } catch (e: any) {
         setState(prevState);
         setSourcePath(prevPath);
-        Toast.error({ content: e?.message || t('data.localRepoError') });
+        Toast.error({ content: mapSourceError(e?.message || '', t) });
       }
     } catch {
       // pick_directory cancelled or errored
