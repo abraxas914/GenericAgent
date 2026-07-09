@@ -6,6 +6,7 @@ import './settings.css';
 import { AppearanceSection } from './AppearanceSection';
 import { LanguageSection } from './LanguageSection';
 import { ModelSection } from './ModelSection';
+import { DataSection } from './DataSection';
 import { FeatureSection } from './FeatureSection';
 import { AddModelView } from './AddModelView';
 
@@ -74,6 +75,7 @@ export function SettingsModal() {
           <AppearanceSection />
           <LanguageSection />
           <ModelSection onAdd={handleAddModel} onEdit={handleEditModel} />
+          <DataSection />
           <FeatureSection />
         </>
       ) : (
