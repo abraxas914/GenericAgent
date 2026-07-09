@@ -15,7 +15,7 @@
     },
     "windows": [
       {
-        "title": "GenericAgent",
+        "title": "",
         "label": "main",
         "width": 1280,
         "height": 800,

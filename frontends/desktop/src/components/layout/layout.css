@@ -6,22 +6,41 @@
   flex-direction: column;
 }
 
-/* Drag region — allows window dragging from the top bar area (macOS overlay only) */
-:root[data-platform="macos"] .ga-app-layout::before {
-  content: '';
-  position: fixed;
+/* Shell geometry contract — macOS titlebar layout variables */
+:root[data-platform="macos"] {
+  --ga-titlebar-height: 38px;
+  --ga-titlebar-controls-left: 72px;
+  --ga-titlebar-controls-top: 5px;
+}
+
+/* Drag strips — Hermes-style carve-out: only blank gaps get drag, never full-width overlay */
+.ga-drag-strip {
+  display: none;
+}
+
+:root[data-platform="macos"] .ga-drag-strip {
+  display: block;
+  position: absolute;
   top: 0;
-  left: 0;
-  right: 0;
-  height: 38px;
-  -webkit-app-region: drag;
+  height: var(--ga-titlebar-height, 38px);
   z-index: 50;
+  cursor: default;
+}
+
+.ga-drag-strip--left {
+  left: 0;
+  width: var(--ga-titlebar-controls-left, 72px);
+}
+
+.ga-drag-strip--main {
+  left: calc(var(--ga-titlebar-controls-left, 72px) + 36px);
+  right: 0;
 }
 
 /* Titlebar controls — positioned after macOS traffic lights */
 .ga-titlebar-controls {
   position: fixed;
-  top: 8px;
+  top: var(--ga-titlebar-controls-top, 8px);
   left: 12px;
   z-index: 100;
   display: flex;
@@ -30,7 +49,7 @@
 }
 
 :root[data-platform="macos"] .ga-titlebar-controls {
-  left: 72px;
+  left: var(--ga-titlebar-controls-left, 72px);
 }
 
 .ga-titlebar-btn {
