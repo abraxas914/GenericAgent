@@ -14,6 +14,8 @@
     "test:packaging": "node scripts/test-packaging.mjs",
     "test:all": "vitest run && node scripts/assert-dist-built.mjs",
     "tauri": "tauri",
+    "build:dmg": "tauri build --bundles dmg && bash scripts/post-dmg.sh src-tauri/target/release/bundle/dmg/*.dmg",
+    "build:app": "tauri build --bundles app",
     "postbuild:dmg": "bash scripts/post-dmg.sh src-tauri/target/release/bundle/dmg/*.dmg"
   },
   "dependencies": {
