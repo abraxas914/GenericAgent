@@ -6,8 +6,12 @@ if (document.documentElement.dataset.appearance === 'dark') {
   document.body.setAttribute('theme-mode', 'dark');
 }
 
-if ((window as any).__TAURI__ && navigator.platform.startsWith('Mac')) {
-  document.documentElement.dataset.platform = 'macos';
+if ((window as any).__TAURI__) {
+  if (navigator.platform.startsWith('Mac')) {
+    document.documentElement.dataset.platform = 'macos';
+  } else if (navigator.platform.startsWith('Win')) {
+    document.documentElement.dataset.platform = 'windows';
+  }
 }
 
 setTimeout(() => {
