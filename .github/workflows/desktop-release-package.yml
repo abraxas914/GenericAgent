@@ -236,7 +236,7 @@ jobs:
           # upload below never races a not-yet-created release.
           for _ in $(seq 1 15); do
             gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" --prerelease 2>/dev/null || true
+            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" 2>/dev/null || true
             sleep 3
           done
           gh release upload "$TAG_NAME" artifacts/windows/out/* --clobber
@@ -447,7 +447,7 @@ jobs:
           # upload below never races a not-yet-created release.
           for _ in $(seq 1 15); do
             gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" --prerelease 2>/dev/null || true
+            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" 2>/dev/null || true
             sleep 3
           done
           gh release upload "$TAG_NAME" artifacts/linux/out/* --clobber
@@ -717,7 +717,7 @@ jobs:
           # upload below never races a not-yet-created release.
           for _ in $(seq 1 15); do
             gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" --prerelease 2>/dev/null || true
+            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" 2>/dev/null || true
             sleep 3
           done
           gh release upload "$TAG_NAME" artifacts/macos/out/* --clobber
