@@ -320,10 +320,6 @@ fn shortcut_decide(create: bool) {
     }
 }
 
-/// True when this binary is running from inside a macOS .app bundle (packaged build).
-/// Used to refuse stale ~/.ga_desktop_settings.json that could point at an old checkout
-/// when App Translocation hides our own runtime/ from current_exe().
-#[cfg(target_os = "macos")]
 /// User-set external GenericAgent source directory (design A: desktop as a thin shell).
 /// Returns the path only when it is a valid GA checkout (has agentmain.py AND
 /// frontends/desktop_bridge.py). An invalid/missing override returns None so callers fall
