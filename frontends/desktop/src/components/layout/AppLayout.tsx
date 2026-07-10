@@ -4,22 +4,21 @@ import { LeftSidebar } from './LeftSidebar';
 import { MainArea } from './MainArea';
 import { Statusbar } from './Statusbar';
 import { TitlebarControls } from './TitlebarControls';
-import { WindowControls } from './WindowControls';
+import { WindowsTitlebar } from './WindowsTitlebar';
 import { ShortcutPrompt } from './ShortcutPrompt';
 import { useAppStore } from '../../stores/app';
+import { isMacOS, isWindows } from '../../platform';
 import './layout.css';
-
-const isWindows = document.documentElement.dataset.platform === 'windows';
-const TITLEBAR_H = isWindows ? 32 : 38;
 
 function useDragWindow() {
   return useCallback((e: React.MouseEvent) => {
+    if (!isMacOS) return;
     if (e.button !== 0) return;
     const target = e.target as HTMLElement;
     if (target.closest('button, a, input, [data-no-drag]')) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const y = e.clientY - rect.top;
-    if (y > TITLEBAR_H) return;
+    if (y > 38) return;
     e.preventDefault();
     const tauri = (window as any).__TAURI__;
     tauri?.window?.getCurrentWindow?.()?.startDragging?.();
@@ -33,9 +32,7 @@ export function AppLayout() {
   return (
     <div className="ga-app-layout" onMouseDown={onDrag}>
       {isWindows && (
-        <div className="ga-win-titlebar">
-          <WindowControls />
-        </div>
+        <WindowsTitlebar />
       )}
       <TitlebarControls />
       <div className="ga-app-body">

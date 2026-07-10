@@ -3,8 +3,6 @@
   --bs-text: #111;
   --bs-muted: #666;
   --bs-accent: #0066cc;
-  --bs-error: #d32f2f;
-  --bs-border: #ddd;
   --bs-input-bg: #f5f5f5;
   --bs-bar-bg: #e0e0e0;
   --bs-bar-fill: #0066cc;
@@ -20,16 +18,21 @@
     --bs-text: #eee;
     --bs-muted: #999;
     --bs-accent: #5ba3f5;
-    --bs-error: #f87171;
-    --bs-border: #333;
     --bs-input-bg: #252525;
     --bs-bar-bg: #333;
     --bs-bar-fill: #5ba3f5;
   }
 }
 
-.bootstrap-app {
+.bootstrap-shell {
   height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.bootstrap-app {
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -135,86 +138,6 @@
 li[data-state="running"] .bs-stage-dot { background: var(--bs-dot-running); }
 li[data-state="done"] .bs-stage-dot { background: var(--bs-dot-done); }
 li[data-state="failed"] .bs-stage-dot { background: var(--bs-dot-failed); }
-
-/* Setup */
-.bs-error {
-  background: color-mix(in srgb, var(--bs-error) 10%, transparent);
-  border: 1px solid var(--bs-error);
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin-bottom: 16px;
-  font-size: 13px;
-  color: var(--bs-error);
-  text-align: left;
-  word-break: break-word;
-}
-
-.bs-form {
-  text-align: left;
-}
-
-.bs-field {
-  display: block;
-  margin-bottom: 12px;
-}
-
-.bs-field span {
-  display: block;
-  font-size: 12px;
-  color: var(--bs-muted);
-  margin-bottom: 4px;
-}
-
-.bs-field input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 8px 10px;
-  border: 1px solid var(--bs-border);
-  border-radius: 6px;
-  background: var(--bs-input-bg);
-  color: var(--bs-text);
-  font-size: 13px;
-  outline: none;
-}
-
-.bs-field input:focus {
-  border-color: var(--bs-accent);
-}
-
-.bs-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 16px;
-}
-
-.bs-btn {
-  padding: 8px 16px;
-  border: 1px solid var(--bs-border);
-  border-radius: 6px;
-  background: var(--bs-input-bg);
-  color: var(--bs-text);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.bs-btn:hover {
-  background: var(--bs-border);
-}
-
-.bs-btn-primary {
-  background: var(--bs-accent);
-  color: #fff;
-  border-color: var(--bs-accent);
-}
-
-.bs-btn-primary:hover {
-  opacity: 0.9;
-}
-
-.bs-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
 
 /* Log */
 .bs-log {

@@ -1,11 +1,13 @@
 use std::process::{Command, Child, Stdio};
 use std::io::{BufRead, BufReader};
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use std::thread;
 use std::path::PathBuf;
-use tauri::Manager;
+use std::collections::VecDeque;
+use tauri::{Emitter, Manager};
+use serde::{Deserialize, Serialize};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -16,6 +18,260 @@ use tauri::tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent}
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
 static BRIDGE_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
+static BRIDGE_LOG_READERS: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+const MAX_DIAGNOSTIC_LINES: usize = 100;
+const MAX_DIAGNOSTIC_LINE_BYTES: usize = 2 * 1024;
+
+fn sanitize_diagnostic_line(line: &str) -> String {
+    let lower = line.to_ascii_lowercase();
+    const SENSITIVE_MARKERS: [&str; 12] = [
+        "apikey",
+        "api_key",
+        "authorization",
+        "bearer",
+        "secret",
+        "token",
+        "mykey",
+        "[session]",
+        "[turn]",
+        "memory",
+        "conversation",
+        "llm_history",
+    ];
+    if SENSITIVE_MARKERS.iter().any(|marker| lower.contains(marker)) {
+        return "[redacted sensitive diagnostic line]".to_string();
+    }
+
+    let mut end = line.len().min(MAX_DIAGNOSTIC_LINE_BYTES);
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line[..end].to_string()
+}
+
+fn push_bounded_log(logs: &mut VecDeque<String>, line: &str) {
+    logs.push_back(sanitize_diagnostic_line(line));
+    while logs.len() > MAX_DIAGNOSTIC_LINES {
+        logs.pop_front();
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum ListenerIdentity {
+    Owned,
+    KnownGenericAgent,
+    Foreign,
+}
+
+fn classify_listener_identity(identity: Option<&serde_json::Value>, project_dir: &str) -> ListenerIdentity {
+    let Some(identity) = identity else {
+        return ListenerIdentity::Foreign;
+    };
+    let reported_root = identity.get("ga_root").and_then(|value| value.as_str()).unwrap_or("");
+    let reported_build = identity.get("build_id").and_then(|value| value.as_str()).unwrap_or("");
+    let reported_pid = identity.get("pid").and_then(|value| value.as_u64()).unwrap_or(0);
+    if reported_root.is_empty() || reported_pid == 0 {
+        return ListenerIdentity::Foreign;
+    }
+    let same_root = {
+        let (reported, expected) = (norm_path(reported_root), norm_path(project_dir));
+        #[cfg(windows)]
+        { reported.eq_ignore_ascii_case(&expected) }
+        #[cfg(not(windows))]
+        { reported == expected }
+    };
+    if same_root && reported_build == env!("GA_BUILD_ID") {
+        ListenerIdentity::Owned
+    } else {
+        ListenerIdentity::KnownGenericAgent
+    }
+}
+
+#[cfg(any(windows, test))]
+fn should_retry_without_breakaway(raw_os_error: Option<i32>) -> bool {
+    raw_os_error == Some(5)
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BootstrapMode {
+    HotStart,
+    ColdStart,
+    Prepare,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BootstrapPhase {
+    Idle,
+    Resolving,
+    Preparing,
+    StartingService,
+    OpeningUi,
+    Ready,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BootstrapFailureCode {
+    ConfigUnresolved,
+    PrepareFailed,
+    SpawnFailed,
+    PortConflict,
+    ServiceTimeout,
+    ServiceExited,
+    UiNavigationFailed,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PortState {
+    Free,
+    Owned,
+    Foreign,
+    Unknown,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BootstrapFailure {
+    code: BootstrapFailureCode,
+    detail: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BootstrapDiagnostics {
+    build_id: String,
+    platform: String,
+    project_dir: String,
+    python_path: String,
+    port_state: PortState,
+    bridge_identity: Option<String>,
+    recent_logs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BootstrapSnapshot {
+    seq: u64,
+    mode: BootstrapMode,
+    phase: BootstrapPhase,
+    stage: Option<String>,
+    progress: u8,
+    failure: Option<BootstrapFailure>,
+    diagnostics: BootstrapDiagnostics,
+}
+
+fn current_platform() -> String {
+    #[cfg(windows)]
+    { "windows".to_string() }
+    #[cfg(target_os = "macos")]
+    { "macos".to_string() }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    { "linux".to_string() }
+}
+
+static BOOTSTRAP_STATE: LazyLock<Mutex<BootstrapSnapshot>> = LazyLock::new(|| {
+    Mutex::new(BootstrapSnapshot {
+        seq: 0,
+        mode: BootstrapMode::ColdStart,
+        phase: BootstrapPhase::Idle,
+        stage: None,
+        progress: 0,
+        failure: None,
+        diagnostics: BootstrapDiagnostics {
+            build_id: env!("GA_BUILD_ID").to_string(),
+            platform: current_platform(),
+            project_dir: String::new(),
+            python_path: String::new(),
+            port_state: PortState::Unknown,
+            bridge_identity: None,
+            recent_logs: Vec::new(),
+        },
+    })
+});
+
+fn snapshot_update(
+    app_handle: Option<&tauri::AppHandle>,
+    update: impl FnOnce(&mut BootstrapSnapshot),
+) -> BootstrapSnapshot {
+    let snapshot = {
+        let mut state = BOOTSTRAP_STATE.lock().unwrap();
+        update(&mut state);
+        state.seq = state.seq.saturating_add(1);
+        state.clone()
+    };
+    if let Some(app_handle) = app_handle {
+        let _ = app_handle.emit("bootstrap", snapshot.clone());
+    }
+    snapshot
+}
+
+fn begin_bootstrap(
+    app_handle: &tauri::AppHandle,
+    mode: BootstrapMode,
+    python_path: &str,
+    project_dir: &str,
+) {
+    snapshot_update(Some(app_handle), |snapshot| {
+        snapshot.mode = mode;
+        snapshot.phase = BootstrapPhase::Resolving;
+        snapshot.stage = Some("validate".to_string());
+        snapshot.progress = 5;
+        snapshot.failure = None;
+        snapshot.diagnostics.project_dir = project_dir.to_string();
+        snapshot.diagnostics.python_path = python_path.to_string();
+        snapshot.diagnostics.port_state = PortState::Unknown;
+        snapshot.diagnostics.bridge_identity = None;
+        snapshot.diagnostics.recent_logs.clear();
+    });
+}
+
+fn set_bootstrap_phase(
+    app_handle: &tauri::AppHandle,
+    phase: BootstrapPhase,
+    stage: Option<&str>,
+    progress: u8,
+) {
+    snapshot_update(Some(app_handle), |snapshot| {
+        snapshot.phase = phase;
+        snapshot.stage = stage.map(str::to_string);
+        snapshot.progress = progress.min(100);
+        snapshot.failure = None;
+    });
+}
+
+fn record_diagnostic_log(app_handle: &tauri::AppHandle, line: &str) {
+    if matches!(
+        BOOTSTRAP_STATE.lock().unwrap().phase,
+        BootstrapPhase::Ready | BootstrapPhase::Failed
+    ) {
+        return;
+    }
+    snapshot_update(Some(app_handle), |snapshot| {
+        let mut logs: VecDeque<String> = snapshot.diagnostics.recent_logs.drain(..).collect();
+        push_bounded_log(&mut logs, line);
+        snapshot.diagnostics.recent_logs = logs.into_iter().collect();
+    });
+}
+
+fn set_port_diagnostics(
+    app_handle: &tauri::AppHandle,
+    port_state: PortState,
+    identity: Option<&serde_json::Value>,
+) {
+    snapshot_update(Some(app_handle), |snapshot| {
+        snapshot.diagnostics.port_state = port_state;
+        snapshot.diagnostics.bridge_identity = identity.map(ToString::to_string);
+    });
+}
+
+#[tauri::command]
+fn get_bootstrap_snapshot() -> BootstrapSnapshot {
+    BOOTSTRAP_STATE.lock().unwrap().clone()
+}
 
 /// Get project root (parent of frontends/)
 fn project_root() -> PathBuf {
@@ -122,6 +378,39 @@ fn find_python() -> String {
     { "python".to_string() }
     #[cfg(not(windows))]
     { "python3".to_string() }
+}
+
+fn python_interpreter_resolves(python_path: &str) -> bool {
+    let python_path = python_path.trim();
+    if python_path.is_empty() {
+        return false;
+    }
+
+    let explicit_path = python_path.contains('/') || python_path.contains('\\');
+    if explicit_path {
+        return PathBuf::from(python_path).is_file();
+    }
+
+    let Some(path_entries) = std::env::var_os("PATH") else {
+        return false;
+    };
+    for directory in std::env::split_paths(&path_entries) {
+        if directory.join(python_path).is_file() {
+            return true;
+        }
+        #[cfg(windows)]
+        {
+            let extensions = std::env::var("PATHEXT").unwrap_or_else(|_| ".EXE;.CMD;.BAT".to_string());
+            for extension in extensions.split(';').filter(|extension| !extension.is_empty()) {
+                if directory.join(format!("{python_path}{extension}")).is_file()
+                    || directory.join(format!("{python_path}{}", extension.to_ascii_lowercase())).is_file()
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Find the project directory (folder containing agentmain.py).
@@ -460,7 +749,11 @@ fn sanitize_bundle_env(cmd: &mut Command) {
 /// Run the offline prepare (install_windows.ps1 -Mode PrepareOnly) using bundled python + wheels.
 /// Streams the script's stdout and forwards GAPROGRESS markers to `report(pct, message)`.
 /// Blocking; intended to run on a background thread. Writes ~/.ga_desktop_settings.json.
-fn run_offline_prepare(project_dir: &str, report: &dyn Fn(i32, &str)) -> Result<(), String> {
+fn run_offline_prepare(
+    project_dir: &str,
+    report: &dyn Fn(i32, &str),
+    log: &dyn Fn(&str),
+) -> Result<(), String> {
     let root = bundle_root().ok_or("cannot locate bundle root")?;
     let wheels = root.join("wheels");
 
@@ -512,24 +805,55 @@ fn run_offline_prepare(project_dir: &str, report: &dyn Fn(i32, &str)) -> Result<
         c
     };
 
-    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     sanitize_bundle_env(&mut cmd);
     #[cfg(windows)]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let mut child = cmd.spawn().map_err(|e| format!("failed to launch prepare: {}", e))?;
 
-    // Forward the script's ASCII progress keys to the loading window, which localizes them
-    // (window.gaProgress maps key -> zh/en by navigator.language).
-    if let Some(out) = child.stdout.take() {
-        for line in BufReader::new(out).lines().flatten() {
-            if let Some(key) = line.trim().strip_prefix("GAPROGRESS|") {
-                match key.trim() {
-                    "venv" => report(15, "venv"),
-                    "deps" => report(45, "deps"),
-                    "done" => report(90, "done"),
-                    _ => {}
+    // Drain both streams concurrently so a verbose prepare cannot deadlock on a full pipe.
+    // Only stable stage keys reach the main copy; raw output is retained in diagnostics.
+    let (sender, receiver) = std::sync::mpsc::channel::<Option<String>>();
+    let mut stream_count = 0;
+    if let Some(stdout) = child.stdout.take() {
+        stream_count += 1;
+        let sender = sender.clone();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                let _ = sender.send(Some(line));
+            }
+            let _ = sender.send(None);
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        stream_count += 1;
+        let sender = sender.clone();
+        thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                let _ = sender.send(Some(line));
+            }
+            let _ = sender.send(None);
+        });
+    }
+    drop(sender);
+
+    let mut completed_streams = 0;
+    while completed_streams < stream_count {
+        match receiver.recv() {
+            Ok(Some(line)) => {
+                if let Some(key) = line.trim().strip_prefix("GAPROGRESS|") {
+                    match key.trim() {
+                        "venv" => report(25, "python"),
+                        "deps" => report(50, "dependencies"),
+                        "done" => report(75, "dependencies"),
+                        _ => {}
+                    }
+                } else {
+                    log(&line);
                 }
             }
+            Ok(None) => completed_streams += 1,
+            Err(_) => break,
         }
     }
 
@@ -542,6 +866,28 @@ fn run_offline_prepare(project_dir: &str, report: &dyn Fn(i32, &str)) -> Result<
         let _ = std::fs::write(&marker, b"ok\n");
     }
     Ok(())
+}
+
+const MAX_IDENTITY_RESPONSE_BYTES: usize = 32 * 1024;
+const MAX_IDENTITY_PATH_BYTES: usize = 2 * 1024;
+const MAX_IDENTITY_BUILD_BYTES: usize = 256;
+
+fn normalize_bridge_identity(identity: serde_json::Value) -> Option<serde_json::Value> {
+    let ga_root = identity.get("ga_root")?.as_str()?;
+    let build_id = identity.get("build_id").and_then(|value| value.as_str()).unwrap_or("");
+    let pid = identity.get("pid")?.as_u64()?;
+    if ga_root.is_empty()
+        || ga_root.len() > MAX_IDENTITY_PATH_BYTES
+        || build_id.len() > MAX_IDENTITY_BUILD_BYTES
+        || pid == 0
+    {
+        return None;
+    }
+    Some(serde_json::json!({
+        "ga_root": ga_root,
+        "build_id": build_id,
+        "pid": pid
+    }))
 }
 
 /// GET /services/identity from a running bridge; returns the parsed JSON (or None when the
@@ -557,10 +903,22 @@ fn bridge_reported_identity() -> Option<serde_json::Value> {
     let req = b"GET /services/identity HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
     stream.write_all(req).ok()?;
     let mut buf = Vec::new();
-    let _ = stream.read_to_end(&mut buf);
+    stream
+        .take((MAX_IDENTITY_RESPONSE_BYTES + 1) as u64)
+        .read_to_end(&mut buf)
+        .ok()?;
+    if buf.len() > MAX_IDENTITY_RESPONSE_BYTES {
+        return None;
+    }
     let text = String::from_utf8_lossy(&buf);
-    let body = text.split("\r\n\r\n").nth(1)?;
-    serde_json::from_str(body.trim()).ok()
+    let mut response = text.splitn(2, "\r\n\r\n");
+    let headers = response.next()?;
+    let status = headers.lines().next()?;
+    if !(status.starts_with("HTTP/1.1 200 ") || status.starts_with("HTTP/1.0 200 ")) {
+        return None;
+    }
+    let body = response.next()?;
+    normalize_bridge_identity(serde_json::from_str(body.trim()).ok()?)
 }
 
 fn norm_path(p: &str) -> String {
@@ -569,53 +927,10 @@ fn norm_path(p: &str) -> String {
         .unwrap_or_else(|_| p.to_string())
 }
 
-/// A running bridge is "ours" only when it serves the same install path AND was spawned by the
-/// same build. The build id (commit+timestamp, see build.rs) changes on every build, so an
-/// in-place upgrade or a same-version re-publish still counts as a different bridge → take over.
-/// An old bridge with no /identity (None) or no build_id field ("") never matches → taken over.
-fn bridge_identity_matches(project_dir: &str) -> bool {
-    let Some(id) = bridge_reported_identity() else { return false; };
-    let reported_root = id.get("ga_root").and_then(|v| v.as_str()).unwrap_or("");
-    let reported_build = id.get("build_id").and_then(|v| v.as_str()).unwrap_or("");
-    if reported_build != env!("GA_BUILD_ID") {
-        return false;
-    }
-    let (a, b) = (norm_path(reported_root), norm_path(project_dir));
-    #[cfg(windows)]
-    { a.eq_ignore_ascii_case(&b) }
-    #[cfg(not(windows))]
-    { a == b }
-}
-
-/// Last resort when a stale bridge ignores POST /services/bridge/exit (e.g. an old build with
-/// no such endpoint): force-kill whatever process is listening on :14168 so the new bridge can
-/// bind it. Only called after an identity mismatch, so we never kill a bridge that is ours.
-fn force_free_bridge_port() {
-    #[cfg(windows)]
-    {
-        // netstat -ano: last column is the PID for the :14168 LISTENING row.
-        if let Ok(out) = Command::new("netstat").args(["-ano", "-p", "tcp"]).output() {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                if line.contains(":14168") && line.to_uppercase().contains("LISTENING") {
-                    if let Some(pid) = line.split_whitespace().last() {
-                        let mut c = Command::new("taskkill");
-                        c.args(["/F", "/PID", pid]);
-                        c.creation_flags(0x08000000);
-                        let _ = c.status();
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        // lsof prints the listening PIDs; kill -9 each.
-        if let Ok(out) = Command::new("lsof").args(["-ti", "tcp:14168", "-sTCP:LISTEN"]).output() {
-            for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
-                let _ = Command::new("kill").args(["-9", pid]).status();
-            }
-        }
+fn bootstrap_failure(code: BootstrapFailureCode, detail: impl AsRef<str>) -> BootstrapFailure {
+    BootstrapFailure {
+        code,
+        detail: sanitize_diagnostic_line(detail.as_ref()),
     }
 }
 
@@ -634,104 +949,490 @@ fn request_bridge_shutdown() {
     let _ = stream.read(&mut [0u8; 512]);
 }
 
-fn takeover_stale_bridge(project_dir: &str) {
-    if project_dir.is_empty() || !is_bridge_running() {
-        return;
-    }
-    if bridge_identity_matches(project_dir) {
-        return;
-    }
-    eprintln!("[tauri] a different/stale bridge holds 127.0.0.1:14168; taking over");
-    request_bridge_shutdown();
-    let start = Instant::now();
-    while is_bridge_running() && start.elapsed() < Duration::from_secs(10) {
-        thread::sleep(Duration::from_millis(200));
-    }
-    // Old bridges have no /services/bridge/exit endpoint and ignore the request above — if the
-    // port is still held, force-kill the listener so our fresh bridge can bind it.
-    if is_bridge_running() {
-        eprintln!("[tauri] stale bridge did not exit; force-freeing :14168");
-        force_free_bridge_port();
-        let start = Instant::now();
-        while is_bridge_running() && start.elapsed() < Duration::from_secs(5) {
-            thread::sleep(Duration::from_millis(200));
-        }
-    }
-}
-
 fn is_bridge_running() -> bool {
     TcpStream::connect(("127.0.0.1", 14168)).is_ok()
 }
 
-fn wait_for_port(port: u16, timeout: Duration) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return true;
+fn resolve_existing_listener(
+    app_handle: &tauri::AppHandle,
+    project_dir: &str,
+) -> Result<bool, BootstrapFailure> {
+    if !is_bridge_running() {
+        if BRIDGE_PROCESS.lock().unwrap().is_some() {
+            record_diagnostic_log(
+                app_handle,
+                "A tracked bridge process no longer owns the local listener; stopping it before retry.",
+            );
+            stop_tracked_bridge();
         }
-        thread::sleep(Duration::from_millis(100));
+        set_port_diagnostics(app_handle, PortState::Free, None);
+        return Ok(false);
     }
-    false
+
+    let identity = bridge_reported_identity();
+    match classify_listener_identity(identity.as_ref(), project_dir) {
+        ListenerIdentity::Owned => {
+            set_port_diagnostics(app_handle, PortState::Owned, identity.as_ref());
+            Ok(true)
+        }
+        ListenerIdentity::Foreign => {
+            set_port_diagnostics(app_handle, PortState::Foreign, None);
+            Err(bootstrap_failure(
+                BootstrapFailureCode::PortConflict,
+                "127.0.0.1:14168 is held by an unidentified process",
+            ))
+        }
+        ListenerIdentity::KnownGenericAgent => {
+            set_port_diagnostics(app_handle, PortState::Foreign, identity.as_ref());
+            record_diagnostic_log(app_handle, "A previous GenericAgent bridge was found; requesting graceful shutdown.");
+            request_bridge_shutdown();
+            let start = Instant::now();
+            while is_bridge_running() && start.elapsed() < Duration::from_secs(10) {
+                thread::sleep(Duration::from_millis(200));
+            }
+
+            if is_bridge_running() {
+                let remaining_identity = bridge_reported_identity();
+                if classify_listener_identity(remaining_identity.as_ref(), project_dir)
+                    != ListenerIdentity::KnownGenericAgent
+                {
+                    set_port_diagnostics(app_handle, PortState::Foreign, remaining_identity.as_ref());
+                    return Err(bootstrap_failure(
+                        BootstrapFailureCode::PortConflict,
+                        "the local listener changed identity while waiting for shutdown",
+                    ));
+                }
+                record_diagnostic_log(
+                    app_handle,
+                    "The identified old bridge ignored graceful shutdown; it will not be force-stopped.",
+                );
+                return Err(bootstrap_failure(
+                    BootstrapFailureCode::PortConflict,
+                    "the identified old bridge did not release 127.0.0.1:14168",
+                ));
+            }
+
+            if is_bridge_running() {
+                set_port_diagnostics(app_handle, PortState::Foreign, bridge_reported_identity().as_ref());
+                Err(bootstrap_failure(
+                    BootstrapFailureCode::PortConflict,
+                    "the identified old bridge did not release 127.0.0.1:14168",
+                ))
+            } else {
+                // A bridge spawned by this desktop process may release the socket slightly
+                // before its process and pipe readers finish. Reap only that tracked child;
+                // an untracked bridge that exited gracefully is left untouched.
+                let tracked_child = BRIDGE_PROCESS.lock().unwrap().is_some();
+                if tracked_child {
+                    stop_tracked_bridge();
+                }
+                set_port_diagnostics(app_handle, PortState::Free, None);
+                Ok(false)
+            }
+        }
+    }
 }
 
-fn spawn_bridge_process(python_path: &str, project_dir: &str) -> Result<(), String> {
-    if is_bridge_running() {
-        return Ok(());
+fn bridge_command(python_path: &str, project_dir: &str) -> Result<Command, BootstrapFailure> {
+    if python_path.trim().is_empty() {
+        return Err(bootstrap_failure(
+            BootstrapFailureCode::SpawnFailed,
+            "Python interpreter path is empty",
+        ));
     }
-    let py = PathBuf::from(python_path);
     let dir = PathBuf::from(project_dir);
     let script = dir.join("frontends").join("desktop_bridge.py");
     if !script.exists() {
-        return Err(format!("desktop_bridge.py not found at {:?}", script));
+        return Err(bootstrap_failure(
+            BootstrapFailureCode::ConfigUnresolved,
+            format!("desktop bridge not found under {}", dir.display()),
+        ));
     }
 
-    let mut cmd = Command::new(&py);
+    let mut cmd = Command::new(python_path);
     cmd.arg(&script).current_dir(&dir);
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     sanitize_bundle_env(&mut cmd);
+    Ok(cmd)
+}
+
+fn capture_bridge_output<R: std::io::Read + Send + 'static>(
+    app_handle: tauri::AppHandle,
+    stream_name: &'static str,
+    stream: R,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        for line in BufReader::new(stream).lines().map_while(Result::ok) {
+            record_diagnostic_log(&app_handle, &format!("{stream_name}: {line}"));
+        }
+    })
+}
+
+fn join_bridge_log_readers() {
+    let readers = std::mem::take(&mut *BRIDGE_LOG_READERS.lock().unwrap());
+    for reader in readers {
+        let _ = reader.join();
+    }
+}
+
+fn spawn_bridge_process(
+    app_handle: &tauri::AppHandle,
+    python_path: &str,
+    project_dir: &str,
+) -> Result<(), BootstrapFailure> {
+    if is_bridge_running() {
+        return Err(bootstrap_failure(
+            BootstrapFailureCode::PortConflict,
+            "cannot spawn while 127.0.0.1:14168 is already in use",
+        ));
+    }
+
+    let mut command = bridge_command(python_path, project_dir)?;
     #[cfg(windows)]
-    cmd.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
-    let child = cmd.spawn().map_err(|e| format!("Failed to spawn: {}", e))?;
+    command.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
+
+    let spawn_result = command.spawn();
+    #[cfg(windows)]
+    let mut child = match spawn_result {
+        Ok(child) => child,
+        Err(error) if should_retry_without_breakaway(error.raw_os_error()) => {
+            record_diagnostic_log(
+                app_handle,
+                "Windows denied CREATE_BREAKAWAY_FROM_JOB; retrying with CREATE_NO_WINDOW.",
+            );
+            let mut fallback = bridge_command(python_path, project_dir)?;
+            fallback.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            fallback.spawn().map_err(|fallback_error| {
+                bootstrap_failure(
+                    BootstrapFailureCode::SpawnFailed,
+                    format!("bridge spawn fallback failed: {fallback_error}"),
+                )
+            })?
+        }
+        Err(error) => {
+            return Err(bootstrap_failure(
+                BootstrapFailureCode::SpawnFailed,
+                format!("bridge spawn failed: {error}"),
+            ));
+        }
+    };
+    #[cfg(not(windows))]
+    let mut child = spawn_result.map_err(|error| {
+        bootstrap_failure(
+            BootstrapFailureCode::SpawnFailed,
+            format!("bridge spawn failed: {error}"),
+        )
+    })?;
+
+    let mut readers = Vec::new();
+    if let Some(stdout) = child.stdout.take() {
+        readers.push(capture_bridge_output(app_handle.clone(), "stdout", stdout));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        readers.push(capture_bridge_output(app_handle.clone(), "stderr", stderr));
+    }
+    *BRIDGE_LOG_READERS.lock().unwrap() = readers;
     *BRIDGE_PROCESS.lock().unwrap() = Some(child);
     Ok(())
 }
 
-fn show_bridge_window(app_handle: &tauri::AppHandle) {
-    if let Some(main_win) = app_handle.get_webview_window("main") {
-        let url = tauri::Url::parse("tauri://localhost/index.html").unwrap();
-        let _ = main_win.navigate(url);
-        let _ = main_win.show();
-        let _ = main_win.set_focus();
+fn bridge_exit_status() -> Result<Option<String>, BootstrapFailure> {
+    let result = {
+        let mut process = BRIDGE_PROCESS.lock().unwrap();
+        let result = match process.as_mut() {
+            Some(child) => child.try_wait().map_err(|error| {
+                bootstrap_failure(
+                    BootstrapFailureCode::ServiceExited,
+                    format!("failed to inspect bridge process: {error}"),
+                )
+            })?,
+            None => None,
+        };
+        if result.is_some() {
+            *process = None;
+        }
+        result
+    };
+    if let Some(status) = result {
+        join_bridge_log_readers();
+        return Ok(Some(format!("bridge exited with status {status}")));
     }
-    if let Some(setup_win) = app_handle.get_webview_window("setup") {
-        let _ = setup_win.hide();
+    Ok(None)
+}
+
+fn stop_tracked_bridge() {
+    if let Some(mut child) = BRIDGE_PROCESS.lock().unwrap().take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    join_bridge_log_readers();
+}
+
+fn wait_for_owned_bridge(
+    app_handle: &tauri::AppHandle,
+    project_dir: &str,
+    timeout: Duration,
+) -> Result<(), BootstrapFailure> {
+    let start = Instant::now();
+    let mut unidentified_since: Option<Instant> = None;
+    while start.elapsed() < timeout {
+        if let Some(detail) = bridge_exit_status()? {
+            return Err(bootstrap_failure(BootstrapFailureCode::ServiceExited, detail));
+        }
+
+        if let Some(identity) = bridge_reported_identity() {
+            match classify_listener_identity(Some(&identity), project_dir) {
+                ListenerIdentity::Owned => {
+                    set_port_diagnostics(app_handle, PortState::Owned, Some(&identity));
+                    return Ok(());
+                }
+                ListenerIdentity::KnownGenericAgent => {
+                    set_port_diagnostics(app_handle, PortState::Foreign, Some(&identity));
+                    return Err(bootstrap_failure(
+                        BootstrapFailureCode::PortConflict,
+                        "a different GenericAgent bridge answered during readiness",
+                    ));
+                }
+                ListenerIdentity::Foreign => {
+                    set_port_diagnostics(app_handle, PortState::Foreign, None);
+                    return Err(bootstrap_failure(
+                        BootstrapFailureCode::PortConflict,
+                        "a foreign identity response answered during readiness",
+                    ));
+                }
+            }
+        }
+
+        if is_bridge_running() {
+            let since = unidentified_since.get_or_insert_with(Instant::now);
+            if BRIDGE_PROCESS.lock().unwrap().is_none()
+                || since.elapsed() >= Duration::from_secs(2)
+            {
+                set_port_diagnostics(app_handle, PortState::Foreign, None);
+                return Err(bootstrap_failure(
+                    BootstrapFailureCode::PortConflict,
+                    "an unidentified process answered during readiness",
+                ));
+            }
+        } else {
+            unidentified_since = None;
+        }
+        thread::sleep(Duration::from_millis(150));
+    }
+
+    Err(bootstrap_failure(
+        BootstrapFailureCode::ServiceTimeout,
+        format!("bridge identity did not become ready within {} seconds", timeout.as_secs()),
+    ))
+}
+
+fn open_main_window(app_handle: &tauri::AppHandle, dev_mode: bool) -> Result<(), BootstrapFailure> {
+    let main_window = app_handle.get_webview_window("main").ok_or_else(|| {
+        bootstrap_failure(BootstrapFailureCode::UiNavigationFailed, "main window is unavailable")
+    })?;
+    let url = tauri::Url::parse("tauri://localhost/index.html").map_err(|error| {
+        bootstrap_failure(
+            BootstrapFailureCode::UiNavigationFailed,
+            format!("main window URL is invalid: {error}"),
+        )
+    })?;
+    main_window.navigate(url).map_err(|error| {
+        bootstrap_failure(
+            BootstrapFailureCode::UiNavigationFailed,
+            format!("main window navigation failed: {error}"),
+        )
+    })?;
+    main_window.show().map_err(|error| {
+        bootstrap_failure(
+            BootstrapFailureCode::UiNavigationFailed,
+            format!("main window could not be shown: {error}"),
+        )
+    })?;
+    main_window.set_focus().map_err(|error| {
+        bootstrap_failure(
+            BootstrapFailureCode::UiNavigationFailed,
+            format!("main window could not be focused: {error}"),
+        )
+    })?;
+
+    if dev_mode {
+        main_window.open_devtools();
+    } else {
+        let _ = main_window.eval(r#"
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'F12' || e.key === 'F5' ||
+                    (e.ctrlKey && e.key === 'r') ||
+                    (e.ctrlKey && e.shiftKey && e.key === 'I')) {
+                    e.preventDefault();
+                }
+            });
+            document.addEventListener('contextmenu', function(e) {
+                e.preventDefault();
+            });
+        "#);
+    }
+
+    if let Some(setup_window) = app_handle.get_webview_window("setup") {
+        let _ = setup_window.hide();
+    }
+    Ok(())
+}
+
+fn show_bootstrap_recovery(app_handle: &tauri::AppHandle) {
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        let _ = main_window.hide();
+    }
+    if let Some(setup_window) = app_handle.get_webview_window("setup") {
+        let _ = setup_window.show();
+        let _ = setup_window.set_focus();
     }
 }
 
-#[tauri::command]
-async fn start_bridge_with_config(app_handle: tauri::AppHandle, python_path: String, project_dir: String) -> Result<(), String> {
-    // Save to settings (merge so sibling keys like desktop_shortcut survive).
-    merge_settings(serde_json::json!({"python_path": python_path, "project_dir": project_dir}));
+static BOOTSTRAP_RUN_LOCK: Mutex<()> = Mutex::new(());
 
-    spawn_bridge_process(&python_path, &project_dir)?;
-
-    // Wait for port
-    if !wait_for_port(14168, Duration::from_secs(20)) {
-        return Err("Bridge did not become ready within 20s".into());
+fn bootstrap_inner(
+    app_handle: &tauri::AppHandle,
+    python_path: &str,
+    project_dir: &str,
+    dev_mode: bool,
+) -> Result<(), BootstrapFailure> {
+    let project = PathBuf::from(project_dir);
+    if project_dir.trim().is_empty()
+        || !project.join("agentmain.py").exists()
+        || !project.join("frontends").join("desktop_bridge.py").exists()
+    {
+        return Err(bootstrap_failure(
+            BootstrapFailureCode::ConfigUnresolved,
+            format!("GenericAgent source was not found at {}", project.display()),
+        ));
+    }
+    if !python_interpreter_resolves(python_path) {
+        return Err(bootstrap_failure(
+            BootstrapFailureCode::SpawnFailed,
+            format!("Python interpreter was not found at {python_path}"),
+        ));
     }
 
-    show_bridge_window(&app_handle);
+    set_bootstrap_phase(app_handle, BootstrapPhase::Resolving, Some("validate"), 10);
+    let prepare_needed = needs_first_run_prepare(project_dir);
+    let already_ready = resolve_existing_listener(app_handle, project_dir)?;
+    if already_ready {
+        snapshot_update(Some(app_handle), |snapshot| snapshot.mode = BootstrapMode::HotStart);
+    } else {
+        snapshot_update(Some(app_handle), |snapshot| {
+            snapshot.mode = if prepare_needed { BootstrapMode::Prepare } else { BootstrapMode::ColdStart };
+        });
+        if prepare_needed {
+            set_bootstrap_phase(app_handle, BootstrapPhase::Preparing, Some("validate"), 15);
+            let report = |progress: i32, stage: &str| {
+                set_bootstrap_phase(
+                    app_handle,
+                    BootstrapPhase::Preparing,
+                    Some(stage),
+                    progress.clamp(0, 100) as u8,
+                );
+            };
+            let log = |line: &str| record_diagnostic_log(app_handle, line);
+            run_offline_prepare(project_dir, &report, &log).map_err(|detail| {
+                bootstrap_failure(BootstrapFailureCode::PrepareFailed, detail)
+            })?;
+        }
+
+        set_bootstrap_phase(app_handle, BootstrapPhase::StartingService, Some("service"), 82);
+        spawn_bridge_process(app_handle, python_path, project_dir)?;
+    }
+
+    set_bootstrap_phase(app_handle, BootstrapPhase::StartingService, Some("service"), 90);
+    let timeout = if prepare_needed && !already_ready {
+        Duration::from_secs(60)
+    } else {
+        Duration::from_secs(30)
+    };
+    wait_for_owned_bridge(app_handle, project_dir, timeout)?;
+
+    set_bootstrap_phase(app_handle, BootstrapPhase::OpeningUi, Some("ui"), 98);
+    open_main_window(app_handle, dev_mode)?;
+    set_bootstrap_phase(app_handle, BootstrapPhase::Ready, None, 100);
+    maybe_setup_shortcut();
     Ok(())
+}
+
+fn execute_bootstrap(
+    app_handle: &tauri::AppHandle,
+    python_path: String,
+    project_dir: String,
+    dev_mode: bool,
+) -> Result<(), String> {
+    let _run_guard = BOOTSTRAP_RUN_LOCK.lock().map_err(|_| "bootstrap lock poisoned".to_string())?;
+    let initial_mode = if needs_first_run_prepare(&project_dir) {
+        BootstrapMode::Prepare
+    } else {
+        BootstrapMode::ColdStart
+    };
+    begin_bootstrap(app_handle, initial_mode, &python_path, &project_dir);
+
+    match bootstrap_inner(app_handle, &python_path, &project_dir, dev_mode) {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            if matches!(
+                failure.code,
+                BootstrapFailureCode::ServiceTimeout | BootstrapFailureCode::PortConflict
+            ) {
+                // This handle only ever refers to a child spawned by this desktop process.
+                // It is safe to stop; the unidentified listener itself is never targeted.
+                stop_tracked_bridge();
+            }
+            record_diagnostic_log(app_handle, &failure.detail);
+            snapshot_update(Some(app_handle), |snapshot| {
+                snapshot.phase = BootstrapPhase::Failed;
+                snapshot.progress = snapshot.progress.min(99);
+                snapshot.failure = Some(failure.clone());
+            });
+            show_bootstrap_recovery(app_handle);
+            Err(failure.detail)
+        }
+    }
+}
+
+async fn execute_bootstrap_async(
+    app_handle: tauri::AppHandle,
+    python_path: String,
+    project_dir: String,
+    dev_mode: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        execute_bootstrap(&app_handle, python_path, project_dir, dev_mode)
+    })
+    .await
+    .map_err(|error| format!("bootstrap task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn retry_bootstrap(
+    app_handle: tauri::AppHandle,
+    python_path: String,
+    project_dir: String,
+) -> Result<(), String> {
+    let python_path = if python_path.trim().is_empty() { find_python() } else { python_path };
+    merge_settings(serde_json::json!({"python_path": python_path, "project_dir": project_dir}));
+    execute_bootstrap_async(app_handle, python_path, project_dir, false).await
+}
+
+#[tauri::command]
+async fn start_bridge_with_config(
+    app_handle: tauri::AppHandle,
+    python_path: String,
+    project_dir: String,
+) -> Result<(), String> {
+    let python_path = if python_path.trim().is_empty() { find_python() } else { python_path };
+    merge_settings(serde_json::json!({"python_path": python_path, "project_dir": project_dir}));
+    execute_bootstrap_async(app_handle, python_path, project_dir, false).await
 }
 
 #[tauri::command]
 async fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
     let (python_path, project_dir) = get_or_discover_config();
-    spawn_bridge_process(&python_path, &project_dir)?;
-    if !wait_for_port(14168, Duration::from_secs(20)) {
-        return Err("Bridge did not become ready within 20s".into());
-    }
-    show_bridge_window(&app_handle);
-    Ok(())
+    execute_bootstrap_async(app_handle, python_path, project_dir, false).await
 }
 
 #[tauri::command]
@@ -765,42 +1466,6 @@ fn pick_directory(title: Option<String>) -> Option<String> {
     dlg.pick_folder().map(|p| p.to_string_lossy().into_owned())
 }
 
-/// Stop the current bridge (ours or a stale one) and free :14168 before respawning.
-fn stop_current_bridge() {
-    request_bridge_shutdown();
-    if let Some(mut child) = BRIDGE_PROCESS.lock().unwrap().take() {
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    let start = Instant::now();
-    while is_bridge_running() && start.elapsed() < Duration::from_secs(6) {
-        thread::sleep(Duration::from_millis(150));
-    }
-    if is_bridge_running() {
-        force_free_bridge_port();
-        let start = Instant::now();
-        while is_bridge_running() && start.elapsed() < Duration::from_secs(5) {
-            thread::sleep(Duration::from_millis(150));
-        }
-    }
-}
-
-/// Restart the bridge with whatever get_or_discover_config() now resolves to, then reload the
-/// webview so it reconnects. Shared by set_ga_source / clear_ga_source.
-fn switch_bridge(app_handle: &tauri::AppHandle) -> Result<String, String> {
-    stop_current_bridge();
-    let (py, project) = get_or_discover_config();
-    if project.is_empty() {
-        return Err("no GenericAgent source resolved".into());
-    }
-    spawn_bridge_process(&py, &project)?;
-    if !wait_for_port(14168, Duration::from_secs(20)) {
-        return Err("bridge did not become ready within 20s".into());
-    }
-    show_bridge_window(app_handle);
-    Ok(project)
-}
-
 #[tauri::command]
 fn get_ga_source() -> String {
     read_settings()
@@ -820,13 +1485,17 @@ async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<Stri
         return Err("frontends/desktop_bridge.py not found in the selected directory".into());
     }
     merge_settings(serde_json::json!({ "ga_source_override": dir }));
-    switch_bridge(&app_handle)
+    let (python_path, project_dir) = get_or_discover_config();
+    execute_bootstrap_async(app_handle, python_path, project_dir.clone(), false).await?;
+    Ok(project_dir)
 }
 
 #[tauri::command]
 async fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     remove_setting("ga_source_override");
-    switch_bridge(&app_handle)
+    let (python_path, project_dir) = get_or_discover_config();
+    execute_bootstrap_async(app_handle, python_path, project_dir.clone(), false).await?;
+    Ok(project_dir)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -835,43 +1504,40 @@ pub fn run() {
     let no_autostart = args.iter().any(|a| a == "--no-autostart");
     let dev_mode = args.iter().any(|a| a == "--dev");
 
-    // Resolve the effective config once (honors a user-set external GA source over the bundle).
-    // Use it for takeover + spawn so identity checks match what we actually launch.
     let (eff_py, eff_project) = get_or_discover_config();
-    let needs_prepare = needs_first_run_prepare(&eff_project);
-
-    takeover_stale_bridge(&eff_project);
-
-    let bridge_ok = is_bridge_running();
-    let mut spawned_bridge = false;
-    // Skip the early spawn when a first-run prepare is required (no venv yet);
-    // the setup thread prepares the env first and then starts the bridge.
-    if !bridge_ok && !no_autostart && !needs_prepare {
-        let dir = PathBuf::from(&eff_project);
-        let script = dir.join("frontends").join("desktop_bridge.py");
-        if script.exists() {
-            let mut cmd = Command::new(&eff_py);
-            cmd.arg(&script).current_dir(&dir);
-            sanitize_bundle_env(&mut cmd);
-            #[cfg(windows)]
-            cmd.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
-            if let Ok(child) = cmd.spawn() {
-                *BRIDGE_PROCESS.lock().unwrap() = Some(child);
-                spawned_bridge = true;
-            }
-        }
-    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.show();
-                let _ = w.set_focus();
+            let bootstrap_failed = matches!(
+                BOOTSTRAP_STATE.lock().unwrap().phase,
+                BootstrapPhase::Failed
+            );
+            if bootstrap_failed {
+                if let Some(window) = app.get_webview_window("setup") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            } else if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![start_bridge_with_config, start_bridge, get_config, export_mykey, pick_directory, get_ga_source, set_ga_source, clear_ga_source, shortcut_should_ask, shortcut_decide])
+        .invoke_handler(tauri::generate_handler![
+            start_bridge_with_config,
+            start_bridge,
+            retry_bootstrap,
+            get_bootstrap_snapshot,
+            get_config,
+            export_mykey,
+            pick_directory,
+            get_ga_source,
+            set_ga_source,
+            clear_ga_source,
+            shortcut_should_ask,
+            shortcut_decide
+        ])
         .setup(move |app| {
             // Show the loading window immediately so the first-run prepare isn't a blank screen.
             // The window starts on loading.html (a local page), so no "connection refused" flash.
@@ -926,110 +1592,22 @@ pub fn run() {
             }
 
             let handle = app.handle().clone();
+            let python_path = eff_py.clone();
             let project_dir = eff_project.clone();
             thread::spawn(move || {
-                // Progress reporter: push status into the loading window (window.gaProgress).
-                let main_win = handle.get_webview_window("main");
-
-                let report = |pct: i32, msg: &str| {
-                    if let Some(w) = &main_win {
-                        let js = format!(
-                            "window.gaProgress && window.gaProgress({}, {})",
-                            pct,
-                            serde_json::to_string(msg).unwrap_or_else(|_| "\"\"".to_string())
-                        );
-                        let _ = w.eval(&js);
-                    }
-                };
-
-                // First-run (self-contained bundle): prepare the embedded python env offline,
-                // then start the bridge with the freshly created venv.
-                if needs_prepare {
-                    report(5, "start");
-                    if let Err(e) = run_offline_prepare(&project_dir, &report) {
-                        eprintln!("[tauri] first-run prepare failed: {}", e);
-                        if let Some(sw) = handle.get_webview_window("setup") { let _ = sw.show(); }
-                        if let Some(mw) = handle.get_webview_window("main") { let _ = mw.hide(); }
-                        return;
-                    }
-                    report(95, "starting");
-                    if !is_bridge_running() {
-                        let (py_str, dir_str) = get_or_discover_config();
-                        let dir = PathBuf::from(&dir_str);
-                        let script = dir.join("frontends").join("desktop_bridge.py");
-                        if script.exists() {
-                            let mut cmd = Command::new(&py_str);
-                            cmd.arg(&script).current_dir(&dir);
-                            sanitize_bundle_env(&mut cmd);
-                            #[cfg(windows)]
-                            cmd.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
-                            if let Ok(child) = cmd.spawn() {
-                                *BRIDGE_PROCESS.lock().unwrap() = Some(child);
-                            }
-                        }
-                    }
-                }
-
-                // First run (prepare) and cold bridge start may take a while; allow up to 60s.
-                let wait = if needs_prepare || spawned_bridge {
-                    Duration::from_secs(60)
+                if no_autostart && !is_bridge_running() {
+                    begin_bootstrap(&handle, BootstrapMode::ColdStart, &python_path, &project_dir);
+                    let failure = bootstrap_failure(
+                        BootstrapFailureCode::Unknown,
+                        "automatic bridge startup was disabled by --no-autostart",
+                    );
+                    snapshot_update(Some(&handle), |snapshot| {
+                        snapshot.phase = BootstrapPhase::Failed;
+                        snapshot.failure = Some(failure);
+                    });
+                    show_bootstrap_recovery(&handle);
                 } else {
-                    Duration::from_secs(2)
-                };
-                let bridge_ready = wait_for_port(14168, wait);
-
-                if bridge_ready {
-                    // The bridge auto-starts conductor + scheduler itself (on_startup), so we do
-                    // NOT probe their ports here: that would self-detect the bridge's own
-                    // just-started extras and falsely report "ports busy".
-                    if !wait_for_port(14168, Duration::from_secs(15)) {
-                        eprintln!("[tauri] bridge not reachable before navigate");
-                        if let Some(w) = &main_win {
-                            let msg = "无法连接 bridge (127.0.0.1:14168)，请关闭程序后重试。";
-                            let js = format!(
-                                "alert({})",
-                                serde_json::to_string(msg).unwrap_or_else(|_| "\"\"".to_string())
-                            );
-                            let _ = w.eval(&js);
-                        }
-                        return;
-                    }
-                    // Navigate to the local React SPA after bridge is ready.
-                    if let Some(w) = handle.get_webview_window("main") {
-                        if let Ok(url) = tauri::Url::parse("tauri://localhost/index.html") {
-                            let _ = w.navigate(url);
-                        }
-                        if dev_mode {
-                            w.open_devtools();
-                        } else {
-                            // Disable F5/F12/Ctrl+R/right-click in production
-                            let _ = w.eval(r#"
-                                document.addEventListener('keydown', function(e) {
-                                    if (e.key === 'F12' || e.key === 'F5' ||
-                                        (e.ctrlKey && e.key === 'r') ||
-                                        (e.ctrlKey && e.shiftKey && e.key === 'I')) {
-                                        e.preventDefault();
-                                    }
-                                });
-                                document.addEventListener('contextmenu', function(e) {
-                                    e.preventDefault();
-                                });
-                            "#);
-                        }
-                        let _ = w.show();
-                        let _ = w.set_focus();
-                    }
-                    if let Some(sw) = handle.get_webview_window("setup") { let _ = sw.hide(); }
-                    // App is up and reachable: ask-once / self-heal the desktop shortcut.
-                    // Runs last so it never blocks the loading/navigation path.
-                    maybe_setup_shortcut();
-                } else {
-                    // Bridge never came up -> let the user fix paths in the setup window.
-                    if let Some(sw) = handle.get_webview_window("setup") {
-                        if dev_mode { sw.open_devtools(); }
-                        let _ = sw.show();
-                    }
-                    if let Some(mw) = handle.get_webview_window("main") { let _ = mw.hide(); }
+                    let _ = execute_bootstrap(&handle, python_path, project_dir, dev_mode);
                 }
             });
             Ok(())
@@ -1063,4 +1641,108 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sensitive_diagnostic_lines_are_replaced_and_long_lines_are_bounded() {
+        assert_eq!(
+            sanitize_diagnostic_line("Authorization: Bearer super-secret"),
+            "[redacted sensitive diagnostic line]"
+        );
+        assert_eq!(
+            sanitize_diagnostic_line("API_KEY=should-not-leak"),
+            "[redacted sensitive diagnostic line]"
+        );
+        assert_eq!(
+            sanitize_diagnostic_line("[session] Quarterly planning"),
+            "[redacted sensitive diagnostic line]"
+        );
+        assert_eq!(
+            sanitize_diagnostic_line("restored memory entry: personal note"),
+            "[redacted sensitive diagnostic line]"
+        );
+        assert!(sanitize_diagnostic_line(&"x".repeat(4096)).len() <= MAX_DIAGNOSTIC_LINE_BYTES);
+    }
+
+    #[test]
+    fn recent_log_buffer_keeps_only_the_last_hundred_lines() {
+        let mut logs = VecDeque::new();
+        for index in 0..125 {
+            push_bounded_log(&mut logs, &format!("line-{index}"));
+        }
+        assert_eq!(logs.len(), MAX_DIAGNOSTIC_LINES);
+        assert_eq!(logs.front().map(String::as_str), Some("line-25"));
+        assert_eq!(logs.back().map(String::as_str), Some("line-124"));
+    }
+
+    #[test]
+    fn listener_identity_distinguishes_owned_known_and_foreign_ports() {
+        let project = std::env::current_dir().unwrap();
+        let project_text = project.to_string_lossy();
+        let owned = serde_json::json!({
+            "ga_root": project_text,
+            "build_id": env!("GA_BUILD_ID"),
+            "pid": 100
+        });
+        let old = serde_json::json!({
+            "ga_root": project_text,
+            "build_id": "older-build",
+            "pid": 101
+        });
+        assert_eq!(classify_listener_identity(Some(&owned), &project_text), ListenerIdentity::Owned);
+        assert_eq!(classify_listener_identity(Some(&old), &project_text), ListenerIdentity::KnownGenericAgent);
+        assert_eq!(classify_listener_identity(None, &project_text), ListenerIdentity::Foreign);
+        assert_eq!(
+            classify_listener_identity(Some(&serde_json::json!({"status": "ok"})), &project_text),
+            ListenerIdentity::Foreign
+        );
+    }
+
+    #[test]
+    fn bridge_identity_is_bounded_and_only_keeps_allowlisted_fields() {
+        let normalized = normalize_bridge_identity(serde_json::json!({
+            "ga_root": "/tmp/GenericAgent",
+            "build_id": "build-1",
+            "pid": 42,
+            "authorization": "must-not-survive"
+        }))
+        .unwrap();
+        assert_eq!(normalized.get("ga_root").and_then(|value| value.as_str()), Some("/tmp/GenericAgent"));
+        assert_eq!(normalized.get("build_id").and_then(|value| value.as_str()), Some("build-1"));
+        assert_eq!(normalized.get("pid").and_then(|value| value.as_u64()), Some(42));
+        assert!(normalized.get("authorization").is_none());
+
+        assert!(normalize_bridge_identity(serde_json::json!({
+            "ga_root": "x".repeat(MAX_IDENTITY_PATH_BYTES + 1),
+            "build_id": "build-1",
+            "pid": 42
+        }))
+        .is_none());
+        assert!(normalize_bridge_identity(serde_json::json!({
+            "ga_root": "/tmp/GenericAgent",
+            "build_id": "x".repeat(MAX_IDENTITY_BUILD_BYTES + 1),
+            "pid": 42
+        }))
+        .is_none());
+    }
+
+    #[test]
+    fn breakaway_fallback_is_limited_to_access_denied() {
+        assert!(should_retry_without_breakaway(Some(5)));
+        assert!(!should_retry_without_breakaway(Some(2)));
+        assert!(!should_retry_without_breakaway(None));
+    }
+
+    #[test]
+    fn python_validation_rejects_an_unresolvable_explicit_path() {
+        let current_exe = std::env::current_exe().unwrap();
+        assert!(python_interpreter_resolves(&current_exe.to_string_lossy()));
+        assert!(!python_interpreter_resolves(
+            "/definitely/missing/genericagent-python"
+        ));
+    }
 }

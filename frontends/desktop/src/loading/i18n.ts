@@ -1,13 +1,14 @@
 const ZH = (navigator.language || '').toLowerCase().startsWith('zh');
 
 const messages = {
-  starting: ZH ? '正在启动…' : 'Starting…',
-  preparing: ZH ? '首次启动，正在准备运行环境…' : 'First run: preparing the runtime…',
-  stage_start: ZH ? '检查运行环境' : 'Checking runtime',
-  stage_venv: ZH ? '创建运行环境' : 'Creating runtime environment',
-  stage_deps: ZH ? '安装依赖' : 'Installing dependencies',
-  stage_done: ZH ? '依赖安装完成' : 'Dependencies installed',
-  stage_starting: ZH ? '启动服务' : 'Starting services',
+  starting: ZH ? '正在启动 GenericAgent' : 'Starting GenericAgent',
+  resuming: ZH ? '正在恢复 GenericAgent' : 'Resuming GenericAgent',
+  preparing: ZH ? '首次启动，正在准备本地运行环境' : 'First launch: preparing the local runtime',
+  stage_validate: ZH ? '检查本地文件' : 'Checking local files',
+  stage_python: ZH ? '准备 Python 环境' : 'Preparing Python environment',
+  stage_dependencies: ZH ? '安装运行组件' : 'Installing runtime components',
+  stage_service: ZH ? '启动后台服务' : 'Starting background service',
+  stage_ui: ZH ? '打开主界面' : 'Opening the main window',
   ready: ZH ? '就绪' : 'Ready',
   readyDetail: ZH ? '正在进入主界面…' : 'Entering main interface…',
   failed: ZH ? '启动失败' : 'Startup failed',

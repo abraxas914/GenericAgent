@@ -17,6 +17,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DESKTOP_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_DIST = path.resolve(__dirname, '..', 'dist');
 const CHUNK_WARN_SIZE = 2 * 1024 * 1024; // 2 MB
 
@@ -26,6 +27,17 @@ const CHUNK_WARN_SIZE = 2 * 1024 * 1024; // 2 MB
  */
 export function checkDistBuilt(distDir) {
   const warnings = [];
+
+  // The vanilla bridge still serves static/fallback.html while Vite packages public/fallback.html.
+  // They are intentionally identical so recovery behavior cannot drift by launch path.
+  const publicFallback = path.join(DESKTOP_ROOT, 'public', 'fallback.html');
+  const staticFallback = path.join(DESKTOP_ROOT, 'static', 'fallback.html');
+  if (!fs.existsSync(publicFallback) || !fs.existsSync(staticFallback)) {
+    return { ok: false, error: 'public/static fallback source is missing' };
+  }
+  if (fs.readFileSync(publicFallback, 'utf8') !== fs.readFileSync(staticFallback, 'utf8')) {
+    return { ok: false, error: 'public/fallback.html and static/fallback.html have drifted' };
+  }
 
   // 1. dist/ exists
   if (!fs.existsSync(distDir)) {
@@ -46,6 +58,11 @@ export function checkDistBuilt(distDir) {
   const loadingPath = path.join(distDir, 'loading.html');
   if (!fs.existsSync(loadingPath)) {
     return { ok: false, error: 'loading.html is missing from dist/ (required for Tauri cold start)' };
+  }
+
+  const fallbackPath = path.join(distDir, 'fallback.html');
+  if (!fs.existsSync(fallbackPath)) {
+    return { ok: false, error: 'fallback.html is missing from dist/ (required for bootstrap recovery)' };
   }
 
   // 4. assets/ contains at least one JS bundle
@@ -105,6 +122,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
 
   console.log(`  ✓ dist/index.html present`);
   console.log(`  ✓ dist/loading.html present`);
+  console.log(`  ✓ dist/fallback.html present and fallback sources match`);
   console.log(`  ✓ ${jsFiles.length} JS bundle(s), ${cssFiles.length} CSS file(s)`);
   console.log(`  ✓ Total assets size: ${(totalSize / 1024).toFixed(0)} KB`);
   console.log(`\n  PASS\n`);

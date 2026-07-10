@@ -1,27 +1,26 @@
-import { useReducer, useEffect, useCallback } from 'react';
+import { useReducer, useEffect } from 'react';
 import { reducer, initialState } from './store';
 import { subscribe, unsubscribe } from './events';
 import { LoadingScreen } from './Loading';
 import { ProgressScreen } from './Progress';
 import { ReadyScreen } from './Ready';
-import { SetupScreen } from './Setup';
+import { WindowsTitlebar } from '../components/layout/WindowsTitlebar';
+import { isWindows } from '../platform';
 
 export function LoadingApp() {
   const [state, dispatch] = useReducer(reducer, initialState);
 
   useEffect(() => {
-    subscribe(dispatch);
+    void subscribe(dispatch).catch((error) => {
+      console.error('[bootstrap] failed to subscribe to startup state', error);
+    });
     return () => unsubscribe();
-  }, []);
-
-  const handleRetry = useCallback(() => {
-    dispatch({ type: 'retry' });
   }, []);
 
   let content: React.ReactNode;
   switch (state.route) {
     case 'loading':
-      content = <LoadingScreen />;
+      content = <LoadingScreen mode={state.mode} />;
       break;
     case 'progress':
       content = <ProgressScreen stages={state.stages} overallPct={state.overallPct} logs={state.logs} />;
@@ -29,14 +28,14 @@ export function LoadingApp() {
     case 'ready':
       content = <ReadyScreen />;
       break;
-    case 'setup':
-      content = <SetupScreen error={state.error} logs={state.logs} onRetry={handleRetry} />;
-      break;
   }
 
   return (
-    <div className="bootstrap-app" data-route={state.route}>
-      {content}
+    <div className="bootstrap-shell">
+      {isWindows && <WindowsTitlebar />}
+      <div className="bootstrap-app" data-route={state.route}>
+        {content}
+      </div>
     </div>
   );
 }
