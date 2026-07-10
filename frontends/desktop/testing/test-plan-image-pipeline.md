@@ -25,8 +25,8 @@
 
 ## 关键修复点
 
-1. **frontends/desktop_bridge.py:_patch_chat_for_images** — 绕过 agentmain 和 llmcore 的限制  
-   方案: monkey-patch `backend.ask`（在 `NativeToolClient.chat` 的 filter 之后注入）  
+1. **frontends/desktop_bridge.py:_patch_chat_for_images** — 绕过 agentmain 和 llmcore 的限制
+   方案: monkey-patch `backend.ask`（在 `NativeToolClient.chat` 的 filter 之后注入）
    - 注入点在 filter 下游，直接修改传给 session 的 merged msg 的 content list
    - `del backend.ask` 恢复原始（MixinSession 通过 `__getattr__` 回退到 `_sessions[0].ask`）
    - 只拦截首次调用，后续轮次不受影响

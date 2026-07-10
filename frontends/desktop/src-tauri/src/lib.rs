@@ -1230,7 +1230,12 @@ fn open_main_window(app_handle: &tauri::AppHandle, dev_mode: bool) -> Result<(),
     let main_window = app_handle.get_webview_window("main").ok_or_else(|| {
         bootstrap_failure(BootstrapFailureCode::UiNavigationFailed, "main window is unavailable")
     })?;
-    let url = tauri::Url::parse("tauri://localhost/index.html").map_err(|error| {
+    let url_str = if cfg!(debug_assertions) {
+        "http://localhost:5173/index.html"
+    } else {
+        "tauri://localhost/index.html"
+    };
+    let url = tauri::Url::parse(url_str).map_err(|error| {
         bootstrap_failure(
             BootstrapFailureCode::UiNavigationFailed,
             format!("main window URL is invalid: {error}"),

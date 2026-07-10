@@ -1,5 +1,10 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const desktopRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 const windowApi = {
   minimize: vi.fn().mockResolvedValue(undefined),
@@ -96,6 +101,20 @@ describe('Windows window chrome', () => {
       'core:window:allow-close',
       'core:window:allow-start-dragging',
     ]));
+  });
+
+  it('keeps the Windows sidebar nav directly below the custom titlebar', () => {
+    const layoutCss = fs.readFileSync(
+      path.join(desktopRoot, 'src/components/layout/layout.css'),
+      'utf8',
+    );
+
+    expect(layoutCss).toMatch(
+      /:root\[data-platform="windows"\]\s*{[^}]*--ga-sidebar-top-padding:\s*8px;/s,
+    );
+    expect(layoutCss).toMatch(
+      /\.ga-left-sidebar\s*{[^}]*padding:\s*var\(--ga-sidebar-top-padding,\s*36px\) 0 0;/s,
+    );
   });
 
   it.each(['MacIntel', 'Linux x86_64'])(
