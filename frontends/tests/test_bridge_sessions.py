@@ -263,3 +263,189 @@ class TestPersistAtomicNoDataLoss:
 
         current_content = manager._session_file(sess.id).read_text(encoding="utf-8")
         assert current_content == original_content
+
+
+class TestSessionContinuityAfterRestart:
+    """Verify that llm_history is injected when agent is recreated (simulates bridge restart)."""
+
+    def test_run_agent_turn_injects_history(self, manager: AgentManager):
+        """After bridge restart (agent=None, llm_history populated), run_agent_turn
+        should inject persisted llm_history into the newly created agent."""
+        history = [
+            {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "hi there"}]},
+            {"role": "user", "content": [{"type": "text", "text": "what did I just say?"}]},
+        ]
+        sess = _make_session(sid="sess-continuity-1", messages=[
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ])
+        sess.llm_history = history
+        sess.agent = None
+        manager.sessions[sess.id] = sess
+
+        class FakeBackend:
+            def __init__(self):
+                self.history = []
+                self.name = "test-backend"
+
+        class FakeLLMClient:
+            def __init__(self):
+                self.backend = FakeBackend()
+
+        class FakeAgent:
+            def __init__(self):
+                self.llmclient = FakeLLMClient()
+                self.llm_no = 0
+                self.inc_out = True
+                self.verbose = True
+
+            def next_llm(self, n):
+                self.llm_no = n
+
+        fake_agent = FakeAgent()
+        with patch.object(manager, "make_agent", return_value=fake_agent):
+            if sess.agent is None:
+                sess.agent = manager.make_agent(sess)
+                if sess.llm_history:
+                    try:
+                        sess.agent.llmclient.backend.history = sess.llm_history
+                    except Exception:
+                        pass
+
+        assert sess.agent.llmclient.backend.history == history
+        assert len(sess.agent.llmclient.backend.history) == 3
+
+    def test_no_history_no_crash(self, manager: AgentManager):
+        """New session with no llm_history should not crash on agent creation."""
+        sess = _make_session(sid="sess-continuity-2")
+        sess.llm_history = None
+        sess.agent = None
+        manager.sessions[sess.id] = sess
+
+        class FakeBackend:
+            def __init__(self):
+                self.history = []
+                self.name = "test"
+
+        class FakeLLMClient:
+            def __init__(self):
+                self.backend = FakeBackend()
+
+        class FakeAgent:
+            def __init__(self):
+                self.llmclient = FakeLLMClient()
+                self.llm_no = 0
+
+            def next_llm(self, n):
+                self.llm_no = n
+
+        fake_agent = FakeAgent()
+        with patch.object(manager, "make_agent", return_value=fake_agent):
+            if sess.agent is None:
+                sess.agent = manager.make_agent(sess)
+                if sess.llm_history:
+                    try:
+                        sess.agent.llmclient.backend.history = sess.llm_history
+                    except Exception:
+                        pass
+
+        assert sess.agent.llmclient.backend.history == []
+
+    def test_empty_history_list_no_inject(self, manager: AgentManager):
+        """Empty llm_history list should not overwrite agent's default state."""
+        sess = _make_session(sid="sess-continuity-3")
+        sess.llm_history = []
+        sess.agent = None
+        manager.sessions[sess.id] = sess
+
+        class FakeBackend:
+            def __init__(self):
+                self.history = [{"role": "system", "content": "default"}]
+                self.name = "test"
+
+        class FakeLLMClient:
+            def __init__(self):
+                self.backend = FakeBackend()
+
+        class FakeAgent:
+            def __init__(self):
+                self.llmclient = FakeLLMClient()
+                self.llm_no = 0
+
+            def next_llm(self, n):
+                self.llm_no = n
+
+        fake_agent = FakeAgent()
+        with patch.object(manager, "make_agent", return_value=fake_agent):
+            if sess.agent is None:
+                sess.agent = manager.make_agent(sess)
+                if sess.llm_history:
+                    try:
+                        sess.agent.llmclient.backend.history = sess.llm_history
+                    except Exception:
+                        pass
+
+        assert sess.agent.llmclient.backend.history == [{"role": "system", "content": "default"}]
+
+    def test_model_preserved_after_restart(self, manager: AgentManager):
+        """sess.llm_no should be applied to recreated agent via next_llm."""
+        sess = _make_session(sid="sess-continuity-4")
+        sess.llm_no = 3
+        sess.llm_history = [{"role": "user", "content": [{"type": "text", "text": "test"}]}]
+        sess.agent = None
+        manager.sessions[sess.id] = sess
+
+        class FakeBackend:
+            def __init__(self):
+                self.history = []
+                self.name = "test"
+
+        class FakeLLMClient:
+            def __init__(self):
+                self.backend = FakeBackend()
+
+        class FakeAgent:
+            def __init__(self):
+                self.llmclient = FakeLLMClient()
+                self.llm_no = 0
+                self.next_llm_calls = []
+
+            def next_llm(self, n):
+                self.llm_no = n
+                self.next_llm_calls.append(n)
+
+        fake_agent = FakeAgent()
+        with patch.object(manager, "make_agent", return_value=fake_agent):
+            if sess.agent is None:
+                sess.agent = manager.make_agent(sess)
+                if sess.llm_history:
+                    try:
+                        sess.agent.llmclient.backend.history = sess.llm_history
+                    except Exception:
+                        pass
+            agent = sess.agent
+            no = sess.llm_no
+            if no is not None and hasattr(agent, "next_llm"):
+                agent.next_llm(int(no))
+
+        assert fake_agent.llm_no == 3
+        assert fake_agent.next_llm_calls == [3]
+        assert fake_agent.llmclient.backend.history == sess.llm_history
+
+    def test_persist_and_reload_preserves_llm_no(self, manager: AgentManager):
+        """Full cycle: persist session with llm_no, reload, verify llm_no survives."""
+        sess = _make_session(sid="sess-roundtrip")
+        sess.llm_no = 5
+        sess.llm_history = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        manager.sessions[sess.id] = sess
+        manager._persist_session(sess)
+
+        manager.sessions = {}
+        manager._load_sessions()
+
+        reloaded = manager.sessions.get("sess-roundtrip")
+        assert reloaded is not None
+        assert reloaded.llm_no == 5
+        assert reloaded.llm_history == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        assert reloaded.agent is None

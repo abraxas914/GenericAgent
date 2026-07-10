@@ -809,6 +809,11 @@ class AgentManager:
         try:
             if sess.agent is None:
                 sess.agent = self.make_agent(sess)
+                if sess.llm_history:
+                    try:
+                        sess.agent.llmclient.backend.history = sess.llm_history
+                    except Exception:
+                        pass
             agent = sess.agent
             # 模型取会话绑定 sess.llm_no,未绑定回退全局默认。切换走 set_session_model。
             no = sess.llm_no if sess.llm_no is not None else _global_default_llm_no()
