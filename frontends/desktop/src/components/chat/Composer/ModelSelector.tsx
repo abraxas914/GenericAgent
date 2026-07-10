@@ -61,6 +61,19 @@ function modelShortName(profile: ModelProfile): string {
   return slash >= 0 ? m.slice(slash + 1) : m || profileLabel(profile.name);
 }
 
+export function formatModelSelectionLabel(
+  profiles: ModelProfile[],
+  selectedNo: number,
+  runningNo: number | null | undefined,
+  isRunning: boolean,
+): string {
+  const selected = profiles[selectedNo];
+  const selectedLabel = selected ? modelShortName(selected) : '';
+  if (!isRunning || runningNo == null || runningNo === selectedNo) return selectedLabel;
+  const running = profiles[runningNo];
+  return running ? `${modelShortName(running)} → ${selectedLabel}` : selectedLabel;
+}
+
 function ProviderIcon({ apibase, model, size = 14 }: { apibase: string; model?: string; size?: number }) {
   const providerKey = providerFromModel(model || '') || providerKeyFromApibase(apibase);
   const iconDef = providerKey ? getProviderIcon(providerKey) : undefined;
@@ -113,7 +126,19 @@ function groupByProvider(profiles: ModelProfile[]): { groups: GroupedProfiles[];
   return { groups: Array.from(map.values()), mixins };
 }
 
-export function ModelSelector() {
+interface ModelSelectorProps {
+  selectedNo?: number;
+  runningNo?: number | null;
+  isRunning?: boolean;
+  onSelect?: (no: number) => void | Promise<void>;
+}
+
+export function ModelSelector({
+  selectedNo: controlledSelectedNo,
+  runningNo: controlledRunningNo,
+  isRunning: controlledIsRunning,
+  onSelect,
+}: ModelSelectorProps = {}) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [expandedMixin, setExpandedMixin] = useState<number | null>(null);
@@ -126,20 +151,29 @@ export function ModelSelector() {
 
   const profiles = useSettingsStore((s) => s.modelProfiles);
   const defaultModelNo = useSettingsStore((s) => s.defaultModelNo);
+  const liveModel = useSettingsStore((s) => s.liveModel);
   const sessionModelNo = useChatStore((s) => s.sessionModelNo);
+  const sessionStatus = useChatStore((s) => s.status);
   const selectSessionModel = useChatStore((s) => s.selectSessionModel);
 
-  const selectedNo = sessionModelNo ?? defaultModelNo;
+  const selectedNo = controlledSelectedNo ?? sessionModelNo ?? defaultModelNo;
+  const runningNo = controlledRunningNo !== undefined
+    ? controlledRunningNo
+    : liveModel?.runningLlmNo;
+  const isRunning = controlledIsRunning ?? sessionStatus === 'running';
   const isLoading = profiles.length === 0;
   const currentProfile = profiles[selectedNo];
 
   const chipLabel = useMemo(() => {
     if (!currentProfile) return t('model.menuLabel');
+    if (isRunning && runningNo != null && runningNo !== selectedNo) {
+      return formatModelSelectionLabel(profiles, selectedNo, runningNo, true);
+    }
     if (currentProfile.kind === 'mixin') {
       return t('model.aggregationShort');
     }
     return modelShortName(currentProfile);
-  }, [currentProfile, t]);
+  }, [currentProfile, isRunning, profiles, runningNo, selectedNo, t]);
 
   const { groups, mixins } = useMemo(() => groupByProvider(profiles), [profiles]);
 
@@ -167,9 +201,10 @@ export function ModelSelector() {
   }, []);
 
   const handleSelect = useCallback((idx: number) => {
-    selectSessionModel(idx);
+    if (onSelect) onSelect(idx);
+    else selectSessionModel(idx);
     setOpen(false);
-  }, [selectSessionModel]);
+  }, [onSelect, selectSessionModel]);
 
   useEffect(() => {
     if (open && searchRef.current) {

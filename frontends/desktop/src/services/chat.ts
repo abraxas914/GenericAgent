@@ -28,7 +28,7 @@ export interface PollResult {
   partial?: Message;
   status: 'running' | 'idle';
   plan?: unknown;
-  model?: { isMixin: boolean; current: string; llmNo?: number };
+  model?: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null };
 }
 
 function useMock(): boolean {
@@ -200,7 +200,7 @@ export async function cancelGeneration(sessionId: string): Promise<void> {
 export async function setSessionModel(
   sessionId: string,
   llmNo: number,
-): Promise<{ ok: boolean; llmNo: number; model: { isMixin: boolean; current: string; llmNo?: number } }> {
+): Promise<{ ok: boolean; llmNo: number; model: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null } }> {
   const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/model`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

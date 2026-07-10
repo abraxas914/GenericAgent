@@ -18,11 +18,12 @@ interface Props {
   isGenerating: boolean;
   editorRef?: React.RefObject<RichEditorHandle | null>;
   hideStatusStack?: boolean;
+  modelControl?: React.ReactNode | null;
 }
 
 let fileIdCounter = 0;
 
-export function Composer({ onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack }: Props) {
+export function Composer({ onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
   const internalEditorRef = useRef<RichEditorHandle>(null);
   const editorRef = (externalEditorRef ?? internalEditorRef) as React.RefObject<RichEditorHandle>;
   const composerRef = useRef<HTMLDivElement>(null);
@@ -282,7 +283,7 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
             <SkillPanel onSelect={handleSkillSelect} />
           </div>
           <div data-slot="composer-toolbar-right">
-            <ModelSelector />
+            {modelControl === undefined ? <ModelSelector /> : modelControl}
             <PrimaryCTA state={ctaState} onSend={handleSend} onStop={onStop} onQueue={handleSend} />
           </div>
         </div>

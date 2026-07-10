@@ -15,6 +15,38 @@ export interface ServiceInfo {
   warningKey?: string;
 }
 
+export type ModelFallbackReason =
+  | 'ui_default'
+  | 'invalid_configured'
+  | 'configured_unavailable'
+  | 'first_available'
+  | 'no_models'
+  | null;
+
+export interface ConductorModelState {
+  configured: number | null;
+  effective: number | null;
+  fallbackReason: ModelFallbackReason;
+}
+
+export async function fetchConductorModel(): Promise<ConductorModelState> {
+  const res = await fetch(`${BRIDGE_BASE}/services/conductor/model`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data.model;
+}
+
+export async function saveConductorModel(llmNo: number): Promise<ConductorModelState> {
+  const res = await fetch(`${BRIDGE_BASE}/services/conductor/model`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ llmNo }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  return data.model;
+}
+
 export async function fetchServicesPanel(): Promise<ServiceInfo[]> {
   const res = await fetch(`${BRIDGE_BASE}/services/panel`);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
