@@ -1,7 +1,7 @@
 """Unit tests for model hot-switching within a session.
 
-Tests the contract: set_session_model changes llm_no + calls next_llm without
-destroying session state (messages, context, agent).
+Tests the contract: set_session_model changes llm_no without destroying session
+state. Idle agents switch immediately; running turns defer the new client.
 Run: pytest frontends/tests/test_bridge_model_switch.py -v
 """
 
@@ -36,7 +36,7 @@ def simulate_set_session_model(sess: FakeSession, llm_no: int) -> dict:
     """Replicate set_session_model logic from desktop_bridge.py:1105-1118."""
     import time
     sess.llm_no = int(llm_no)
-    if sess.agent is not None and hasattr(sess.agent, "next_llm"):
+    if sess.status != "running" and sess.agent is not None and hasattr(sess.agent, "next_llm"):
         try:
             sess.agent.next_llm(int(llm_no))
         except Exception:
@@ -104,7 +104,8 @@ class TestModelHotSwitch:
         sess.status = "running"
         simulate_set_session_model(sess, 3)
         assert sess.status == "running"
-        assert agent.next_llm_calls == [3]
+        assert sess.llm_no == 3
+        assert agent.next_llm_calls == []
 
     def test_multiple_switches(self):
         agent = FakeAgent()

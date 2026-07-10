@@ -206,6 +206,27 @@ class TestLoadSessionsCorruptFile:
         assert "sess-ok" in manager.sessions
         assert len(manager.sessions) == 1
 
+    def test_internal_tui_sessions_are_not_loaded(self, manager: AgentManager):
+        """Conductor/TUI worker artifacts must not enter the desktop session registry."""
+        sessions_dir = manager._sessions_dir
+        for sid in ("sess-visible", "tui_worker_hidden"):
+            (sessions_dir / f"{sid}.json").write_text(
+                json.dumps({
+                    "id": sid,
+                    "title": sid,
+                    "messages": [],
+                    "msg_seq": 0,
+                    "cwd": "/tmp",
+                    "created_at": time.time(),
+                    "updated_at": time.time(),
+                }),
+                encoding="utf-8",
+            )
+
+        manager._load_sessions()
+
+        assert set(manager.sessions) == {"sess-visible"}
+
 
 class TestLoadSessionsMissingDir:
     """Verify graceful handling when sessions directory does not exist."""
@@ -228,6 +249,32 @@ class TestLoadSessionsMissingDir:
 
         mgr._load_sessions()
         assert mgr.sessions == {}
+
+
+class TestImportSessionsFiltersInternalArtifacts:
+    def test_import_skips_tui_sessions(self, manager: AgentManager, tmp_path: Path):
+        source = tmp_path / "source"
+        sessions_dir = source / "temp" / "desktop_sessions"
+        sessions_dir.mkdir(parents=True)
+        for sid in ("sess-imported", "tui_internal"):
+            (sessions_dir / f"{sid}.json").write_text(
+                json.dumps({
+                    "id": sid,
+                    "title": sid,
+                    "messages": [],
+                    "msg_seq": 0,
+                    "cwd": "/tmp",
+                    "created_at": time.time(),
+                    "updated_at": time.time(),
+                }),
+                encoding="utf-8",
+            )
+
+        result = manager.import_sessions(str(source))
+
+        assert set(manager.sessions) == {"sess-imported"}
+        assert result["sessionsAdded"] == 1
+        assert result["sessionsSkipped"] == 1
 
 
 class TestPersistAtomicNoDataLoss:
@@ -449,3 +496,160 @@ class TestSessionContinuityAfterRestart:
         assert reloaded.llm_no == 5
         assert reloaded.llm_history == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
         assert reloaded.agent is None
+
+
+class TestDeferredSessionModelSwitch:
+    class FakeBackend:
+        name = "model-a"
+        history = []
+
+    class FakeClient:
+        backend = None
+
+        def __init__(self):
+            self.backend = TestDeferredSessionModelSwitch.FakeBackend()
+
+    class FakeAgent:
+        def __init__(self):
+            self.llm_no = 0
+            self.llmclient = TestDeferredSessionModelSwitch.FakeClient()
+            self.next_llm_calls: list[int] = []
+
+        def next_llm(self, no: int):
+            self.next_llm_calls.append(no)
+            self.llm_no = no
+            self.llmclient.backend.name = f"model-{no}"
+
+    def test_running_turn_keeps_current_client_and_defers_new_binding(self, manager: AgentManager):
+        sess = _make_session("sess-running-switch")
+        sess.status = "running"
+        sess.llm_no = 0
+        sess.running_llm_no = 0
+        sess.running_model = "model-a"
+        sess.agent = self.FakeAgent()
+        manager.sessions[sess.id] = sess
+
+        result = manager.set_session_model(sess.id, 2)
+
+        assert sess.llm_no == 2
+        assert sess.agent.next_llm_calls == []
+        assert result["model"]["llmNo"] == 2
+        assert result["model"]["runningLlmNo"] == 0
+        assert result["model"]["runningModel"] == "model-a"
+
+    def test_idle_session_switches_live_client_immediately(self, manager: AgentManager):
+        sess = _make_session("sess-idle-switch")
+        sess.status = "idle"
+        sess.llm_no = 0
+        sess.agent = self.FakeAgent()
+        manager.sessions[sess.id] = sess
+
+        manager.set_session_model(sess.id, 2)
+
+        assert sess.agent.next_llm_calls == [2]
+
+    def test_turn_captures_and_clears_running_model(self, manager: AgentManager):
+        import queue
+
+        sess = _make_session("sess-running-snapshot")
+        sess.llm_no = 2
+        fake_agent = self.FakeAgent()
+        observed: list[tuple[int | None, str | None]] = []
+
+        def put_task(_prompt, images=None):
+            observed.append((sess.running_llm_no, sess.running_model))
+            q = queue.Queue()
+            q.put({"done": "ok", "outputs": ["ok"]})
+            return q
+
+        fake_agent.put_task = put_task
+        fake_agent.inc_out = True
+        sess.agent = fake_agent
+        manager.sessions[sess.id] = sess
+        plan_state = sys.modules["plan_state"]
+        with patch.object(plan_state, "sync_plan_path_from_text", lambda *args: None, create=True):
+            manager.run_agent_turn(sess, "hello")
+
+        assert observed == [(2, "model-2")]
+        assert sess.running_llm_no is None
+        assert sess.running_model is None
+        assert sess.status == "idle"
+
+    def test_concurrent_sessions_keep_independent_next_model_bindings(self, manager: AgentManager):
+        sessions = []
+        for i in range(10):
+            sess = _make_session(f"sess-concurrent-{i}")
+            sess.status = "running"
+            sess.llm_no = 0
+            sess.agent = self.FakeAgent()
+            manager.sessions[sess.id] = sess
+            sessions.append(sess)
+
+        threads = [
+            threading.Thread(target=manager.set_session_model, args=(sess.id, i + 1))
+            for i, sess in enumerate(sessions)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=2)
+
+        assert [sess.llm_no for sess in sessions] == list(range(1, 11))
+        assert all(sess.agent.next_llm_calls == [] for sess in sessions)
+
+
+class TestConductorModelConfigResolution:
+    def test_configured_model_wins(self):
+        state = _mod._resolve_conductor_model_state(
+            {"conductor": {"llmNo": 2}, "ui": {"llmNo": 1}},
+            profile_count=4,
+        )
+        assert state == {"configured": 2, "effective": 2, "fallbackReason": None}
+
+    def test_missing_config_uses_ui_default(self):
+        state = _mod._resolve_conductor_model_state(
+            {"ui": {"llmNo": 1}},
+            profile_count=4,
+        )
+        assert state == {"configured": None, "effective": 1, "fallbackReason": "ui_default"}
+
+    def test_out_of_range_config_never_wraps(self):
+        state = _mod._resolve_conductor_model_state(
+            {"conductor": {"llmNo": 99}, "ui": {"llmNo": 1}},
+            profile_count=4,
+        )
+        assert state == {"configured": 99, "effective": 1, "fallbackReason": "invalid_configured"}
+
+    def test_no_valid_config_falls_back_to_first_profile(self):
+        state = _mod._resolve_conductor_model_state(
+            {"conductor": {"llmNo": "bad"}, "ui": {"llmNo": 99}},
+            profile_count=4,
+        )
+        assert state == {"configured": None, "effective": 0, "fallbackReason": "first_available"}
+
+    def test_no_profiles_has_no_effective_model(self):
+        state = _mod._resolve_conductor_model_state({}, profile_count=0)
+        assert state == {"configured": None, "effective": None, "fallbackReason": "no_models"}
+
+
+class TestConductorModelHandlers:
+    class Request:
+        def __init__(self, body: dict):
+            self._body = body
+            self.can_read_body = True
+
+        async def json(self):
+            return self._body
+
+    def test_post_rejects_out_of_range_without_writing(self, manager: AgentManager, tmp_path: Path):
+        import asyncio
+
+        settings = tmp_path / "settings.json"
+        settings.write_text(json.dumps({"ui": {"llmNo": 1}}), encoding="utf-8")
+        manager.list_model_profiles = lambda: [{"id": i} for i in range(4)]
+        with patch.object(_mod, "manager", manager), patch.object(_mod, "_SETTINGS", settings):
+            response = asyncio.run(_mod.conductor_model_save_handler(self.Request({"llmNo": 99})))
+
+        assert response.status == 400
+        assert json.loads(response.text)["error"] == "model_out_of_range"
+        assert json.loads(settings.read_text(encoding="utf-8")) == {"ui": {"llmNo": 1}}
