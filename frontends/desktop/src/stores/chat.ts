@@ -120,7 +120,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         }));
         if (result.model) {
           useSettingsStore.getState().setLiveModel(result.model);
-          if (result.model.llmNo != null) {
+          if (result.model.llmNo != null && result.status !== 'running') {
             set({ sessionModelNo: result.model.llmNo });
           }
         }
@@ -242,7 +242,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     sessionModelNo: null,
 
     async newSession() {
-      set({ activeSessionId: null, messages: [], status: 'idle', turnStartedAt: null, pendingQueue: [] });
+      set({ activeSessionId: null, messages: [], status: 'idle', turnStartedAt: null, pendingQueue: [], sessionModelNo: null });
     },
 
     async sendMessage(text: string, opts?: SendOptions) {
@@ -251,6 +251,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         activeSessionId = await createSession();
         set({ activeSessionId });
         get().loadSessions();
+        const pendingModel = get().sessionModelNo;
+        if (pendingModel != null) {
+          apiSetSessionModel(activeSessionId, pendingModel).catch(() => {});
+        }
       }
       if (status === 'running') {
         set((s) => ({ pendingQueue: [...s.pendingQueue, { text, opts }] }));
@@ -343,9 +347,9 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     async selectSessionModel(llmNo: number) {
       const { activeSessionId } = get();
-      if (!activeSessionId) return;
       const prev = get().sessionModelNo;
       set({ sessionModelNo: llmNo });
+      if (!activeSessionId) return;
       try {
         const res = await apiSetSessionModel(activeSessionId, llmNo);
         if (res.model) {

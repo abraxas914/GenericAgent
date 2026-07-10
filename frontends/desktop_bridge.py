@@ -653,13 +653,13 @@ class AgentManager:
     def _live_model(sess: Session) -> Optional[dict]:
         """该会话 agent 当前真正在用的模型(渠道组会随故障转移变化)。
         agent 还没建(没跑过 turn)时返回静态绑定信息,前端据 llmNo 回显选择器。
-        llmNo: agent 存活取 agent.llm_no(权威运行态),否则取 sess.llm_no(可能 None)。"""
+        llmNo: 始终以 sess.llm_no 为权威(用户选择),agent.llm_no 在初始化窗口可能滞后。"""
         ag = getattr(sess, "agent", None)
         if ag is None:
             return {"current": None, "isMixin": False, "llmNo": sess.llm_no}
         try:
             back = ag.llmclient.backend
-            live_no = getattr(ag, "llm_no", sess.llm_no)
+            live_no = sess.llm_no if sess.llm_no is not None else getattr(ag, "llm_no", 0)
             if "Mixin" in type(back).__name__:
                 return {"current": back.current_name, "isMixin": True, "llmNo": live_no}
             return {"current": back.name, "isMixin": False, "llmNo": live_no}
