@@ -1,11 +1,12 @@
 use std::process::{Command, Child, Stdio};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::sync::{LazyLock, Mutex};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 use std::thread;
 use std::path::PathBuf;
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
 use tauri::{Emitter, Manager};
 use serde::{Deserialize, Serialize};
 
@@ -193,6 +194,34 @@ static BOOTSTRAP_STATE: LazyLock<Mutex<BootstrapSnapshot>> = LazyLock::new(|| {
     })
 });
 
+fn write_e2e_bootstrap_snapshot(snapshot: &BootstrapSnapshot) {
+    let Some(report_dir) = std::env::var_os("GA_DESKTOP_E2E_REPORT_DIR") else {
+        return;
+    };
+    let report_dir = PathBuf::from(report_dir);
+    if report_dir.as_os_str().is_empty() {
+        return;
+    }
+    if std::fs::create_dir_all(&report_dir).is_err() {
+        return;
+    }
+
+    let Ok(line) = serde_json::to_string(snapshot) else {
+        return;
+    };
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(report_dir.join("bootstrap-events.jsonl"))
+    {
+        let _ = writeln!(file, "{line}");
+    }
+
+    if let Ok(json) = serde_json::to_vec_pretty(snapshot) {
+        let _ = std::fs::write(report_dir.join("bootstrap-latest.json"), json);
+    }
+}
+
 fn snapshot_update(
     app_handle: Option<&tauri::AppHandle>,
     update: impl FnOnce(&mut BootstrapSnapshot),
@@ -206,6 +235,7 @@ fn snapshot_update(
     if let Some(app_handle) = app_handle {
         let _ = app_handle.emit("bootstrap", snapshot.clone());
     }
+    write_e2e_bootstrap_snapshot(&snapshot);
     snapshot
 }
 
