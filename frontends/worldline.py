@@ -1081,10 +1081,9 @@ def render_native_history(history, ts=None):
     `_parse_native_history(_pairs(render_native_history(h))) == h`.
 
     Byte-for-byte matches llmcore's `_write_llm_log` for the tool backend:
-    Prompt = `json.dumps(merged, ensure_ascii=False, indent=2)`; Response =
-    `str(content_blocks)` which for a list equals `repr(...)` (survives
-    True/False/None that JSON would emit as true/false/null and break
-    `ast.literal_eval`). Only complete (user, assistant) pairs are emitted."""
+    Prompt/Response each put one content block per line, with their wrappers
+    attached to the first/last lines. Response keeps Python repr so
+    True/False/None survive `ast.literal_eval`. Only complete pairs are emitted."""
     ts = ts or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     out, i, n = [], 0, len(history)
     while i < n:
@@ -1092,8 +1091,13 @@ def render_native_history(history, ts=None):
         if isinstance(u, dict) and u.get('role') == 'user' and i + 1 < n:
             a = history[i + 1]
             if isinstance(a, dict) and a.get('role') == 'assistant':
-                out.append(f"=== Prompt === {ts}\n{json.dumps(u, ensure_ascii=False, indent=2)}\n\n")
-                out.append(f"=== Response === {ts}\n{a.get('content')!r}\n\n")
+                prompt_blocks = u.get('content', [])
+                prompt_raw = '{"role": "user", "content": [\n' + ",\n".join(
+                    json.dumps(b, ensure_ascii=False) for b in prompt_blocks) + "]}"
+                out.append(f"=== Prompt === {ts}\n{prompt_raw}\n\n")
+                blocks = a.get('content', [])
+                raw = "[" + ",\n".join(repr(b) for b in blocks) + "]"
+                out.append(f"=== Response === {ts}\n{raw}\n\n")
                 i += 2
                 continue
         i += 1

@@ -279,7 +279,8 @@ def render_main_stream(prompt=None):
             b = get_controller()
             b['obj'] = st.session_state.get('loop_prompt_input', ''); b['ready'] = False; b['ev'].set()
 
-if "messages" not in st.session_state: st.session_state.messages = []
+if not hasattr(agent, "_ui_messages"): agent._ui_messages = st.session_state.get("messages", [])
+if "messages" not in st.session_state: st.session_state.messages = agent._ui_messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         # 用 slot=st.empty() + with slot.container(): ... 的外壳，DOM 路径和流式渲染完全一致，跨 rerun 对齐
