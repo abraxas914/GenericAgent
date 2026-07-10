@@ -123,14 +123,3 @@
   flex: 1;
   min-height: 200px;
 }
-
-.ga-log-pre {
-  margin: 0;
-  padding: 16px 0;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--semi-color-text-1);
-}

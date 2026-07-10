@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { Modal, Empty, Spin } from '@douyinfe/semi-ui';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Modal, Spin } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import { useServicesStore } from '../../stores/services';
+import { LogTail } from '../log';
 
 interface Props {
   serviceId: string | null;
@@ -13,26 +14,18 @@ const REFRESH_INTERVAL = 3000;
 export function ChannelLogModal({ serviceId, onClose }: Props) {
   const { t } = useI18n();
   const fetchLogs = useServicesStore((s) => s.fetchLogs);
-  const [lines, setLines] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const preRef = useRef<HTMLPreElement>(null);
+  const [lines, setLines] = useState<string[] | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadLogs = useCallback(async () => {
     if (!serviceId) return;
-    setLoading(true);
     const result = await fetchLogs(serviceId);
     setLines(result);
-    setLoading(false);
-    requestAnimationFrame(() => {
-      if (preRef.current) {
-        preRef.current.scrollTop = preRef.current.scrollHeight;
-      }
-    });
   }, [serviceId, fetchLogs]);
 
   useEffect(() => {
     if (serviceId) {
+      setLines(null);
       loadLogs();
       timerRef.current = setInterval(loadLogs, REFRESH_INTERVAL);
     }
@@ -55,16 +48,12 @@ export function ChannelLogModal({ serviceId, onClose }: Props) {
       closeOnEsc
       className="ga-log-dialog"
     >
-      {loading && lines.length === 0 ? (
+      {lines === null ? (
         <div className="ga-services-loading" style={{ padding: 24 }}>
           <Spin />
         </div>
-      ) : lines.length === 0 ? (
-        <Empty description={t('ch.logEmpty')} style={{ padding: 32 }} />
       ) : (
-        <pre ref={preRef} className="ga-log-pre">
-          {lines.join('\n')}
-        </pre>
+        <LogTail lines={lines} emptyLabel={t('ch.logEmpty')} className="ga-log-modal-body" />
       )}
     </Modal>
   );

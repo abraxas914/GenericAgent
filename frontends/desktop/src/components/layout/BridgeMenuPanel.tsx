@@ -1,9 +1,10 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useMemo } from 'react';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import { useConductorStore } from '../../stores/conductor';
 import { useAppStore } from '../../stores/app';
 import { useI18n } from '../../i18n';
 import { getBridgeActivity, onBridgeActivityChange } from '../../stores/bridgeActivity';
+import { LogView } from '../log';
 
 type StatusTone = 'good' | 'warn' | 'bad' | 'muted';
 
@@ -52,6 +53,9 @@ function GridIcon() {
   );
 }
 
+const NOISE_RE = /\bws (?:ping|pong|accepted|closed)\b/i;
+const TS_RE = /^\[\d{2}:\d{2}:\d{2}\]\s*/;
+
 interface Props {
   onClose: () => void;
 }
@@ -62,8 +66,12 @@ export function BridgeMenuPanel({ onClose }: Props) {
   const conductorStatus = useConductorStore((s) => s.connectionStatus);
   const setPage = useAppStore((s) => s.setPage);
   const panelRef = useRef<HTMLDivElement>(null);
-  const logRef = useRef<HTMLDivElement>(null);
   const [logs, setLogs] = useState<string[]>(() => getBridgeActivity());
+
+  const cleaned = useMemo(() =>
+    logs.filter(l => !NOISE_RE.test(l)).map(l => l.replace(TS_RE, '')),
+    [logs]
+  );
 
   // Subscribe to shared activity buffer
   useEffect(() => {
@@ -72,12 +80,6 @@ export function BridgeMenuPanel({ onClose }: Props) {
       setLogs(getBridgeActivity());
     });
   }, []);
-
-  useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [logs]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -153,10 +155,10 @@ export function BridgeMenuPanel({ onClose }: Props) {
             {t('bridge.viewAllLogs')}
           </button>
         </div>
-        {logs.length > 0 ? (
-          <div ref={logRef} className="ga-bridge-panel-log">
-            {logs.join('\n')}
-          </div>
+        {cleaned.length > 0 ? (
+          <LogView className="ga-bridge-panel-log">
+            {cleaned.join('\n')}
+          </LogView>
         ) : (
           <div className="ga-bridge-panel-log-empty">{t('bridge.noActivity')}</div>
         )}

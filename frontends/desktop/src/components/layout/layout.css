@@ -883,19 +883,12 @@
   color: var(--foreground);
 }
 
-/* Log tail view */
+/* Log tail view — styling moved to components/log/log.css, class kept for spacing */
 .ga-bridge-panel-log {
   margin-top: 0.25rem;
   max-height: 8rem;
-  overflow-y: auto;
-  font-family: var(--font-mono);
-  font-size: 0.6875rem;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-all;
-  color: var(--ui-text-tertiary);
-  scrollbar-width: thin;
-  user-select: text;
+  border: none;
+  padding: 0;
 }
 
 .ga-bridge-panel-log-empty {
