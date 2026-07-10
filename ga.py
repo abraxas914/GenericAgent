@@ -400,6 +400,7 @@ class GenericAgentHandler(BaseHandler):
                 with open(path, 'a' if mode == "append" else 'w', encoding="utf-8") as f: f.write(new_content)
             yield f"[Status] ✅ {mode.capitalize()} 成功 ({len(new_content)} bytes)\n"
             next_prompt = self._get_anchor_prompt(skip=args.get('_index', 0) > 0)
+            if len(new_content) > 5000: next_prompt = "\n[SYSTEM TIPS] WRITE TOO LONG! MUST RECHECK HALLUCINATIONS! SMALL WRITES OR PATCHES NEXT TIME!"
             return StepOutcome({"status": "success", 'writed_bytes': len(new_content)}, next_prompt=next_prompt)
         except Exception as e:
             yield f"[Status] ❌ 写入异常: {str(e)}\n"
@@ -427,6 +428,7 @@ class GenericAgentHandler(BaseHandler):
     
     def export_history(self, fn): 
         with open(fn, 'w', encoding='utf-8') as f: json.dump(self.parent.llmclient.backend.history, f, ensure_ascii=False)
+    def enter_project_mode(self, name): self.parent._ga_project_mode_name = name
     def _in_plan_mode(self): return self.working.get('in_plan_mode')
     def _exit_plan_mode(self): self.working.pop('in_plan_mode', None)
     def enter_plan_mode(self, plan_path): 
@@ -539,9 +541,9 @@ class GenericAgentHandler(BaseHandler):
     def _get_anchor_prompt(self, skip=False):
         if skip: return "\n"
         h = self.history_info; W = 30
-        earlier = f'<earlier_context>\n{self._fold_earlier(h[:-W])}\n</earlier_context>\n' if len(h) > W else ""
-        h_str = "\n".join(h[-W:])
-        prompt = f"\n### [WORKING MEMORY]\n{earlier}<history>\n{h_str}\n</history>"
+        earlier = f'<earlier_context>\n{self._fold_earlier(h[:-W])}\n</earlier_context>\n' if len(h) > W and self.current_turn % 4 == 1 else ""
+        history = f'<history>\n{"\n".join(h[-W:])}\n</history>' if self.current_turn % 2 == 1 else ""
+        prompt = f"\n### [WORKING MEMORY]\n{earlier}{history}"
         prompt += f"\nCurrent turn: {self.current_turn}\n"
         if self.working.get('key_info'): prompt += f"\n<key_info>{self.working.get('key_info')}</key_info>"
         if self.working.get('related_sop'): prompt += f"\n有不清晰的地方请再次读取{self.working.get('related_sop')}"
