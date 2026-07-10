@@ -44,47 +44,109 @@ def _client_usable(agent: "GenericAgent") -> bool:
     return hasattr(getattr(agent, "llmclient", None), "backend")
 
 
-def _fallback_usable_model(agent: "GenericAgent") -> None:
-    for i, client in enumerate(getattr(agent, "llmclients", []) or []):
-        if not hasattr(client, "backend"):
-            continue
-        agent.llm_no = i
-        agent.llmclient = client
+def _parse_model_no(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _usable_model(agent: "GenericAgent", no: Optional[int]) -> bool:
+    clients = getattr(agent, "llmclients", []) or []
+    return no is not None and 0 <= no < len(clients) and hasattr(clients[no], "backend")
+
+
+def _activate_model(agent: "GenericAgent", no: int) -> None:
+    if not _usable_model(agent, no):
+        raise ValueError(f"llm index out of range or unavailable: {no}")
+    agent.next_llm(no)
+
+
+def _runtime_model_state(agent: "GenericAgent", configured: Optional[int], reason: Optional[str]) -> dict:
+    effective = getattr(agent, "llm_no", None) if _client_usable(agent) else None
+    current = None
+    if _client_usable(agent):
         with suppress(Exception):
-            agent.llmclient.last_tools = ''
-        return
+            current = str(agent.llmclient.backend.name)
+    return {"configured": configured, "effective": effective,
+            "fallbackReason": reason, "current": current}
 
 
-def _apply_desktop_model(agent: "GenericAgent") -> None:
+def _apply_desktop_model(agent: "GenericAgent") -> dict:
     """Make the conductor's session reflect the current desktop config before a task:
     switch to its bound model if one is set, otherwise still refresh sessions from
     mykey so live key/model edits (e.g. importing keys) take effect without a restart.
     next_llm() already reloads internally; the no-bound-model branch must reload too,
     or a conductor started on an empty/stale mykey would never pick up imported keys."""
-    no = _conductor_llm_no()
-    if no is not None:
-        try:
-            agent.next_llm(int(no))
-        except Exception as e:
-            print(f"[conductor] failed to apply conductor model #{no}: {e}", file=sys.stderr)
-    else:
+    doc = _settings_doc()
+    conductor_cfg = doc.get("conductor") if isinstance(doc.get("conductor"), dict) else {}
+    ui_cfg = doc.get("ui") if isinstance(doc.get("ui"), dict) else {}
+    raw_configured = conductor_cfg.get("llmNo")
+    configured = _parse_model_no(raw_configured)
+    ui_default = _parse_model_no(ui_cfg.get("llmNo"))
+
+    try:
         agent.load_llm_sessions()  # mtime-guarded; rebuilds only when mykey changed
-    if not _client_usable(agent):
-        print("[conductor] selected model is unavailable; falling back to first usable model", file=sys.stderr)
-        _fallback_usable_model(agent)
+    except Exception as e:
+        print(f"[conductor] failed to refresh model sessions: {e}", file=sys.stderr)
+
+    clients = getattr(agent, "llmclients", []) or []
+
+    configured_failed = False
+    if _usable_model(agent, configured):
+        try:
+            _activate_model(agent, configured)
+            return _runtime_model_state(agent, configured, None)
+        except Exception as e:
+            configured_failed = True
+            print(f"[conductor] configured model #{configured} is unavailable: {e}", file=sys.stderr)
+
+    if _usable_model(agent, ui_default):
+        if raw_configured is None:
+            reason = "ui_default"
+        elif configured_failed:
+            reason = "configured_unavailable"
+        elif configured is not None:
+            reason = "configured_unavailable" if 0 <= configured < len(clients) else "invalid_configured"
+        else:
+            reason = "invalid_configured"
+        try:
+            _activate_model(agent, ui_default)
+            return _runtime_model_state(agent, configured, reason)
+        except Exception as e:
+            print(f"[conductor] UI default model #{ui_default} is unavailable: {e}", file=sys.stderr)
+
+    for i, client in enumerate(clients):
+        if hasattr(client, "backend"):
+            try:
+                _activate_model(agent, i)
+                return _runtime_model_state(agent, configured, "first_available")
+            except Exception:
+                continue
+
+    print("[conductor] no usable model is available", file=sys.stderr)
+    return {"configured": configured, "effective": None,
+            "fallbackReason": "no_models", "current": None}
 
 
 def _select_llm(agent: "GenericAgent", llm: Any) -> bool:
     if llm is None or str(llm).strip() == "": return False
     q = str(llm).strip()
-    if isinstance(llm, int) or q.isdigit(): agent.next_llm(int(q)); return True
+    if isinstance(llm, int) or q.isdigit():
+        agent.load_llm_sessions()
+        _activate_model(agent, int(q))
+        return True
     q = q.lower(); agent.load_llm_sessions()
     for i, c in enumerate(agent.llmclients):
+        if not hasattr(c, "backend"):
+            continue
         vals = []
         for fn in (lambda: agent.get_llm_name(c), lambda: agent.get_llm_name(c, model=True), lambda: c.backend.name, lambda: c.backend.model):
             try: vals.append(str(fn()).lower())
             except Exception: pass
-        if any(q in v for v in vals): agent.next_llm(i); return True
+        if any(q in v for v in vals): _activate_model(agent, i); return True
     raise ValueError(f"llm not found: {llm}")
 
 
@@ -348,6 +410,24 @@ class Conductor:
         self.agent: Optional[GenericAgent] = None
         self.started = False
         self.log: list = []   
+        self._model_lock = threading.RLock()
+        self._model_state = {
+            "configured": None,
+            "effective": None,
+            "fallbackReason": "no_models",
+            "current": None,
+            "running": False,
+        }
+
+    def model_snapshot(self) -> dict:
+        with self._model_lock:
+            return dict(self._model_state)
+
+    def _publish_model_state(self, state: dict, running: bool) -> None:
+        snapshot = {**state, "running": bool(running)}
+        with self._model_lock:
+            self._model_state = snapshot
+        schedule_broadcast({"type": "model", "model": snapshot})
 
     def notify(self, event: dict): self.inbox.put(event)
 
@@ -425,9 +505,13 @@ API: {base}；requests，GET /readme查用法，GET /chat读未读对话，GET /
                 prompt = self._build_prompt(events)
                 # Follow the desktop-selected model live: re-read before each task
                 # so switching models in the UI takes effect without restarting.
-                _apply_desktop_model(self.agent)
-                dq = self.agent.put_task(prompt, source="conductor")
-                self._drain(dq, events)
+                model_state = _apply_desktop_model(self.agent)
+                self._publish_model_state(model_state, running=True)
+                try:
+                    dq = self.agent.put_task(prompt, source="conductor")
+                    self._drain(dq, events)
+                finally:
+                    self._publish_model_state(model_state, running=False)
             except Exception as e: print(f"Conductor error: {e}")
 
     def start(self): threading.Thread(target=self._run, name="conductor-loop", daemon=True).start()
@@ -549,7 +633,9 @@ async def websocket(ws: WebSocket):
     ws_clients.add(ws)
     try:
         running = any(s.status == "running" for s in pool.subagents.values())
-        await ws.send_json({"type": "hello", "subagents": pool.snapshot(), "chat": chat_messages, "log": conductor.log, "running": running})
+        await ws.send_json({"type": "hello", "subagents": pool.snapshot(), "chat": chat_messages,
+                            "log": conductor.log, "running": running,
+                            "model": conductor.model_snapshot()})
         while True:
             data = await ws.receive_json()
             msg = (data.get("msg") or "").strip()

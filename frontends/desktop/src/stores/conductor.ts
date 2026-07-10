@@ -1,5 +1,10 @@
 import { create } from 'zustand';
 import { CONDUCTOR_WS_URL, CONDUCTOR_BASE } from '../services/constants';
+import {
+  fetchConductorModel,
+  saveConductorModel,
+  type ConductorModelState,
+} from '../services/services-api';
 const RECON_BASE_MS = 1200;
 const RECON_MAX_MS = 30_000;
 const FAIL_MAX = 5;
@@ -27,16 +32,25 @@ export interface Worker {
   updatedAt?: number;
 }
 
+export interface ConductorRuntimeModel extends ConductorModelState {
+  current: string | null;
+  running: boolean;
+}
+
 interface ConductorState {
   connectionStatus: ConductorConnectionStatus;
   messages: ConductorMessage[];
   workers: Worker[];
   conductorTyping: boolean;
+  modelConfig: ConductorModelState | null;
+  runtimeModel: ConductorRuntimeModel | null;
 
   connect: () => void;
   disconnect: () => void;
   sendMessage: (msg: string, files?: ConductorMessage['files'], images?: ConductorMessage['images']) => void;
   killWorker: (id: string) => Promise<void>;
+  loadModel: () => Promise<void>;
+  selectModel: (llmNo: number) => Promise<void>;
 }
 
 function mapStatus(status: string, reply: string): WorkerStatus {
@@ -103,7 +117,12 @@ export const useConductorStore = create<ConductorState>((set, get) => {
         images: (raw.images as ConductorMessage['images']) || [],
       }));
       const workers = ((data.subagents as Record<string, unknown>[]) || []).map(normalizeWorker);
-      set({ messages: chat, workers, conductorTyping: !!data.running });
+      set({
+        messages: chat,
+        workers,
+        conductorTyping: !!data.running,
+        runtimeModel: (data.model as ConductorRuntimeModel | undefined) ?? null,
+      });
     } else if (data.type === 'subagents') {
       const workers = ((data.items as Record<string, unknown>[]) || []).map(normalizeWorker);
       set({ workers });
@@ -137,6 +156,8 @@ export const useConductorStore = create<ConductorState>((set, get) => {
         const conductorTyping = newMsg.role === 'conductor' ? false : s.conductorTyping;
         return { messages: [...s.messages, newMsg], conductorTyping };
       });
+    } else if (data.type === 'model') {
+      set({ runtimeModel: data.model as ConductorRuntimeModel });
     }
   }
 
@@ -145,6 +166,8 @@ export const useConductorStore = create<ConductorState>((set, get) => {
     messages: [],
     workers: [],
     conductorTyping: false,
+    modelConfig: null,
+    runtimeModel: null,
 
     connect() {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -167,6 +190,7 @@ export const useConductorStore = create<ConductorState>((set, get) => {
         everConnected = true;
         failCount = 0;
         set({ connectionStatus: 'ready' });
+        get().loadModel();
       };
 
       sock.onclose = () => {
@@ -201,7 +225,7 @@ export const useConductorStore = create<ConductorState>((set, get) => {
       }
       failCount = 0;
       everConnected = false;
-      set({ connectionStatus: 'offline', messages: [], workers: [], conductorTyping: false });
+      set({ connectionStatus: 'offline', messages: [], workers: [], conductorTyping: false, runtimeModel: null });
     },
 
     sendMessage(msg, files, images) {
@@ -231,6 +255,22 @@ export const useConductorStore = create<ConductorState>((set, get) => {
           body: JSON.stringify({ action: 'kill' }),
         });
       } catch {}
+    },
+
+    async loadModel() {
+      try {
+        set({ modelConfig: await fetchConductorModel() });
+      } catch {}
+    },
+
+    async selectModel(llmNo) {
+      const previous = get().modelConfig;
+      set({ modelConfig: { configured: llmNo, effective: llmNo, fallbackReason: null } });
+      try {
+        set({ modelConfig: await saveConductorModel(llmNo) });
+      } catch {
+        set({ modelConfig: previous });
+      }
     },
   };
 });

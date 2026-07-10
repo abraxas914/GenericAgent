@@ -40,7 +40,7 @@ interface SettingsState {
   lang: 'zh' | 'en';
   modelProfiles: ModelProfile[];
   defaultModelNo: number;
-  liveModel: { isMixin: boolean; current: string; llmNo?: number } | null;
+  liveModel: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null } | null;
 
   open: () => void;
   close: () => void;
@@ -49,7 +49,7 @@ interface SettingsState {
   setLang: (lang: 'zh' | 'en') => void;
   setModelProfiles: (profiles: ModelProfile[]) => void;
   setDefaultModel: (no: number) => void;
-  setLiveModel: (model: { isMixin: boolean; current: string; llmNo?: number } | null) => void;
+  setLiveModel: (model: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null } | null) => void;
   loadFromBridge: () => Promise<void>;
   persist: () => Promise<void>;
 }

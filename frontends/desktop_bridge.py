@@ -137,6 +137,14 @@ class Session:
     # 该会话绑定的模型下标(mykey.py 配置块顺序,== agent.llmclients 下标)。
     # None = 未绑定,发消息时回退到全局默认 ui.llmNo,保持旧会话平滑迁移。
     llm_no: Optional[int] = None
+    # 当前正在执行的 turn 使用的模型。仅运行期存在，不写入 session JSON。
+    running_llm_no: Optional[int] = None
+    running_model: Optional[str] = None
+
+
+def _is_desktop_session_id(session_id: Any) -> bool:
+    """Keep internal TUI/Conductor worker artifacts out of Desktop sessions."""
+    return bool(session_id) and not str(session_id).startswith("tui_")
 
 
 def _load_plan_baseline(item: dict, msgs: list) -> int:
@@ -247,6 +255,8 @@ class AgentManager:
                 for f in self._sessions_dir.glob("*.json"):
                     try:
                         item = json.loads(f.read_text(encoding="utf-8"))
+                        if not _is_desktop_session_id(item.get("id")):
+                            continue
                         sess = self._session_from_item(item)
                         self.sessions[sess.id] = sess
                     except Exception as e:
@@ -259,7 +269,9 @@ class AgentManager:
             if self._sessions_file.exists():
                 arr = json.loads(self._sessions_file.read_text(encoding="utf-8"))
                 for item in arr:
-                    if not isinstance(item, dict) or item.get("id") in self.sessions:
+                    if (not isinstance(item, dict)
+                            or not _is_desktop_session_id(item.get("id"))
+                            or item.get("id") in self.sessions):
                         continue
                     try:
                         sess = self._session_from_item(item)
@@ -318,7 +330,7 @@ class AgentManager:
         with self.lock:
             for item in items:
                 sid = item.get("id")
-                if not sid or sid in self.sessions:
+                if not _is_desktop_session_id(sid) or sid in self.sessions:
                     skipped += 1
                     continue
                 sess = self._session_from_item(item)
@@ -656,15 +668,19 @@ class AgentManager:
         llmNo: 始终以 sess.llm_no 为权威(用户选择),agent.llm_no 在初始化窗口可能滞后。"""
         ag = getattr(sess, "agent", None)
         if ag is None:
-            return {"current": None, "isMixin": False, "llmNo": sess.llm_no}
+            return {"current": None, "isMixin": False, "llmNo": sess.llm_no,
+                    "runningLlmNo": sess.running_llm_no, "runningModel": sess.running_model}
         try:
             back = ag.llmclient.backend
             live_no = sess.llm_no if sess.llm_no is not None else getattr(ag, "llm_no", 0)
             if "Mixin" in type(back).__name__:
-                return {"current": back.current_name, "isMixin": True, "llmNo": live_no}
-            return {"current": back.name, "isMixin": False, "llmNo": live_no}
+                return {"current": back.current_name, "isMixin": True, "llmNo": live_no,
+                        "runningLlmNo": sess.running_llm_no, "runningModel": sess.running_model}
+            return {"current": back.name, "isMixin": False, "llmNo": live_no,
+                    "runningLlmNo": sess.running_llm_no, "runningModel": sess.running_model}
         except Exception:
-            return {"current": None, "isMixin": False, "llmNo": sess.llm_no}
+            return {"current": None, "isMixin": False, "llmNo": sess.llm_no,
+                    "runningLlmNo": sess.running_llm_no, "runningModel": sess.running_model}
 
     def snapshot(self, sess: Session, include_messages: bool = True) -> dict:
         out = {
@@ -820,6 +836,18 @@ class AgentManager:
             if no is not None and hasattr(agent, "next_llm"):
                 with contextlib.suppress(Exception):
                     agent.next_llm(int(no))
+            with self.lock:
+                sess.running_llm_no = getattr(agent, "llm_no", no)
+                try:
+                    running_backend = agent.llmclient.backend
+                    sess.running_model = str(
+                        getattr(running_backend, "current_name", None)
+                        or getattr(running_backend, "name", None)
+                        or getattr(running_backend, "model", None)
+                        or ""
+                    ) or None
+                except Exception:
+                    sess.running_model = None
             if images:
                 self._patch_chat_for_images(agent.llmclient, images)
             full = ""
@@ -884,6 +912,8 @@ class AgentManager:
             if sess.cancel_requested:
                 with self.lock:
                     sess.partial = None
+                    sess.running_llm_no = None
+                    sess.running_model = None
                     # Ensure status stays cancelled (don't overwrite)
                     if sess.status != "cancelled":
                         sess.status = "cancelled"
@@ -903,6 +933,8 @@ class AgentManager:
                     self.add_message(sess, "assistant", full)
                 try: sess.llm_history = json.loads(json.dumps(agent.llmclient.backend.history, ensure_ascii=False, default=str))
                 except Exception: pass
+                sess.running_llm_no = None
+                sess.running_model = None
                 sess.status = "idle"
                 sess.last_error = ""
             emit_session_state(sess, "idle")
@@ -910,6 +942,8 @@ class AgentManager:
             tb = traceback.format_exc()
             with self.lock:
                 sess.partial = None
+                sess.running_llm_no = None
+                sess.running_model = None
                 sess.status = "error"
                 sess.last_error = str(e)
                 self.add_message(sess, "error", str(e))
@@ -1007,14 +1041,18 @@ class AgentManager:
         return {"ok": True, "sessionId": sid, "restored": True, "messageCount": len(sess.llm_history or sess.messages)}
 
     def set_session_model(self, sid: str, llm_no: int) -> dict:
-        """前端申请切换某会话的模型(唯一入口)。写 sess.llm_no(权威)并持久化;
-        agent 存活时立即 next_llm 让运行态跟上。返回该会话的运行态模型快照。"""
+        """Bind a model to a session.
+
+        An idle agent switches immediately. A running turn keeps its captured client;
+        the new binding is applied at the start of the next turn.
+        """
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
             sess.llm_no = int(llm_no)
-            if sess.agent is not None and hasattr(sess.agent, "next_llm"):
+            if (sess.status != "running" and sess.agent is not None
+                    and hasattr(sess.agent, "next_llm")):
                 with contextlib.suppress(Exception):
                     sess.agent.next_llm(int(llm_no))
             sess.updated_at = time.time()
@@ -1597,6 +1635,34 @@ def _global_default_llm_no() -> int:
         return 0
 
 
+def _parse_model_no(value: Any) -> Optional[int]:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_conductor_model_state(doc: dict, profile_count: int) -> dict:
+    """Resolve persisted Conductor config without relying on modulo selection."""
+    count = max(0, int(profile_count or 0))
+    conductor = doc.get("conductor") if isinstance(doc, dict) else None
+    ui = doc.get("ui") if isinstance(doc, dict) else None
+    raw_configured = conductor.get("llmNo") if isinstance(conductor, dict) else None
+    configured = _parse_model_no(raw_configured)
+    ui_default = _parse_model_no(ui.get("llmNo")) if isinstance(ui, dict) else None
+
+    if count <= 0:
+        return {"configured": configured, "effective": None, "fallbackReason": "no_models"}
+    if configured is not None and 0 <= configured < count:
+        return {"configured": configured, "effective": configured, "fallbackReason": None}
+    if ui_default is not None and 0 <= ui_default < count:
+        reason = "invalid_configured" if raw_configured is not None else "ui_default"
+        return {"configured": configured, "effective": ui_default, "fallbackReason": reason}
+    return {"configured": configured, "effective": 0, "fallbackReason": "first_available"}
+
+
 async def get_config_handler(request):
     profiles = manager.list_model_profiles()
     active = next((p["id"] for p in profiles if p.get("active")), manager.config.get("llmNo", 0))
@@ -1675,7 +1741,8 @@ async def mixin_order_handler(request):
 
 async def list_sessions_handler(request):
     with manager.lock:
-        sessions = [manager.snapshot(s, include_messages=False) for s in manager.sessions.values()]
+        sessions = [manager.snapshot(s, include_messages=False)
+                    for s in manager.sessions.values() if _is_desktop_session_id(s.id)]
     return json_ok({"sessions": sessions, "activeSessionId": manager.active_session_id})
 
 
@@ -2098,7 +2165,8 @@ async def memory_import_handler(request):
 
 
 async def conductor_model_get_handler(request):
-    return json_ok({"model": _conductor_settings()})
+    state = _resolve_conductor_model_state(_settings_doc(), len(manager.list_model_profiles()))
+    return json_ok({"model": state})
 
 
 async def conductor_model_save_handler(request):
@@ -2107,6 +2175,9 @@ async def conductor_model_save_handler(request):
         llm_no = int(data.get("llmNo"))
     except (TypeError, ValueError):
         return json_ok({"ok": False, "error": "invalid_llmNo"}, status=400)
+    profile_count = len(manager.list_model_profiles())
+    if llm_no < 0 or llm_no >= profile_count:
+        return json_ok({"ok": False, "error": "model_out_of_range"}, status=400)
     try:
         doc = _settings_doc()
         conductor = doc["conductor"] if isinstance(doc.get("conductor"), dict) else {}
@@ -2115,7 +2186,8 @@ async def conductor_model_save_handler(request):
         _write_settings_doc(doc)
     except Exception as e:
         return json_ok({"ok": False, "error": str(e)}, status=500)
-    return json_ok({"ok": True, "model": conductor})
+    state = _resolve_conductor_model_state(doc, profile_count)
+    return json_ok({"ok": True, "model": state})
 
 
 async def service_start_handler(request):
