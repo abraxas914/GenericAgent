@@ -891,6 +891,49 @@
   padding: 0;
 }
 
+/* Log tab bar */
+.ga-bridge-panel-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0.375rem;
+}
+
+.ga-bridge-panel-tab {
+  border: none;
+  background: none;
+  padding: 0.125rem 0.375rem;
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--ui-text-tertiary);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: color 0.1s, background 0.1s;
+}
+
+.ga-bridge-panel-tab:hover {
+  color: var(--foreground);
+  background: var(--chrome-action-hover);
+}
+
+.ga-bridge-panel-tab.active {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--ui-accent) 12%, transparent);
+}
+
+/* Section footer (truncation indicator + link) */
+.ga-bridge-panel-section-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  min-height: 1rem;
+}
+
+.ga-bridge-panel-truncated {
+  font-size: 0.585rem;
+  color: var(--ui-text-quaternary);
+}
+
 .ga-bridge-panel-log-empty {
   margin-top: 0.25rem;
   font-size: 0.6875rem;

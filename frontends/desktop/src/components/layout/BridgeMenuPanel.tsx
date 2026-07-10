@@ -1,9 +1,9 @@
-import { useRef, useEffect, useState, useMemo } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import { useConductorStore } from '../../stores/conductor';
 import { useAppStore } from '../../stores/app';
 import { useI18n } from '../../i18n';
-import { getBridgeActivity, onBridgeActivityChange } from '../../stores/bridgeActivity';
+import { fetchServiceLogs } from '../../services/services-api';
 import { LogView } from '../log';
 
 type StatusTone = 'good' | 'warn' | 'bad' | 'muted';
@@ -53,8 +53,14 @@ function GridIcon() {
   );
 }
 
-const NOISE_RE = /\bws (?:ping|pong|accepted|closed)\b/i;
-const TS_RE = /^\[\d{2}:\d{2}:\d{2}\]\s*/;
+const LOG_TABS = [
+  { id: '__bridge__', label: 'Bridge' },
+  { id: 'frontends/conductor.py', label: 'Conductor' },
+  { id: 'reflect/scheduler.py', label: 'Scheduler' },
+] as const;
+
+const LOG_PREVIEW_LINES = 12;
+const LOG_POLL_MS = 3000;
 
 interface Props {
   onClose: () => void;
@@ -66,20 +72,34 @@ export function BridgeMenuPanel({ onClose }: Props) {
   const conductorStatus = useConductorStore((s) => s.connectionStatus);
   const setPage = useAppStore((s) => s.setPage);
   const panelRef = useRef<HTMLDivElement>(null);
-  const [logs, setLogs] = useState<string[]>(() => getBridgeActivity());
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const cleaned = useMemo(() =>
-    logs.filter(l => !NOISE_RE.test(l)).map(l => l.replace(TS_RE, '')),
-    [logs]
-  );
+  const [activeTab, setActiveTab] = useState<string>(LOG_TABS[0].id);
+  const [lines, setLines] = useState<string[] | null>(null);
+  const [totalLines, setTotalLines] = useState(0);
 
-  // Subscribe to shared activity buffer
-  useEffect(() => {
-    setLogs(getBridgeActivity());
-    return onBridgeActivityChange(() => {
-      setLogs(getBridgeActivity());
-    });
+  const loadLogs = useCallback(async (sid: string) => {
+    try {
+      const result = await fetchServiceLogs(sid, 200);
+      setTotalLines(result.length);
+      setLines(result.slice(-LOG_PREVIEW_LINES));
+    } catch {
+      setLines([]);
+      setTotalLines(0);
+    }
   }, []);
+
+  useEffect(() => {
+    setLines(null);
+    loadLogs(activeTab);
+    timerRef.current = setInterval(() => loadLogs(activeTab), LOG_POLL_MS);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [activeTab, loadLogs]);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -115,6 +135,8 @@ export function BridgeMenuPanel({ onClose }: Props) {
     setPage('services');
   };
 
+  const truncated = totalLines > LOG_PREVIEW_LINES;
+
   return (
     <div ref={panelRef} className="ga-bridge-panel" data-slot="bridge-panel">
       {/* Header */}
@@ -147,21 +169,38 @@ export function BridgeMenuPanel({ onClose }: Props) {
         </div>
       </div>
 
-      {/* Recent Activity — always visible */}
+      {/* Log tabs + preview */}
       <div className="ga-bridge-panel-section">
-        <div className="ga-bridge-panel-section-head">
-          <div className="ga-panel-section-label">{t('bridge.recentActivity')}</div>
+        <div className="ga-bridge-panel-tabs">
+          {LOG_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              className={`ga-bridge-panel-tab ${activeTab === tab.id ? 'active' : ''}`}
+              onClick={() => setActiveTab(tab.id)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        {lines === null ? (
+          <div className="ga-bridge-panel-log-empty">…</div>
+        ) : lines.length === 0 ? (
+          <div className="ga-bridge-panel-log-empty">{t('bridge.noActivity')}</div>
+        ) : (
+          <LogView className="ga-bridge-panel-log">
+            {lines.join('\n')}
+          </LogView>
+        )}
+        <div className="ga-bridge-panel-section-foot">
+          {truncated && (
+            <span className="ga-bridge-panel-truncated">
+              {totalLines} lines total
+            </span>
+          )}
           <button className="ga-bridge-panel-link-btn" onClick={handleOpenServices}>
-            {t('bridge.viewAllLogs')}
+            {t('bridge.viewAllLogs')} →
           </button>
         </div>
-        {cleaned.length > 0 ? (
-          <LogView className="ga-bridge-panel-log">
-            {cleaned.join('\n')}
-          </LogView>
-        ) : (
-          <div className="ga-bridge-panel-log-empty">{t('bridge.noActivity')}</div>
-        )}
       </div>
     </div>
   );

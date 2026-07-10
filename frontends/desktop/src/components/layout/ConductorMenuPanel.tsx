@@ -2,6 +2,7 @@ import { useRef, useEffect } from 'react';
 import { useConductorStore } from '../../stores/conductor';
 import { useAppStore } from '../../stores/app';
 import { useI18n } from '../../i18n';
+import { LogView } from '../log';
 
 type StatusTone = 'good' | 'warn' | 'bad' | 'muted';
 
@@ -40,7 +41,6 @@ export function ConductorMenuPanel({ onClose }: Props) {
   const typing = useConductorStore((s) => s.conductorTyping);
   const setPage = useAppStore((s) => s.setPage);
   const panelRef = useRef<HTMLDivElement>(null);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
@@ -58,12 +58,6 @@ export function ConductorMenuPanel({ onClose }: Props) {
       document.removeEventListener('keydown', onEsc);
     };
   }, [onClose]);
-
-  useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [messages]);
 
   const tone: StatusTone = status === 'ready' ? 'good'
     : status === 'connecting' ? 'warn'
@@ -123,9 +117,9 @@ export function ConductorMenuPanel({ onClose }: Props) {
           </button>
         </div>
         {recentMessages.length > 0 ? (
-          <div ref={logRef} className="ga-bridge-panel-log">
+          <LogView className="ga-bridge-panel-log">
             {recentMessages.join('\n')}
-          </div>
+          </LogView>
         ) : (
           <div className="ga-bridge-panel-log-empty">{t('bridge.noActivity')}</div>
         )}

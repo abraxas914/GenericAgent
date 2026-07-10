@@ -119,7 +119,6 @@
 
 .ga-log-dialog .semi-modal-body {
   padding: 0 24px 0 0;
-  overflow-y: auto;
   flex: 1;
-  min-height: 200px;
+  min-height: 0;
 }
