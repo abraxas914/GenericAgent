@@ -19,4 +19,3 @@ export function showSuccess(content: string) {
 export function showSystem(content: string) {
   notify(content, 'info');
 }
-

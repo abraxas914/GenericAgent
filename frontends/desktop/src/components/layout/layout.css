@@ -7,11 +7,20 @@
   flex-direction: column;
 }
 
-/* Shell geometry contract — macOS titlebar layout variables */
+/* Shell geometry contract */
+:root {
+  --ga-sidebar-top-padding: 36px;
+}
+
 :root[data-platform="macos"] {
   --ga-titlebar-height: 38px;
   --ga-titlebar-controls-left: 72px;
   --ga-titlebar-controls-top: 6px;
+  --ga-sidebar-top-padding: 36px;
+}
+
+:root[data-platform="windows"] {
+  --ga-sidebar-top-padding: 8px;
 }
 
 :root[data-platform="windows"] .ga-titlebar-controls {
@@ -86,11 +95,7 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: 36px 0 0;
-}
-
-:root[data-platform="macos"] .ga-left-sidebar {
-  padding-top: 36px;
+  padding: var(--ga-sidebar-top-padding, 36px) 0 0;
 }
 
 .ga-sidebar-brand {

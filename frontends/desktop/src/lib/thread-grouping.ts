@@ -56,4 +56,3 @@ export function buildThreadGroups(messages: Message[]): ThreadGroup[] {
   }
   return groups;
 }
-
