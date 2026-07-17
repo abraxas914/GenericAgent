@@ -56,9 +56,16 @@ class RootErrorBoundary extends React.Component<
   }
 }
 
-const appRoot = document.getElementById('app')!;
-createRoot(appRoot).render(
-  <RootErrorBoundary>
-    <App />
-  </RootErrorBoundary>
-);
+async function renderApp() {
+  if (import.meta.env.VITE_GA_E2E === '1') {
+    await import('@wdio/tauri-plugin');
+  }
+  const appRoot = document.getElementById('app')!;
+  createRoot(appRoot).render(
+    <RootErrorBoundary>
+      <App />
+    </RootErrorBoundary>,
+  );
+}
+
+void renderApp();

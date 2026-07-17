@@ -74,9 +74,15 @@ export function TokenStats({ snapshot: snapshotProp, history: historyProp, cards
   return (
     <div className="ga-token-stats">
       {displayCards.map((card) => (
-        <div key={card.labelKey} className="ga-token-stat-card">
+        <div
+          key={card.labelKey}
+          className="ga-token-stat-card"
+          data-testid={`token-stat-${card.labelKey}`}
+        >
           <div className="ga-token-stat-label">{t(card.labelKey)}</div>
-          <div className="ga-token-stat-value">{card.value}</div>
+          <div className="ga-token-stat-value" data-testid={`token-stat-value-${card.labelKey}`}>
+            {card.value}
+          </div>
         </div>
       ))}
     </div>

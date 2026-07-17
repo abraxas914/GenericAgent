@@ -56,6 +56,7 @@ export function LeftSidebar() {
           type="button"
           className="ga-nav-btn"
           onClick={handleNewSession}
+          aria-label={t('nav.chat')}
         >
           <span className="ga-nav-icon">
             <Codicon name="comment" size="1rem" />
@@ -68,6 +69,7 @@ export function LeftSidebar() {
             type="button"
             className={`ga-nav-btn${activePage === item.key ? ' active' : ''}`}
             onClick={() => setPage(item.key)}
+            aria-label={t(item.textKey)}
             aria-current={activePage === item.key ? 'page' : undefined}
           >
             <span className="ga-nav-icon">

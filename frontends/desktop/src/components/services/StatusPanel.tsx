@@ -256,7 +256,7 @@ export function StatusPanel() {
         <IconAlertTriangle style={{ color: 'var(--semi-color-warning)', fontSize: 24 }} />
         <span>{t('bridge.notRunning')}</span>
         {isTauri() ? (
-          <Button loading={restarting} onClick={handleRestartBridge} theme="light" type="primary">
+          <Button data-testid="bridge-restart" loading={restarting} onClick={handleRestartBridge} theme="light" type="primary">
             {t('bridge.restart')}
           </Button>
         ) : (
@@ -285,7 +285,7 @@ export function StatusPanel() {
           <IconAlertTriangle size="small" />
           <span>{t('bridge.staleData')}</span>
           {isTauri() && (
-            <Button size="small" loading={restarting} onClick={handleRestartBridge} theme="light">
+            <Button data-testid="bridge-restart" size="small" loading={restarting} onClick={handleRestartBridge} theme="light">
               {t('bridge.restart')}
             </Button>
           )}

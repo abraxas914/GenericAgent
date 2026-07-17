@@ -128,6 +128,35 @@ def empty_turn_fallback() -> str:
     return _EMPTY_TURN_MICROCOPY.get(lang, _EMPTY_TURN_MICROCOPY["zh"])
 
 
+# ─── Test-only control plane ────────────────────────────────────────────────
+
+_E2E_CONTROL_LOCK = threading.Lock()
+_E2E_NEXT_TURN: Optional[str] = None
+
+
+def _e2e_control_token() -> Optional[str]:
+    if os.environ.get("GA_E2E") != "1":
+        return None
+    token = os.environ.get("GA_E2E_CONTROL_TOKEN", "").strip()
+    return token or None
+
+
+def _set_e2e_next_turn(mode: str) -> None:
+    if mode != "empty":
+        raise ValueError("mode must be empty")
+    global _E2E_NEXT_TURN
+    with _E2E_CONTROL_LOCK:
+        _E2E_NEXT_TURN = mode
+
+
+def _consume_e2e_next_turn() -> Optional[str]:
+    global _E2E_NEXT_TURN
+    with _E2E_CONTROL_LOCK:
+        mode = _E2E_NEXT_TURN
+        _E2E_NEXT_TURN = None
+        return mode
+
+
 for _s in (sys.stdout, sys.stderr):
     with contextlib.suppress(Exception):
         _s.reconfigure(encoding="utf-8", errors="replace")
@@ -846,6 +875,16 @@ class AgentManager:
 
     def run_agent_turn(self, sess: Session, prompt: str, images: Optional[list] = None):
         try:
+            if _consume_e2e_next_turn() == "empty":
+                with self.lock:
+                    sess.partial = None
+                    self.add_message(sess, "assistant", empty_turn_fallback())
+                    sess.running_llm_no = None
+                    sess.running_model = None
+                    sess.status = "idle"
+                    sess.last_error = ""
+                emit_session_state(sess, "idle")
+                return
             if sess.agent is None:
                 sess.agent = self.make_agent(sess)
                 if sess.llm_history:
@@ -2288,6 +2327,22 @@ async def bridge_exit_handler(request):
     return json_ok({"ok": True})
 
 
+async def e2e_next_turn_handler(request):
+    token = _e2e_control_token()
+    if token is None:
+        raise web.HTTPNotFound()
+    if not _is_local_peer(request.remote or ""):
+        return json_ok({"ok": False, "error": "forbidden"}, status=403)
+    if request.headers.get("X-GA-E2E-Token", "") != token:
+        return json_ok({"ok": False, "error": "forbidden"}, status=403)
+    try:
+        body = await request.json()
+        _set_e2e_next_turn(str(body.get("mode", "")))
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return json_ok({"ok": False, "error": "mode must be empty"}, status=400)
+    return json_ok({"ok": True, "mode": "empty"})
+
+
 async def token_stats_handler(request):
     try:
         sys.path.insert(0, str(APP_DIR)) if str(APP_DIR) not in sys.path else None
@@ -2374,6 +2429,8 @@ def create_app():
     app.router.add_post("/services/start-extras", start_extras_handler)
     app.router.add_get("/services/identity", identity_handler)
     app.router.add_post("/services/bridge/exit", bridge_exit_handler)
+    if _e2e_control_token() is not None:
+        app.router.add_post("/__e2e__/next-turn", e2e_next_turn_handler)
 
     # Serve static frontend (desktop/static/)
     static_dir = APP_DIR / "desktop" / "static"

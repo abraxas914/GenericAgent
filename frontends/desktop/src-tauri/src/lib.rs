@@ -1,7 +1,7 @@
 use std::process::{Command, Child, Stdio};
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{LazyLock, Mutex};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 use std::thread;
 use std::path::PathBuf;
@@ -20,6 +20,45 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 
 static BRIDGE_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 static BRIDGE_LOG_READERS: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+
+#[derive(Clone, Debug, PartialEq)]
+struct BridgeEndpoint {
+    host: String,
+    port: u16,
+}
+
+impl BridgeEndpoint {
+    fn socket_addr(&self) -> String {
+        format!("{}:{}", self.host, self.port)
+    }
+
+    fn tcp_addr(&self) -> Option<SocketAddr> {
+        (self.host.as_str(), self.port)
+            .to_socket_addrs()
+            .ok()?
+            .find(|addr| addr.ip().is_loopback())
+    }
+}
+
+fn bridge_endpoint_from_values(host: Option<&str>, port: Option<&str>) -> Result<BridgeEndpoint, String> {
+    let host = host.unwrap_or("127.0.0.1").trim();
+    if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+        return Err("BRIDGE_HOST must be loopback".to_string());
+    }
+    let port = port.unwrap_or("14168").parse::<u16>()
+        .map_err(|_| "BRIDGE_PORT must be between 1 and 65535".to_string())?;
+    if port == 0 {
+        return Err("BRIDGE_PORT must be between 1 and 65535".to_string());
+    }
+    Ok(BridgeEndpoint { host: host.to_string(), port })
+}
+
+fn bridge_endpoint() -> BridgeEndpoint {
+    bridge_endpoint_from_values(
+        std::env::var("BRIDGE_HOST").ok().as_deref(),
+        std::env::var("BRIDGE_PORT").ok().as_deref(),
+    ).unwrap_or(BridgeEndpoint { host: "127.0.0.1".to_string(), port: 14168 })
+}
 
 const MAX_DIAGNOSTIC_LINES: usize = 100;
 const MAX_DIAGNOSTIC_LINE_BYTES: usize = 2 * 1024;
@@ -774,6 +813,9 @@ fn sanitize_bundle_env(cmd: &mut Command) {
     // Stamp the bridge we spawn with this build's id so a later app launch can tell whether the
     // bridge holding :14168 is ours (see bridge_identity_matches / GET /services/identity).
     cmd.env("GA_BUILD_ID", env!("GA_BUILD_ID"));
+    let endpoint = bridge_endpoint();
+    cmd.env("BRIDGE_HOST", &endpoint.host);
+    cmd.env("BRIDGE_PORT", endpoint.port.to_string());
 }
 
 /// Run the offline prepare (install_windows.ps1 -Mode PrepareOnly) using bundled python + wheels.
@@ -924,14 +966,19 @@ fn normalize_bridge_identity(identity: serde_json::Value) -> Option<serde_json::
 /// endpoint is absent — i.e. an older/foreign bridge).
 fn bridge_reported_identity() -> Option<serde_json::Value> {
     use std::io::{Read, Write};
+    let endpoint = bridge_endpoint();
+    let addr = endpoint.tcp_addr()?;
     let mut stream = TcpStream::connect_timeout(
-        &"127.0.0.1:14168".parse().unwrap(),
+        &addr,
         Duration::from_millis(800),
     ).ok()?;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
-    let req = b"GET /services/identity HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
-    stream.write_all(req).ok()?;
+    let req = format!(
+        "GET /services/identity HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+        endpoint.socket_addr(),
+    );
+    stream.write_all(req.as_bytes()).ok()?;
     let mut buf = Vec::new();
     stream
         .take((MAX_IDENTITY_RESPONSE_BYTES + 1) as u64)
@@ -966,21 +1013,26 @@ fn bootstrap_failure(code: BootstrapFailureCode, detail: impl AsRef<str>) -> Boo
 
 fn request_bridge_shutdown() {
     use std::io::{Read, Write};
+    let endpoint = bridge_endpoint();
+    let Some(addr) = endpoint.tcp_addr() else { return; };
     let Ok(mut stream) = TcpStream::connect_timeout(
-        &"127.0.0.1:14168".parse().unwrap(),
+        &addr,
         Duration::from_millis(800),
     ) else {
         return;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
-    let req = b"POST /services/bridge/exit HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    let _ = stream.write_all(req);
+    let req = format!(
+        "POST /services/bridge/exit HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        endpoint.socket_addr(),
+    );
+    let _ = stream.write_all(req.as_bytes());
     let _ = stream.read(&mut [0u8; 512]);
 }
 
 fn is_bridge_running() -> bool {
-    TcpStream::connect(("127.0.0.1", 14168)).is_ok()
+    bridge_endpoint().tcp_addr().is_some_and(|addr| TcpStream::connect(addr).is_ok())
 }
 
 fn resolve_existing_listener(
@@ -1009,7 +1061,7 @@ fn resolve_existing_listener(
             set_port_diagnostics(app_handle, PortState::Foreign, None);
             Err(bootstrap_failure(
                 BootstrapFailureCode::PortConflict,
-                "127.0.0.1:14168 is held by an unidentified process",
+                format!("{} is held by an unidentified process", bridge_endpoint().socket_addr()),
             ))
         }
         ListenerIdentity::KnownGenericAgent => {
@@ -1038,7 +1090,7 @@ fn resolve_existing_listener(
                 );
                 return Err(bootstrap_failure(
                     BootstrapFailureCode::PortConflict,
-                    "the identified old bridge did not release 127.0.0.1:14168",
+                    format!("the identified old bridge did not release {}", bridge_endpoint().socket_addr()),
                 ));
             }
 
@@ -1046,7 +1098,7 @@ fn resolve_existing_listener(
                 set_port_diagnostics(app_handle, PortState::Foreign, bridge_reported_identity().as_ref());
                 Err(bootstrap_failure(
                     BootstrapFailureCode::PortConflict,
-                    "the identified old bridge did not release 127.0.0.1:14168",
+                    format!("the identified old bridge did not release {}", bridge_endpoint().socket_addr()),
                 ))
             } else {
                 // A bridge spawned by this desktop process may release the socket slightly
@@ -1113,7 +1165,7 @@ fn spawn_bridge_process(
     if is_bridge_running() {
         return Err(bootstrap_failure(
             BootstrapFailureCode::PortConflict,
-            "cannot spawn while 127.0.0.1:14168 is already in use",
+            format!("cannot spawn while {} is already in use", bridge_endpoint().socket_addr()),
         ));
     }
 
@@ -1541,7 +1593,7 @@ pub fn run() {
 
     let (eff_py, eff_project) = get_or_discover_config();
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             let bootstrap_failed = matches!(
@@ -1558,7 +1610,18 @@ pub fn run() {
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+
+    #[cfg(feature = "e2e")]
+    let builder = if std::env::var("GA_E2E").ok().as_deref() == Some("1") {
+        builder
+            .plugin(tauri_plugin_wdio::init())
+            .plugin(tauri_plugin_wdio_webdriver::init())
+    } else {
+        builder
+    };
+
+    builder
         .invoke_handler(tauri::generate_handler![
             start_bridge_with_config,
             start_bridge,
@@ -1779,5 +1842,21 @@ mod tests {
         assert!(!python_interpreter_resolves(
             "/definitely/missing/genericagent-python"
         ));
+    }
+
+    #[test]
+    fn bridge_endpoint_uses_defaults_and_validates_overrides() {
+        let default = bridge_endpoint_from_values(None, None).unwrap();
+        assert_eq!(default.host, "127.0.0.1");
+        assert_eq!(default.port, 14168);
+        assert_eq!(default.socket_addr(), "127.0.0.1:14168");
+
+        let custom = bridge_endpoint_from_values(Some("localhost"), Some("24168")).unwrap();
+        assert_eq!(custom.host, "localhost");
+        assert_eq!(custom.port, 24168);
+
+        assert!(bridge_endpoint_from_values(Some("0.0.0.0"), Some("24168")).is_err());
+        assert!(bridge_endpoint_from_values(Some("127.0.0.1"), Some("0")).is_err());
+        assert!(bridge_endpoint_from_values(Some("127.0.0.1"), Some("bad")).is_err());
     }
 }
