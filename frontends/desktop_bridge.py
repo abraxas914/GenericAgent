@@ -105,6 +105,29 @@ def normalize_final_turn_segs(full: str, outputs: Any) -> Optional[List[str]]:
     return None
 
 
+# ─── Empty-turn microcopy (i18n) ───
+
+_EMPTY_TURN_MICROCOPY = {
+    "zh": '⚠️ 这一轮结束了，但没有产出可见回复。你可以发送"继续"重试。',
+    "en": '⚠️ This turn ended without a visible response. You can send "continue" to retry.',
+}
+
+
+def _get_ui_lang() -> str:
+    try:
+        p = Path.home() / ".ga_desktop_settings.json"
+        doc = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        lang = doc.get("lang") if isinstance(doc, dict) else None
+        return lang if isinstance(lang, str) and lang in _EMPTY_TURN_MICROCOPY else "zh"
+    except Exception:
+        return "zh"
+
+
+def empty_turn_fallback() -> str:
+    lang = _get_ui_lang()
+    return _EMPTY_TURN_MICROCOPY.get(lang, _EMPTY_TURN_MICROCOPY["zh"])
+
+
 for _s in (sys.stdout, sys.stderr):
     with contextlib.suppress(Exception):
         _s.reconfigure(encoding="utf-8", errors="replace")
@@ -908,7 +931,7 @@ class AgentManager:
             else:
                 full = "GenericAgent object has no put_task method"
             if not full:
-                full = "(completed)"
+                full = empty_turn_fallback()
             if sess.cancel_requested:
                 with self.lock:
                     sess.partial = None
@@ -1085,6 +1108,13 @@ def normalize_prompt(prompt: Any, images: Optional[list] = None):
 
 
 manager = AgentManager()
+
+# Initialize per-call token ledger
+try:
+    import cost_tracker
+    cost_tracker.init_ledger(manager.ga_root)
+except Exception:
+    pass
 
 
 # ---------------------------------------------------------------------------
@@ -2279,30 +2309,25 @@ async def token_stats_handler(request):
     return json_ok({"records": records})
 
 
-_TOKEN_HISTORY_FILE = None
-
-def _tok_file() -> Path:
-    global _TOKEN_HISTORY_FILE
-    if _TOKEN_HISTORY_FILE is None:
-        _TOKEN_HISTORY_FILE = Path(manager.ga_root) / "temp" / "desktop_token_history.json"
-    return _TOKEN_HISTORY_FILE
-
 async def get_token_history_handler(request):
-    f = _tok_file()
-    if f.is_file():
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            return json_ok(data)
-        except Exception:
-            pass
-    return json_ok({"history": [], "snap": {}})
-
-async def post_token_history_handler(request):
-    data = await read_json(request)
-    f = _tok_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-    return json_ok({"ok": True})
+    try:
+        import cost_tracker
+        data = cost_tracker.aggregate_ledger()
+        # Enrich session titles from manager
+        for entry in data.get("history", []):
+            sid = entry.get("sessionId", "")
+            with manager.lock:
+                sess = manager.sessions.get(sid)
+            if sess and sess.title:
+                entry["title"] = sess.title
+            if not entry.get("model") and sess and sess.agent:
+                try:
+                    entry["model"] = sess.agent.get_llm_name(model=True) or ""
+                except Exception:
+                    pass
+        return json_ok(data)
+    except Exception:
+        return json_ok({"history": [], "snap": {}})
 
 
 def create_app():
@@ -2336,7 +2361,6 @@ def create_app():
     app.router.add_get("/upload/raw", upload_raw_handler)
     app.router.add_get("/token-stats", token_stats_handler)
     app.router.add_get("/token-history", get_token_history_handler)
-    app.router.add_post("/token-history", post_token_history_handler)
     app.router.add_post("/services/start", service_start_handler)
     app.router.add_post("/services/stop", service_stop_handler)
     app.router.add_get("/services/logs", service_logs_handler)

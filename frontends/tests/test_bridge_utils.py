@@ -3,6 +3,7 @@
 Tests pure functions that don't require agent/session infrastructure.
 Run: pytest frontends/tests/test_bridge_utils.py -v
 """
+import ast
 import sys
 import re
 from pathlib import Path
@@ -17,6 +18,53 @@ spec = importlib.util.spec_from_file_location("desktop_bridge", ROOT / "frontend
 
 # We can't import the whole module (it starts aiohttp etc.) so we extract functions manually
 _bridge_source = (ROOT / "frontends" / "desktop_bridge.py").read_text(encoding="utf-8")
+
+
+def _load_empty_turn_helpers():
+    tree = ast.parse(_bridge_source)
+    wanted = {"_EMPTY_TURN_MICROCOPY", "_get_ui_lang", "empty_turn_fallback"}
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in wanted:
+            nodes.append(node)
+        elif isinstance(node, ast.Assign):
+            names = {target.id for target in node.targets if isinstance(target, ast.Name)}
+            if names & wanted:
+                nodes.append(node)
+    namespace = {"Path": Path, "json": json}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "desktop_bridge.py", "exec"), namespace)
+    return namespace
+
+
+class TestEmptyTurnFallback:
+    def test_uses_english_microcopy(self, tmp_path, monkeypatch):
+        (tmp_path / ".ga_desktop_settings.json").write_text('{"lang":"en"}', encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        helpers = _load_empty_turn_helpers()
+
+        assert helpers["empty_turn_fallback"]() == (
+            '⚠️ This turn ended without a visible response. You can send "continue" to retry.'
+        )
+
+    def test_defaults_to_chinese_for_missing_or_invalid_settings(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        helpers = _load_empty_turn_helpers()
+        expected = '⚠️ 这一轮结束了，但没有产出可见回复。你可以发送"继续"重试。'
+        assert helpers["empty_turn_fallback"]() == expected
+
+        (tmp_path / ".ga_desktop_settings.json").write_text("not-json", encoding="utf-8")
+        assert helpers["empty_turn_fallback"]() == expected
+
+    def test_defaults_to_chinese_for_non_string_language(self, tmp_path, monkeypatch):
+        (tmp_path / ".ga_desktop_settings.json").write_text('{"lang":[]}', encoding="utf-8")
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        helpers = _load_empty_turn_helpers()
+
+        assert helpers["empty_turn_fallback"]() == (
+            '⚠️ 这一轮结束了，但没有产出可见回复。你可以发送"继续"重试。'
+        )
 
 
 # === strip_final_info_marker ===
