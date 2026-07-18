@@ -53,7 +53,7 @@ export async function subscribe(dispatch: Dispatch): Promise<void> {
 
   const stopListening = await tauri.event.listen('bootstrap', (event) => {
     if (generation === subscriptionGeneration) {
-      dispatch({ type: 'snapshot', snapshot: event.payload });
+      dispatch({ type: 'snapshot', snapshot: event.payload as BootstrapSnapshot });
     }
   });
   if (generation !== subscriptionGeneration) {
@@ -63,7 +63,7 @@ export async function subscribe(dispatch: Dispatch): Promise<void> {
   unlisten?.();
   unlisten = stopListening;
 
-  const snapshot = await tauri.core.invoke<BootstrapSnapshot>('get_bootstrap_snapshot');
+  const snapshot = await tauri.core.invoke<BootstrapSnapshot>('get_bootstrap_snapshot') as BootstrapSnapshot;
   if (generation === subscriptionGeneration) {
     dispatch({ type: 'snapshot', snapshot });
   }

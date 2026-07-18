@@ -12,7 +12,14 @@
     "test:stress": "vitest run src/__tests__/stress/",
     "test:bundle": "node scripts/assert-dist-built.mjs",
     "test:packaging": "node scripts/test-packaging.mjs",
+    "test:e2e-isolation": "npm run build && node scripts/assert-production-e2e-isolation.mjs",
+    "test:e2e-types": "tsc -p tsconfig.e2e.json",
     "test:all": "vitest run && node scripts/assert-dist-built.mjs",
+    "e2e:browser": "tsx e2e/run.ts --mode=browser",
+    "e2e:desktop": "tsx e2e/run.ts --mode=desktop",
+    "e2e:desktop:full": "tsx e2e/run.ts --mode=desktop --suite=full",
+    "e2e:canary": "tsx e2e/canary.ts",
+    "e2e:doctor": "tsx e2e/doctor.ts",
     "tauri": "tauri",
     "build:dmg": "tauri build --bundles dmg && bash scripts/post-dmg.sh src-tauri/target/release/bundle/dmg/*.dmg",
     "build:app": "tauri build --bundles app",
@@ -42,9 +49,20 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "@wdio/cli": "^9.29.1",
+    "@wdio/local-runner": "^9.29.1",
+    "@wdio/mocha-framework": "^9.29.1",
+    "@wdio/spec-reporter": "^9.29.1",
+    "@wdio/tauri-plugin": "^1.2.0",
+    "@wdio/tauri-service": "^1.2.0",
     "happy-dom": "^20.10.6",
+    "tsx": "^4.23.1",
     "typescript": "^5.6.3",
     "vite": "^6.0.5",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.9",
+    "webdriverio": "^9.29.1"
+  },
+  "overrides": {
+    "@wdio/native-utils": "2.5.0"
   }
 }

@@ -1,0 +1,89 @@
+name: Desktop E2E Nightly
+
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    name: Native ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frontends/desktop/e2e/requirements.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontends/desktop/src-tauri -> target
+      - name: Install Node dependencies
+        working-directory: frontends/desktop
+        run: npm ci
+      - name: Install bridge runtime
+        run: python -m pip install -r frontends/desktop/e2e/requirements.txt
+      - name: Native full suite (Linux)
+        if: runner.os == 'Linux'
+        working-directory: frontends/desktop
+        run: xvfb-run -a npm run e2e:desktop:full
+      - name: Native full suite (Windows/macOS)
+        if: runner.os != 'Linux'
+        working-directory: frontends/desktop
+        run: npm run e2e:desktop:full
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ runner.os }}-${{ github.run_id }}
+          path: frontends/desktop/e2e-results
+          if-no-files-found: ignore
+
+  canary:
+    name: Real-model protocol canary
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
+      - name: Install dependencies
+        working-directory: frontends/desktop
+        run: npm ci
+      - name: Run canary when dedicated credentials exist
+        working-directory: frontends/desktop
+        env:
+          GA_E2E_CANARY_BASE: ${{ secrets.GA_E2E_CANARY_BASE }}
+          GA_E2E_CANARY_KEY: ${{ secrets.GA_E2E_CANARY_KEY }}
+          GA_E2E_CANARY_MODEL: ${{ secrets.GA_E2E_CANARY_MODEL }}
+        run: |
+          if [ -z "$GA_E2E_CANARY_KEY" ]; then
+            echo "Dedicated canary credentials are not configured; skipping."
+            exit 0
+          fi
+          npm run e2e:canary

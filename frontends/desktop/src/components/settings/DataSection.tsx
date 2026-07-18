@@ -5,6 +5,7 @@ import * as bridge from '../../services/bridge';
 import { useChatStore } from '../../stores/chat';
 import { useSettingsStore } from '../../stores/settings';
 import { GaSourceBlock } from './GaSourceBlock';
+import { BRIDGE_BASE } from '../../services/constants';
 
 const isTauri = !!(window as any).__TAURI__;
 
@@ -83,7 +84,7 @@ export function DataSection() {
 
       setImporting(true);
       try {
-        const res = await fetch('http://127.0.0.1:14168/memory/import', {
+        const res = await fetch(`${BRIDGE_BASE}/memory/import`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sourceDir: picked }),

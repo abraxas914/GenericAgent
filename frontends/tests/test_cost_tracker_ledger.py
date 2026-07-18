@@ -279,3 +279,79 @@ def test_concurrent_appends_remain_exact_across_compactions(tmp_path, monkeypatc
             "cacheCreate": per_thread * 3,
             "cacheRead": per_thread * 4,
         }
+
+
+def test_corrupt_and_truncated_lines_are_skipped(tmp_path):
+    cost_tracker.init_ledger(str(tmp_path))
+    cost_tracker._append_ledger("GA-valid", 3, 4, 5, 6)
+    ledger_path = tmp_path / "temp" / "token_ledger.jsonl"
+    cost_tracker._ledger_fd.write("not-json\n{\"truncated\":\n")
+    cost_tracker._ledger_fd.flush()
+
+    assert cost_tracker.aggregate_ledger()["snap"] == {
+        "GA-valid": {"input": 3, "output": 4, "cacheCreate": 5, "cacheRead": 6}
+    }
+
+
+def test_compaction_uses_atomic_replace_and_keeps_descriptor_writable(tmp_path, monkeypatch):
+    cost_tracker.init_ledger(str(tmp_path))
+    cost_tracker._append_ledger("GA-valid", 3, 4, 0, 0)
+    real_replace = cost_tracker.os.replace
+    replacements = []
+
+    def observe_replace(source, target):
+        replacements.append((Path(source), Path(target)))
+        assert Path(source).name == "token_ledger.jsonl.tmp"
+        assert Path(target).name == "token_ledger.jsonl"
+        real_replace(source, target)
+
+    monkeypatch.setattr(cost_tracker.os, "replace", observe_replace)
+    cost_tracker._compact_ledger()
+    cost_tracker._append_ledger("GA-valid", 0, 2, 0, 0)
+
+    assert len(replacements) == 1
+    assert cost_tracker.aggregate_ledger()["snap"]["GA-valid"]["output"] == 6
+
+
+def test_real_10mb_threshold_compacts_on_init(tmp_path):
+    temp_dir = tmp_path / "temp"
+    temp_dir.mkdir()
+    ledger_path = temp_dir / "token_ledger.jsonl"
+    valid = json.dumps({"t": 1, "k": "GA-valid", "i": 3, "o": 4, "cc": 0, "cr": 0}) + "\n"
+    with ledger_path.open("wb") as ledger:
+        ledger.write(valid.encode("utf-8"))
+        ledger.truncate(cost_tracker._COMPACT_THRESHOLD)
+
+    cost_tracker.init_ledger(str(tmp_path))
+
+    assert ledger_path.stat().st_size < 1_000
+    assert cost_tracker.aggregate_ledger()["snap"]["GA-valid"] == {
+        "input": 3,
+        "output": 4,
+        "cacheCreate": 0,
+        "cacheRead": 0,
+    }
+
+
+def test_repeated_init_migrates_legacy_snapshot_only_once(tmp_path):
+    temp_dir = tmp_path / "temp"
+    temp_dir.mkdir()
+    (temp_dir / "desktop_token_history.json").write_text(
+        json.dumps({
+            "snap": {
+                "GA-legacy": {"input": 7, "output": 8, "cacheCreate": 9, "cacheRead": 10}
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    cost_tracker.init_ledger(str(tmp_path))
+    cost_tracker.init_ledger(str(tmp_path))
+
+    assert cost_tracker.aggregate_ledger()["snap"]["GA-legacy"] == {
+        "input": 7,
+        "output": 8,
+        "cacheCreate": 9,
+        "cacheRead": 10,
+    }
+    assert len(cost_tracker.read_ledger()) == 1

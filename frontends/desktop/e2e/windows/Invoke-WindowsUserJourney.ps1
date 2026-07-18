@@ -273,13 +273,22 @@ function Capture-Screenshot([string]$Name) {
     }
 }
 
-function Wait-ForBootstrapPhase([string]$ReportDirectory, [string]$Phase, [int]$TimeoutSeconds) {
+function Wait-ForBootstrapPhase(
+    [string]$ReportDirectory,
+    [string]$Phase,
+    [int]$TimeoutSeconds,
+    [int]$AfterSequence = 0
+) {
     $latest = Join-Path $ReportDirectory "bootstrap-latest.json"
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     while ((Get-Date) -lt $deadline) {
         if (Test-Path -LiteralPath $latest) {
             try {
                 $snapshot = [System.IO.File]::ReadAllText($latest) | ConvertFrom-Json
+                if ([int]$snapshot.seq -le $AfterSequence) {
+                    Start-Sleep -Milliseconds 500
+                    continue
+                }
                 if ($snapshot.phase -eq $Phase) {
                     return $snapshot
                 }
@@ -422,7 +431,11 @@ function Start-ForeignPortListener {
     Fail "Foreign listener did not bind 127.0.0.1:14168"
 }
 
-function Invoke-SetupRetry([System.Diagnostics.Process]$AppProcess, [int]$TimeoutSeconds) {
+function Invoke-SetupRetry(
+    [System.Diagnostics.Process]$AppProcess,
+    [int]$TimeoutSeconds,
+    [int]$AfterSequence
+) {
     Add-Type -AssemblyName System.Windows.Forms
     $sig = @"
 using System;
@@ -445,7 +458,8 @@ public static class Win32Focus {
         Add-Failure "Automatic setup retry keypress failed: $($_.Exception.Message)"
     }
 
-    $snapshot = Wait-ForBootstrapPhase (Join-Path $ReportDir "port-conflict") "ready" $TimeoutSeconds
+    $snapshot = Wait-ForBootstrapPhase `
+        (Join-Path $ReportDir "port-conflict") "ready" $TimeoutSeconds $AfterSequence
     if ($snapshot -and $snapshot.phase -eq "ready") {
         $script:Report.checks.setupRetry = "automatic"
         return $true
@@ -453,7 +467,8 @@ public static class Win32Focus {
 
     Write-Host ""
     Write-Host "Manual action required: click 'Retry startup' in the setup window."
-    $snapshot = Wait-ForBootstrapPhase (Join-Path $ReportDir "port-conflict") "ready" 180
+    $snapshot = Wait-ForBootstrapPhase `
+        (Join-Path $ReportDir "port-conflict") "ready" 180 $AfterSequence
     if ($snapshot -and $snapshot.phase -eq "ready") {
         $script:Report.checks.setupRetry = "manual"
         return $true
@@ -491,7 +506,7 @@ function Invoke-PortConflictScenario([string]$PackageRoot) {
 
     Stop-ProcessTreeSafe $listener.Id
     Start-Sleep -Seconds 2
-    if (-not (Invoke-SetupRetry $appProc 40)) {
+    if (-not (Invoke-SetupRetry $appProc 40 ([int]$failed.seq))) {
         Fail "Setup retry did not reach ready after releasing port"
     }
     Capture-Screenshot "setup-retry-ready.png" | Out-Null

@@ -1,46 +1,157 @@
-name: Desktop Frontend Tests
+name: Desktop Quality Gates
 
 on:
   push:
-    branches: [main, desktop-react-rewrite, "fix/**", "feat/**"]
-    paths:
-      - "frontends/desktop/src/**"
-      - "frontends/desktop/package.json"
-      - "frontends/desktop/vite.config.ts"
+    branches: [main, desktop-react-rewrite]
+    paths: &desktop_paths
+      - "frontends/cost_tracker.py"
+      - "frontends/desktop_bridge.py"
+      - "frontends/tests/**"
+      - "frontends/desktop/**"
       - ".github/workflows/desktop-ci.yml"
+      - ".github/workflows/desktop-e2e-nightly.yml"
+      - ".github/workflows/desktop-release-package.yml"
   pull_request:
     branches: [main, desktop-react-rewrite]
-    paths:
-      - "frontends/desktop/src/**"
-      - "frontends/desktop/package.json"
-      - "frontends/desktop/vite.config.ts"
-      - ".github/workflows/desktop-ci.yml"
+    paths: *desktop_paths
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontends/desktop
+env:
+  PYTHONUNBUFFERED: "1"
+  CARGO_TERM_COLOR: always
 
+jobs:
+  contracts:
+    name: TypeScript, Vitest, Python, Rust
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
 
-      - run: npm install
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frontends/desktop/e2e/requirements.txt
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontends/desktop/src-tauri -> target
+
+      - name: Install desktop dependencies
+        working-directory: frontends/desktop
+        run: npm ci
+
+      - name: Install Python test runtime
+        run: python -m pip install -r frontends/desktop/e2e/requirements.txt
 
       - name: Type check
-        run: npx tsc --noEmit
+        working-directory: frontends/desktop
+        run: npx tsc --noEmit && npm run test:e2e-types
 
-      - name: Run tests
+      - name: Frontend and harness contracts
+        working-directory: frontends/desktop
         run: npx vitest run
 
-      - name: Lint
-        run: npx eslint src --ext .ts,.tsx --max-warnings 0
-        continue-on-error: true
+      - name: Python contracts
+        run: python -m pytest -q frontends/tests
+
+      - name: Rust contracts (production feature set)
+        working-directory: frontends/desktop/src-tauri
+        run: cargo test
+
+      - name: Rust contracts (E2E feature set)
+        working-directory: frontends/desktop/src-tauri
+        run: cargo test --features e2e
+
+      - name: Production build excludes WDIO
+        working-directory: frontends/desktop
+        run: npm run test:e2e-isolation
+
+  browser-e2e:
+    name: Browser E2E
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frontends/desktop/e2e/requirements.txt
+      - name: Install dependencies
+        working-directory: frontends/desktop
+        run: npm ci
+      - name: Install bridge runtime
+        run: python -m pip install -r frontends/desktop/e2e/requirements.txt
+      - name: Run deterministic browser journeys
+        working-directory: frontends/desktop
+        run: npm run e2e:browser
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-e2e-${{ github.run_id }}
+          path: frontends/desktop/e2e-results
+          if-no-files-found: warn
+
+  linux-tauri-smoke:
+    name: Linux Tauri smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xvfb
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frontends/desktop/e2e/requirements.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontends/desktop/src-tauri -> target
+      - name: Install dependencies
+        working-directory: frontends/desktop
+        run: npm ci
+      - name: Install bridge runtime
+        run: python -m pip install -r frontends/desktop/e2e/requirements.txt
+      - name: Build and drive native Tauri
+        working-directory: frontends/desktop
+        run: xvfb-run -a npm run e2e:desktop
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-tauri-e2e-${{ github.run_id }}
+          path: frontends/desktop/e2e-results
+          if-no-files-found: warn
