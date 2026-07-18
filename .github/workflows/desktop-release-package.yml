@@ -187,8 +187,14 @@ jobs:
           Compress-Archive -Path artifacts/windows/GenericAgent-Desktop-Windows-Portable `
             -DestinationPath artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip -Force
           $h = Get-FileHash artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip -Algorithm SHA256
-          "{0}  GenericAgent-Desktop-Windows-Portable.zip" -f $h.Hash.ToLowerInvariant() |
-            Set-Content -Encoding ASCII artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip.sha256
+          $shaPath = [System.IO.Path]::GetFullPath(
+            "artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip.sha256"
+          )
+          $shaLine = "{0}  GenericAgent-Desktop-Windows-Portable.zip`n" -f $h.Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText($shaPath, $shaLine, [System.Text.UTF8Encoding]::new($false))
+          if ([System.IO.File]::ReadAllBytes($shaPath) -contains 13) {
+            throw "Windows checksum sidecar must use LF line endings"
+          }
           Get-ChildItem artifacts/windows/out | Format-Table Name, Length
 
       - name: Exercise Windows portable candidate
