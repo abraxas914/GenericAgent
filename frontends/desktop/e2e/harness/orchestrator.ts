@@ -249,7 +249,7 @@ export class DesktopE2EHarness {
         jsonResponse(response, 200, { ok: true }); return;
       }
       if (request.method === 'POST' && url.pathname === '/bridge/crash-after-second-call') {
-        await this.fake.waitForRequests(2, 20_000);
+        await this.fake.waitForScenarioRequests('two-call-hang', 2, 20_000);
         await this.restartBridge(true);
         jsonResponse(response, 200, { ok: true }); return;
       }

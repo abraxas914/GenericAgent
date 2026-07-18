@@ -46,10 +46,12 @@ export class FakeOpenAI {
     this.heldResponses.clear();
   }
 
-  async waitForRequests(count: number, timeoutMs = 10_000): Promise<void> {
+  async waitForScenarioRequests(scenario: FakeScenario, count: number, timeoutMs = 10_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
-    while (this.entries.length < count) {
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${count} fake LLM requests`);
+    while (this.entries.filter((entry) => entry.scenario === scenario).length < count) {
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out waiting for ${count} ${scenario} fake LLM requests`);
+      }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
