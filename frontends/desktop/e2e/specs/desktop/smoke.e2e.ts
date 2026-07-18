@@ -12,10 +12,7 @@ const context = loadE2EContext();
 
 describe('GenericAgent native Tauri smoke', () => {
   it('boots in the isolated sandbox and completes chat plus usage UI', async () => {
-    await chat.waitUntilReady();
-    // Pin the window after the renderer is ready. The service's title-based
-    // auto-focus can otherwise race loading.html -> index.html on macOS.
-    await browser.tauri.switchWindow('main');
+    await chat.switchToMainAndWait();
     const identity = await (await fetch(`${context.bridgeBase}/services/identity`)).json() as { ga_root: string };
     assert.equal(realpathSync(identity.ga_root), realpathSync(context.sandboxRoot));
     await chat.waitForBridgeReady();
