@@ -48,4 +48,24 @@ describe('FakeOpenAI', () => {
       body: JSON.stringify({ messages: [{ role: 'user', content: '[E2E:disconnect]' }] }),
     })).rejects.toThrow();
   });
+
+  it('waits for calls from the requested scenario instead of all earlier traffic', async () => {
+    const server = new FakeOpenAI();
+    servers.push(server);
+    const baseUrl = await server.start();
+
+    await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'ordinary request' }] }),
+    });
+    await expect(server.waitForScenarioRequests('two-call-hang', 1, 25)).rejects.toThrow(/two-call-hang/);
+
+    await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: '[E2E:two-call-hang]' }] }),
+    });
+    await expect(server.waitForScenarioRequests('two-call-hang', 1, 25)).resolves.toBeUndefined();
+  });
 });
