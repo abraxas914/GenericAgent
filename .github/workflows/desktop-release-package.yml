@@ -38,7 +38,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -50,7 +52,7 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm install
+        run: npm ci
 
       - name: Build Windows desktop exe
         working-directory: frontends/desktop
@@ -189,6 +191,26 @@ jobs:
             Set-Content -Encoding ASCII artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip.sha256
           Get-ChildItem artifacts/windows/out | Format-Table Name, Length
 
+      - name: Exercise Windows portable candidate
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: pwsh
+        run: |
+          & .\frontends\desktop\e2e\windows\Invoke-WindowsUserJourney.ps1 `
+            -RunId "${{ github.run_id }}" `
+            -ExpectedCommit "${{ github.sha }}" `
+            -PackageZip "artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip" `
+            -WorkDir "${{ runner.temp }}\ga-windows-portable-e2e" `
+            -Mode Full `
+            -KeepWorkDir
+
+      - name: Upload Windows journey evidence
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: GenericAgent-Desktop-Windows-Journey-${{ github.run_number }}
+          path: ${{ runner.temp }}/ga-windows-portable-e2e/report
+          if-no-files-found: warn
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v7
         with:
@@ -197,49 +219,6 @@ jobs:
             artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip
             artifacts/windows/out/GenericAgent-Desktop-Windows-Portable.zip.sha256
           if-no-files-found: error
-
-      - name: Publish into unified Release (tag push only)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG_NAME="${{ github.ref_name }}"
-          TITLE="GenericAgent Desktop ${TAG_NAME}"
-          cat > "${RUNNER_TEMP:-/tmp}/ga_notes.md" <<'EOF'
-          GenericAgent Desktop 桌面版 / Desktop
-
-          无需自行安装 Python、无需联网安装依赖、无需源码；首次启动会自动准备内置运行环境。
-          No separate Python install, no internet for dependencies, no source checkout required; the bundled runtime is prepared on first launch.
-
-          ## 安装方法 / Installation
-          - Windows: 下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe` 启动。卸载时先退出应用，再双击包内 `uninstall.bat`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
-          - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
-
-          ## 首次启动 / First launch
-          首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
-          The first launch prepares the runtime offline (installs deps) with a progress bar, then opens the main window; later launches are faster.
-
-          ## 说明 / Notes
-          - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
-          - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
-          EOF
-          # Create the shared release if it does not exist yet (another OS job may win the race).
-          # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
-          # actually exists (a simultaneous create from another job can fail), so the
-          # upload below never races a not-yet-created release.
-          for _ in $(seq 1 15); do
-            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" 2>/dev/null || true
-            sleep 3
-          done
-          gh release upload "$TAG_NAME" artifacts/windows/out/* --clobber
 
   # ----------------------------------------------------------------------------
   build-linux:
@@ -253,7 +232,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -275,7 +256,7 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm install
+        run: npm ci
 
       - name: Build Linux AppImage
         working-directory: frontends/desktop
@@ -410,48 +391,6 @@ jobs:
             artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz.sha256
           if-no-files-found: error
 
-      - name: Publish into unified Release (tag push only)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG_NAME="${{ github.ref_name }}"
-          TITLE="GenericAgent Desktop ${TAG_NAME}"
-          cat > "${RUNNER_TEMP:-/tmp}/ga_notes.md" <<'EOF'
-          GenericAgent Desktop 桌面版 / Desktop
-
-          无需自行安装 Python、无需联网安装依赖、无需源码；首次启动会自动准备内置运行环境。
-          No separate Python install, no internet for dependencies, no source checkout required; the bundled runtime is prepared on first launch.
-
-          ## 安装方法 / Installation
-          - Windows: 下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe` 启动。卸载时先退出应用，再双击包内 `uninstall.bat`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
-          - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
-
-          ## 首次启动 / First launch
-          首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
-          The first launch prepares the runtime offline (installs deps) with a progress bar, then opens the main window; later launches are faster.
-
-          ## 说明 / Notes
-          - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
-          - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
-          EOF
-          # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
-          # actually exists (a simultaneous create from another job can fail), so the
-          # upload below never races a not-yet-created release.
-          for _ in $(seq 1 15); do
-            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" 2>/dev/null || true
-            sleep 3
-          done
-          gh release upload "$TAG_NAME" artifacts/linux/out/* --clobber
-
   # ----------------------------------------------------------------------------
   build-macos:
     name: macOS DMG
@@ -464,7 +403,9 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -476,7 +417,7 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm install
+        run: npm ci
 
       - name: Install Python packaging tools
         run: python3 -m pip install --break-system-packages ds_store
@@ -667,8 +608,11 @@ jobs:
           # Hide ghost files (.VolumeIcon.icns, .background, .fseventsd) from Finder
           bash frontends/desktop/scripts/post-dmg.sh "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
 
-          shasum -a 256 "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg" \
-            > "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg.sha256"
+          (
+            cd artifacts/macos/out
+            shasum -a 256 "GenericAgent-Desktop-macOS.dmg" \
+              > "GenericAgent-Desktop-macOS.dmg.sha256"
+          )
 
           echo "DMG stage tree:"
           find "$DMG_STAGE" -maxdepth 2 -print | sort
@@ -680,44 +624,160 @@ jobs:
           path: artifacts/macos/out/*
           if-no-files-found: error
 
-      - name: Publish into unified Release (tag push only)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # A tag may publish only after every platform has produced and uploaded its
+  # complete pair of package + checksum files. Keeping publication in one job
+  # prevents concurrent platform jobs from exposing a partial public release.
+  publish-release:
+    name: Publish unified Release
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    needs:
+      - build-windows
+      - build-linux
+      - build-macos
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Download Windows package
+        uses: actions/download-artifact@v8
+        with:
+          name: GenericAgent-Desktop-Windows-Portable-${{ github.run_number }}
+          path: release-assets/windows
+
+      - name: Download Linux package
+        uses: actions/download-artifact@v8
+        with:
+          name: GenericAgent-Desktop-Linux-Portable-${{ github.run_number }}
+          path: release-assets/linux
+
+      - name: Download macOS package
+        uses: actions/download-artifact@v8
+        with:
+          name: GenericAgent-Desktop-macOS-DMG-${{ github.run_number }}
+          path: release-assets/macos
+
+      - name: Verify all release assets
         shell: bash
         run: |
           set -euo pipefail
-          TAG_NAME="${{ github.ref_name }}"
-          TITLE="GenericAgent Desktop ${TAG_NAME}"
-          cat > "${RUNNER_TEMP:-/tmp}/ga_notes.md" <<'EOF'
-          GenericAgent Desktop 桌面版 / Desktop
 
-          无需自行安装 Python、无需联网安装依赖、无需源码；首次启动会自动准备内置运行环境。
-          No separate Python install, no internet for dependencies, no source checkout required; the bundled runtime is prepared on first launch.
-
-          ## 安装方法 / Installation
-          - Windows: 下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe` 启动。卸载时先退出应用，再双击包内 `uninstall.bat`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
-          - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
-
-          ## 首次启动 / First launch
-          首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
-          The first launch prepares the runtime offline (installs deps) with a progress bar, then opens the main window; later launches are faster.
-
-          ## 说明 / Notes
-          - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
-          - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
-          EOF
-          # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
-          # actually exists (a simultaneous create from another job can fail), so the
-          # upload below never races a not-yet-created release.
-          for _ in $(seq 1 15); do
-            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" 2>/dev/null || true
-            sleep 3
+          expected=(
+            "release-assets/windows/GenericAgent-Desktop-Windows-Portable.zip"
+            "release-assets/windows/GenericAgent-Desktop-Windows-Portable.zip.sha256"
+            "release-assets/linux/GenericAgent-Desktop-Linux-Portable.tar.gz"
+            "release-assets/linux/GenericAgent-Desktop-Linux-Portable.tar.gz.sha256"
+            "release-assets/macos/GenericAgent-Desktop-macOS.dmg"
+            "release-assets/macos/GenericAgent-Desktop-macOS.dmg.sha256"
+          )
+          for asset in "${expected[@]}"; do
+            test -s "$asset" || { echo "Missing or empty release asset: $asset" >&2; exit 1; }
           done
-          gh release upload "$TAG_NAME" artifacts/macos/out/* --clobber
+
+          test "$(find release-assets -type f | wc -l)" -eq 6 || {
+            echo "Expected exactly six release files" >&2
+            find release-assets -type f -print | sort >&2
+            exit 1
+          }
+
+          (cd release-assets/windows && sha256sum -c GenericAgent-Desktop-Windows-Portable.zip.sha256)
+          (cd release-assets/linux && sha256sum -c GenericAgent-Desktop-Linux-Portable.tar.gz.sha256)
+          (cd release-assets/macos && sha256sum -c GenericAgent-Desktop-macOS.dmg.sha256)
+
+      - name: Prepare release notes
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          : > release-notes.md
+
+          if [[ "$TAG_NAME" == "desktop-portable-v0.2.1" ]]; then
+            cat >> release-notes.md <<'EOF'
+          ## 本次更新 / What's new
+
+          - Token 用量在每次模型调用后立即持久化，桌面桥接进程崩溃或重启后历史记录仍可恢复。
+          - 空回复现在会显示本地化提示，不再留下难以理解的空白消息。
+          - 加强桌面恢复能力和跨平台自动化验证，覆盖损坏数据、进程重启和便携包用户旅程。
+
+          - Token usage is persisted after every model call and survives desktop bridge crashes and restarts.
+          - Empty assistant turns now render a localized explanatory message instead of a blank response.
+          - Desktop recovery and cross-platform automation now cover corrupted data, process restarts, and portable-package journeys.
+
+          EOF
+          fi
+
+          cat >> release-notes.md <<'EOF'
+          ## 下载与校验 / Download and verification
+
+          每个平台均提供安装包及对应的 `.sha256` 文件。下载两者后可校验文件完整性：
+
+          ```bash
+          sha256sum -c <package>.sha256
+          ```
+
+          Each platform includes the package and its matching `.sha256` file. Download both and verify the package before installation.
+
+          - Windows: 解压 ZIP，运行 `GenericAgent.exe`。
+          - Linux: 解压 `tar.gz`，为 AppImage 添加执行权限后启动。
+          - macOS: 打开 DMG，将 `GenericAgent.app` 拖入 Applications；若 Gatekeeper 阻止启动，请使用 DMG 内的 `open_anyway.command`。
+
+          所有包均内置 Python、运行时依赖、桌面桥接服务和静态前端资源，无需另行安装 Python。
+          EOF
+
+      - name: Create draft, upload atomically, then publish
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          target_sha="$(git rev-list -n 1 "${TAG_NAME}^{commit}")"
+          test -n "$target_sha"
+
+          if gh release view "$TAG_NAME" --json isDraft >/tmp/release.json 2>/dev/null; then
+            test "$(jq -r '.isDraft' /tmp/release.json)" = "true" || {
+              echo "Refusing to modify an already-public release: $TAG_NAME" >&2
+              exit 1
+            }
+            gh release edit "$TAG_NAME" \
+              --draft \
+              --target "$target_sha" \
+              --title "GenericAgent Desktop Portable ${TAG_NAME#desktop-portable-}" \
+              --notes-file release-notes.md
+          else
+            gh release create "$TAG_NAME" \
+              --draft \
+              --verify-tag \
+              --target "$target_sha" \
+              --title "GenericAgent Desktop Portable ${TAG_NAME#desktop-portable-}" \
+              --notes-file release-notes.md
+          fi
+
+          gh release upload "$TAG_NAME" \
+            release-assets/windows/GenericAgent-Desktop-Windows-Portable.zip \
+            release-assets/windows/GenericAgent-Desktop-Windows-Portable.zip.sha256 \
+            release-assets/linux/GenericAgent-Desktop-Linux-Portable.tar.gz \
+            release-assets/linux/GenericAgent-Desktop-Linux-Portable.tar.gz.sha256 \
+            release-assets/macos/GenericAgent-Desktop-macOS.dmg \
+            release-assets/macos/GenericAgent-Desktop-macOS.dmg.sha256 \
+            --clobber
+
+          cat > /tmp/expected-assets.txt <<'EOF'
+          GenericAgent-Desktop-Linux-Portable.tar.gz
+          GenericAgent-Desktop-Linux-Portable.tar.gz.sha256
+          GenericAgent-Desktop-Windows-Portable.zip
+          GenericAgent-Desktop-Windows-Portable.zip.sha256
+          GenericAgent-Desktop-macOS.dmg
+          GenericAgent-Desktop-macOS.dmg.sha256
+          EOF
+          gh release view "$TAG_NAME" --json assets --jq '.assets[].name' \
+            | sort > /tmp/actual-assets.txt
+          diff -u /tmp/expected-assets.txt /tmp/actual-assets.txt
+
+          gh release edit "$TAG_NAME" --draft=false --latest
