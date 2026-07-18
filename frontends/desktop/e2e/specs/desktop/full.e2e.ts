@@ -11,8 +11,7 @@ const describeFull = process.env.GA_E2E_SUITE === 'full' ? describe : describe.s
 
 describeFull('GenericAgent native Tauri full recovery', () => {
   it('rejects a foreign bridge port owner and recovers after retry', async () => {
-    await chat.waitUntilReady();
-    await browser.tauri.switchWindow('main');
+    await chat.switchToMainAndWait();
     await chat.waitForBridgeReady();
 
     await controlRequest('/port/occupy-bridge', { method: 'POST', body: '{}' });

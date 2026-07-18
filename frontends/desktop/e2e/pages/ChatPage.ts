@@ -9,6 +9,13 @@ export class ChatPage {
     await this.navigation.waitForDisplayed({ timeout: 20_000 });
   }
 
+  async switchToMainAndWait(): Promise<void> {
+    // Windows WebDriver can initially attach to the visible setup window even
+    // after bootstrap has navigated and shown the main window.
+    await browser.tauri.switchWindow('main');
+    await this.waitUntilReady();
+  }
+
   async waitForBridgeReady(): Promise<void> {
     await browser.waitUntil(async () => !(await $('.ga-chat-offline').isExisting()), {
       timeout: 30_000,
