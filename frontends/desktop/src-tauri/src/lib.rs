@@ -1308,20 +1308,31 @@ fn wait_for_owned_bridge(
     ))
 }
 
+fn main_ui_url_from_current(mut current_url: tauri::Url) -> Result<tauri::Url, String> {
+    if current_url.cannot_be_a_base() {
+        return Err("current main window URL cannot resolve an application asset".to_string());
+    }
+    current_url.set_path("/index.html");
+    current_url.set_query(None);
+    current_url.set_fragment(None);
+    Ok(current_url)
+}
+
 fn open_main_window(app_handle: &tauri::AppHandle, dev_mode: bool) -> Result<(), BootstrapFailure> {
     let main_window = app_handle.get_webview_window("main").ok_or_else(|| {
         bootstrap_failure(BootstrapFailureCode::UiNavigationFailed, "main window is unavailable")
     })?;
-    let url_str = if cfg!(debug_assertions) {
-        "http://localhost:5173/index.html"
-    } else {
-        "tauri://localhost/index.html"
-    };
-    let url = tauri::Url::parse(url_str).map_err(|error| {
+    // Derive the target from the webview's current loading.html URL so each
+    // platform keeps the asset scheme Tauri selected for it. WebView2 uses
+    // http://tauri.localhost while WKWebView uses tauri://localhost.
+    let current_url = main_window.url().map_err(|error| {
         bootstrap_failure(
             BootstrapFailureCode::UiNavigationFailed,
-            format!("main window URL is invalid: {error}"),
+            format!("main window URL could not be read: {error}"),
         )
+    })?;
+    let url = main_ui_url_from_current(current_url).map_err(|error| {
+        bootstrap_failure(BootstrapFailureCode::UiNavigationFailed, error)
     })?;
     main_window.navigate(url).map_err(|error| {
         bootstrap_failure(
@@ -1858,5 +1869,32 @@ mod tests {
         assert!(bridge_endpoint_from_values(Some("0.0.0.0"), Some("24168")).is_err());
         assert!(bridge_endpoint_from_values(Some("127.0.0.1"), Some("0")).is_err());
         assert!(bridge_endpoint_from_values(Some("127.0.0.1"), Some("bad")).is_err());
+    }
+
+    #[test]
+    fn main_ui_url_keeps_the_platform_asset_origin() {
+        let windows = main_ui_url_from_current(
+            tauri::Url::parse("http://tauri.localhost/loading.html?phase=ready#status").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(windows.as_str(), "http://tauri.localhost/index.html");
+
+        let macos = main_ui_url_from_current(
+            tauri::Url::parse("tauri://localhost/loading.html").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(macos.as_str(), "tauri://localhost/index.html");
+
+        let dev = main_ui_url_from_current(
+            tauri::Url::parse("http://localhost:5173/loading.html").unwrap(),
+        )
+        .unwrap();
+        assert_eq!(dev.as_str(), "http://localhost:5173/index.html");
+    }
+
+    #[test]
+    fn main_ui_url_rejects_non_hierarchical_urls() {
+        let data_url = tauri::Url::parse("data:text/plain,loading").unwrap();
+        assert!(main_ui_url_from_current(data_url).is_err());
     }
 }
