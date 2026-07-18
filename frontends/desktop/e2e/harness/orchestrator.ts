@@ -1,12 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { realpathSync } from 'node:fs';
 import { appendFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { basename, dirname, join, resolve } from 'node:path';
 import { FakeOpenAI } from './fake-openai';
-import { allocateLoopbackPort, redactEvidence } from './runtime';
+import { allocateLoopbackPort, pathsReferToSameEntry, redactEvidence } from './runtime';
 import { cleanupSandbox, createSandbox, type SandboxLayout } from './sandbox';
 import type { E2EContextFile } from './context';
 
@@ -166,9 +165,7 @@ export class DesktopE2EHarness {
     this.bridge = this.spawnLogged('bridge', this.options.pythonPath, [script], sandbox.root, sandbox.env);
     const identityResponse = await waitForHttp(`http://127.0.0.1:${this.bridgePort}/services/identity`);
     const identity = await identityResponse.json() as { ga_root?: string };
-    const actualRoot = realpathSync(resolve(String(identity.ga_root || '')));
-    const expectedRoot = realpathSync(resolve(sandbox.root));
-    if (actualRoot !== expectedRoot) {
+    if (!pathsReferToSameEntry(String(identity.ga_root || ''), sandbox.root)) {
       throw new Error(`Bridge escaped E2E sandbox: ${identity.ga_root || '<missing>'}`);
     }
   }
@@ -346,9 +343,9 @@ export class DesktopE2EHarness {
       return;
     }
     if (!identity.pid) return;
-    const actualRoot = realpathSync(resolve(String(identity.ga_root || '')));
-    const expectedRoot = realpathSync(resolve(sandbox.root));
-    if (actualRoot !== expectedRoot) throw new Error(`Refusing to stop bridge outside sandbox: ${identity.ga_root}`);
+    if (!pathsReferToSameEntry(String(identity.ga_root || ''), sandbox.root)) {
+      throw new Error(`Refusing to stop bridge outside sandbox: ${identity.ga_root}`);
+    }
     if (process.platform === 'win32') {
       spawnSync('taskkill', ['/PID', String(identity.pid), '/T', '/F'], { stdio: 'ignore' });
     } else {

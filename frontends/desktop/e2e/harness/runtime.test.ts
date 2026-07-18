@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { link, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import {
   allocateLoopbackPort,
   assertLoopbackUrl,
   assertSandboxRoot,
+  pathsReferToSameEntry,
   redactEvidence,
 } from './runtime';
 
@@ -31,6 +32,19 @@ describe('E2E harness runtime safety', () => {
     await writeFile(join(root, '.ga-e2e-sandbox'), 'v1\n');
     expect(assertSandboxRoot(root)).toBe(root);
     expect(await readFile(join(root, '.ga-e2e-sandbox'), 'utf8')).toBe('v1\n');
+  });
+
+  it('compares filesystem identity instead of path spelling', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'ga-e2e-path-identity-'));
+    const original = join(root, 'long-name');
+    const alias = join(root, 'SHORT~1');
+    const sibling = join(root, 'sibling');
+    await writeFile(original, 'sandbox');
+    await link(original, alias);
+    await writeFile(sibling, 'different');
+
+    expect(pathsReferToSameEntry(original, alias)).toBe(true);
+    expect(pathsReferToSameEntry(original, sibling)).toBe(false);
   });
 
   it('redacts credentials without removing useful process evidence', () => {
