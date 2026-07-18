@@ -29,6 +29,7 @@ describe('isolated GenericAgent sandbox', () => {
     expect(mykey).not.toContain('real-secret');
     expect(sandbox.env.HOME).toBe(sandbox.home);
     expect(sandbox.env.USERPROFILE).toBe(sandbox.home);
+    expect(sandbox.env.GA_E2E_SETTINGS_PATH).toBe(join(sandbox.home, '.ga_desktop_settings.json'));
     expect(sandbox.env.BRIDGE_PORT).toBe('24168');
     expect(sandbox.env.VITE_BRIDGE_BASE).toBe('http://127.0.0.1:24168');
     expect(sandbox.env.GA_E2E_CONTROL_TOKEN).toBe('random-control-token');

@@ -108,6 +108,7 @@ export async function createSandbox(options: SandboxOptions): Promise<SandboxLay
     HOME: home,
     USERPROFILE: home,
     GA_E2E: '1',
+    GA_E2E_SETTINGS_PATH: join(home, '.ga_desktop_settings.json'),
     GA_E2E_CONTROL_TOKEN: options.controlToken,
     GA_DESKTOP_E2E_REPORT_DIR: reports,
     BRIDGE_HOST: '127.0.0.1',

@@ -510,11 +510,31 @@ fn find_project_dir() -> Option<String> {
     None
 }
 
-/// Settings file path: ~/.ga_desktop_settings.json
-fn settings_path() -> PathBuf {
-    dirs::home_dir()
+fn resolve_settings_path(home_dir: Option<PathBuf>, e2e_override: Option<&str>) -> PathBuf {
+    if let Some(path) = e2e_override.filter(|path| !path.trim().is_empty()) {
+        return PathBuf::from(path);
+    }
+    home_dir
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".ga_desktop_settings.json")
+}
+
+/// Settings file path: ~/.ga_desktop_settings.json.
+///
+/// Windows resolves the home directory through Known Folders and ignores an overridden
+/// USERPROFILE. E2E builds therefore accept an explicit sandbox-owned settings file; the
+/// production feature set never reads this override.
+fn settings_path() -> PathBuf {
+    #[cfg(feature = "e2e")]
+    let e2e_override = if std::env::var("GA_E2E").ok().as_deref() == Some("1") {
+        std::env::var("GA_E2E_SETTINGS_PATH").ok()
+    } else {
+        None
+    };
+    #[cfg(not(feature = "e2e"))]
+    let e2e_override: Option<String> = None;
+
+    resolve_settings_path(dirs::home_dir(), e2e_override.as_deref())
 }
 
 /// Read the settings file as a JSON object (empty object when missing/unparseable).
@@ -1896,5 +1916,22 @@ mod tests {
     fn main_ui_url_rejects_non_hierarchical_urls() {
         let data_url = tauri::Url::parse("data:text/plain,loading").unwrap();
         assert!(main_ui_url_from_current(data_url).is_err());
+    }
+
+    #[test]
+    fn explicit_e2e_settings_path_wins_over_platform_home_resolution() {
+        let resolved = resolve_settings_path(
+            Some(PathBuf::from("C:\\Users\\runneradmin")),
+            Some("C:\\sandbox\\home\\.ga_desktop_settings.json"),
+        );
+        assert_eq!(
+            resolved,
+            PathBuf::from("C:\\sandbox\\home\\.ga_desktop_settings.json")
+        );
+
+        assert_eq!(
+            resolve_settings_path(Some(PathBuf::from("/home/user")), None),
+            PathBuf::from("/home/user/.ga_desktop_settings.json")
+        );
     }
 }
