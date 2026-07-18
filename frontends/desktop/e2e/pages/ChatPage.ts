@@ -1,6 +1,5 @@
 export class ChatPage {
   get navigation() { return $('nav[aria-label="Main navigation"]'); }
-  get newChatButton() { return this.navigation.$$('button')[0]; }
   get editor() { return $('[role="textbox"][contenteditable="true"]'); }
   get sendButton() { return $('button[aria-label="Send message"]'); }
   get assistants() { return $$('[data-role="assistant"]'); }
@@ -25,7 +24,23 @@ export class ChatPage {
   }
 
   async startNewChat(): Promise<void> {
-    await this.newChatButton.click();
+    let button: ReturnType<typeof $> | undefined;
+    await browser.waitUntil(async () => {
+      try {
+        const candidate = $('button[aria-label="新建会话"], button[aria-label="New Session"]');
+        if (!await candidate.isDisplayed() || !await candidate.isEnabled()) return false;
+        button = candidate;
+        return true;
+      } catch {
+        // Tauri may replace the renderer while bootstrap reopens the main UI.
+        return false;
+      }
+    }, {
+      timeout: 20_000,
+      interval: 100,
+      timeoutMsg: 'New chat action did not become available',
+    });
+    await button!.click();
     await this.editor.waitForDisplayed({ timeout: 10_000 });
   }
 

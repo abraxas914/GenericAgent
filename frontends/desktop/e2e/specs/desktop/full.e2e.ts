@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { realpathSync } from 'node:fs';
 import { ChatPage } from '../../pages/ChatPage';
 import { RecoveryPage } from '../../pages/RecoveryPage';
 import { controlRequest, loadE2EContext } from '../../harness/context';
+import { pathsReferToSameEntry } from '../../harness/runtime';
 
 const chat = new ChatPage();
 const recovery = new RecoveryPage();
@@ -33,7 +33,7 @@ describeFull('GenericAgent native Tauri full recovery', () => {
         if (!response.ok) return false;
         const identity = await response.json() as { ga_root?: string };
         return Boolean(identity.ga_root)
-          && realpathSync(identity.ga_root!) === realpathSync(context.sandboxRoot);
+          && pathsReferToSameEntry(identity.ga_root!, context.sandboxRoot);
       } catch {
         return false;
       }

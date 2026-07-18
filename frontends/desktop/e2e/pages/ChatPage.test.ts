@@ -26,4 +26,36 @@ describe('ChatPage native window selection', () => {
 
     expect(order).toEqual(['switch:main', 'ready']);
   });
+
+  it('retries a semantic new-chat lookup while the Tauri renderer is being replaced', async () => {
+    const click = vi.fn(async () => undefined);
+    const waitForDisplayed = vi.fn(async () => undefined);
+    const lookup = vi.fn()
+      .mockImplementationOnce(() => {
+        throw new Error('transient WebDriver javascript exception');
+      })
+      .mockImplementation((selector: string) => {
+        if (selector.includes('aria-label="New Session"')) {
+          return {
+            isDisplayed: vi.fn(async () => true),
+            isEnabled: vi.fn(async () => true),
+            click,
+          };
+        }
+        if (selector.includes('role="textbox"')) return { waitForDisplayed };
+        throw new Error(`Unexpected selector: ${selector}`);
+      });
+    vi.stubGlobal('$', lookup);
+    vi.stubGlobal('browser', {
+      waitUntil: vi.fn(async (predicate: () => Promise<boolean>) => {
+        expect(await predicate()).toBe(false);
+        expect(await predicate()).toBe(true);
+      }),
+    });
+
+    await new ChatPage().startNewChat();
+
+    expect(click).toHaveBeenCalledOnce();
+    expect(waitForDisplayed).toHaveBeenCalledOnce();
+  });
 });
