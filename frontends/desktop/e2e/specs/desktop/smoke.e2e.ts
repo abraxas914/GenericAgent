@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { realpathSync } from 'node:fs';
 import { ChatPage } from '../../pages/ChatPage';
 import { UsagePage } from '../../pages/UsagePage';
 import { RecoveryPage } from '../../pages/RecoveryPage';
 import { controlRequest, loadE2EContext } from '../../harness/context';
+import { pathsReferToSameEntry } from '../../harness/runtime';
 
 const chat = new ChatPage();
 const usage = new UsagePage();
@@ -14,7 +14,7 @@ describe('GenericAgent native Tauri smoke', () => {
   it('boots in the isolated sandbox and completes chat plus usage UI', async () => {
     await chat.switchToMainAndWait();
     const identity = await (await fetch(`${context.bridgeBase}/services/identity`)).json() as { ga_root: string };
-    assert.equal(realpathSync(identity.ga_root), realpathSync(context.sandboxRoot));
+    assert.ok(pathsReferToSameEntry(identity.ga_root, context.sandboxRoot), 'bridge must run inside the E2E sandbox');
     await chat.waitForBridgeReady();
     await chat.startNewChat();
     await chat.send('[E2E:normal] native smoke');
