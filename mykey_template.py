@@ -157,7 +157,6 @@ mixin_config = {
 #     'stream': False,                             # 某些渠道不支持 SSE 流式时改 False
 #     # 'user_agent': 'claude-cli/2.1.113 (external, cli)',
 # }
-
 # ── 1b. Anthropic 官方直连 ──────────────────────────────────────────────────
 #  官方端点，apikey 以 sk-ant- 开头 → 自动切到 x-api-key 鉴权。
 #  真 Anthropic 端点不需要 fake_cc_system_prompt。
@@ -312,4 +311,3 @@ mixin_config = {
 #     'secret_key': 'sk-lf-...',
 #     'host': 'https://cloud.langfuse.com',   # 或自托管地址
 # }
-

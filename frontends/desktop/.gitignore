@@ -4,5 +4,4 @@ src-tauri/gen/
 
 # Node
 node_modules/
-dist/
-e2e-results/
+package-lock.json

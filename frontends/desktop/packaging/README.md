@@ -33,25 +33,3 @@ frontends/desktop/packaging/
 
 > 说明：实际的桌面壳二进制（`GenericAgent.exe` / `.AppImage` / `.app`）由 CI
 > 构建生成并发布到 GitHub Release，不在本仓库内提交，也不在本目录占位。
-
-## 自动化测试体系
-
-打包前通过 `npm run test:all` 一键验证。测试分四层：
-
-| 层 | 命令 | 说明 |
-|---|---|---|
-| Layer 1 | `npm run test` | UI/store/逻辑测试（vitest + happy-dom） |
-| Layer 2 | `npm run test:bridge` | Bridge 连接协议、状态机、API 契约 |
-| Layer 3 | `npm run test:bundle` | 构建产物完整性（dist 结构、JS bundle 存在性） |
-| Layer 4 | `npm run test:packaging` | 打包前置条件（tauri.conf、icons、脚本语法） |
-
-分层跑：
-
-```bash
-npm run test              # Layer 1 全部
-npm run test:stress       # Layer 1 压力子集
-npm run test:bridge       # Layer 2
-npm run test:bundle       # Layer 3（需先 npm run build）
-npm run test:packaging    # Layer 4
-npm run test:all          # Layer 1-3 一键
-```
