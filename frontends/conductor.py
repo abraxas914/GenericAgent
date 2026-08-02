@@ -382,7 +382,8 @@ GET /subagent/{{id}}?max_len=N\t返回单个subagent详情，reply经清洗后�
 1. 结合记忆、上下文和用户偏好判断真实需求；不清楚/不能代劳时，用精简checklist一次性问用户。
 2. 判断是新任务还是延续现有任务；优先复用已有stopped subagent（用input追加），只有确实无关的新任务才新建。
 3. 分派前必须POST /chat告知用户：改写后的prompt + 分派方案（新建/复用哪个subagent）。
-4. 执行分派，完成即停。危险操作（改源码/删数据/安全敏感）必须改成先让subagent出方案；你验收后POST /chat请用户确认，确认后才继续执行。""",
+4. 执行分派，完成即停。危险操作（改源码/删数据/安全敏感）必须改成先让subagent出方案；你验收后POST /chat请用户确认，确认后才继续执行。
+5. 建议按照任务建立cwd下子目录并在prompt中要求subagent将文件输出到子目录""",
 "subagent": """\
 subagent完成流程：
 1. 如果是IM采集subagent，按GET /readme/im进行而非本流程
@@ -484,7 +485,6 @@ API: {base}；requests，GET /readme查用法，GET /chat读未读对话，GET /
                 return
 
     def _run(self):
-        self.agent = GenericAgent()
         self.agent.inc_out = True
         start_agent_runner(self.agent, "conductor-agent")
         self.started = True
@@ -501,11 +501,14 @@ API: {base}；requests，GET /readme查用法，GET /chat读未读对话，GET /
                     self.inbox.task_done()
                 except Exception:
                     break
+            kind = first.get("type")
+            other_events = [event for event in events if event.get("type") != kind]
+            events = [event for event in events if event.get("type") == kind]
+            for event in other_events:
+                self.inbox.put(event)
             try:
                 prompt = self._build_prompt(events)
-                # Follow the desktop-selected model live: re-read before each task
-                # so switching models in the UI takes effect without restarting.
-                model_state = _apply_desktop_model(self.agent)
+                model_state = self.model_snapshot()
                 self._publish_model_state(model_state, running=True)
                 try:
                     dq = self.agent.put_task(prompt, source="conductor")
@@ -514,7 +517,10 @@ API: {base}；requests，GET /readme查用法，GET /chat读未读对话，GET /
                     self._publish_model_state(model_state, running=False)
             except Exception as e: print(f"Conductor error: {e}")
 
-    def start(self): threading.Thread(target=self._run, name="conductor-loop", daemon=True).start()
+    def start(self):
+        self.agent = GenericAgent()
+        self._publish_model_state(_apply_desktop_model(self.agent), running=False)
+        threading.Thread(target=self._run, name="conductor-loop", daemon=True).start()
 
 
 conductor = Conductor()
@@ -620,7 +626,9 @@ def api_get_chat(last: int = 20):
 
 @app.post("/chat")
 def api_chat(body: ChatIn):
-    return add_chat(body.msg, role=body.role)
+    item = add_chat(body.msg, role=body.role)
+    if body.role == "user": conductor.notify({"type": "user_message", "msg": body.msg})
+    return item
 
 @app.post("/approval")
 def api_approval(body: ApprovalIn):
@@ -635,7 +643,8 @@ async def websocket(ws: WebSocket):
         running = any(s.status == "running" for s in pool.subagents.values())
         await ws.send_json({"type": "hello", "subagents": pool.snapshot(), "chat": chat_messages,
                             "log": conductor.log, "running": running,
-                            "model": conductor.model_snapshot()})
+                            "model": conductor.model_snapshot(),
+                            "llms": conductor.agent.list_llms(), "llm": conductor.agent.llm_no})
         while True:
             data = await ws.receive_json()
             msg = (data.get("msg") or "").strip()

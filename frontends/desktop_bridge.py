@@ -2385,6 +2385,21 @@ async def get_token_history_handler(request):
         return json_ok({"history": [], "snap": {}})
 
 
+async def subscription_portal_handler(request):
+    manager.ensure_ga_import_path()
+    try:
+        import agentmain as am
+    except Exception:
+        am = None
+    sp = getattr(am, "start_subscription_portal", None) if am else None
+    if request.method == "GET":
+        return json_ok({"available": bool(sp)})
+    if not sp:
+        return json_ok({"ok": False, "available": False}, status=404)
+    sp()
+    return json_ok({"ok": True})
+
+
 def create_app():
     app = web.Application(middlewares=[cors_middleware], client_max_size=500 * 1024 * 1024)
     app.router.add_get("/ws", ws_handler)
@@ -2416,6 +2431,8 @@ def create_app():
     app.router.add_get("/upload/raw", upload_raw_handler)
     app.router.add_get("/token-stats", token_stats_handler)
     app.router.add_get("/token-history", get_token_history_handler)
+    app.router.add_get("/subscription-portal", subscription_portal_handler)
+    app.router.add_post("/subscription-portal", subscription_portal_handler)
     app.router.add_post("/services/start", service_start_handler)
     app.router.add_post("/services/stop", service_stop_handler)
     app.router.add_get("/services/logs", service_logs_handler)
