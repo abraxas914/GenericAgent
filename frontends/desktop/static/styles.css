@@ -3,6 +3,15 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* 抑制页面加载时的过渡动画闪烁 */
+.no-transition,
+.no-transition *,
+.no-transition *::before,
+.no-transition *::after {
+  transition: none !important;
+  animation: none !important;
+}
+
 /* —— 全局滚动条 —— */
 ::-webkit-scrollbar{ width:6px; height:6px; }
 ::-webkit-scrollbar-track{ background:transparent; }
@@ -21,28 +30,28 @@
   --font-num-variant:lining-nums tabular-nums;
   --chat-col-w:760px;
   /* —— 基础面 —— */
-  --bg-base:#f4f5f7;
+  --bg-base:#f5f7fa;
   --bg:var(--bg-base);
   --panel:#ffffff;
   --card:#ffffff;
-  --field-bg:#fafbfc;
-  --line-base:#e9eaee;
+  --field-bg:#fbfcfe;
+  --line-base:#e2e8f0;
   --line:var(--line-base);
-  --line-soft-base:#f0f1f4;
+  --line-soft-base:#edf2f7;
   --line-soft:var(--line-soft-base);
-  --line-strong:#d4d8e0;    /* hover 描边 */
-  --hover-2:#eceef2;        /* 次级 hover 底 */
+  --line-strong:#cad3df;    /* hover 描边 */
+  --hover-2:#eaf0f6;        /* 次级 hover 底 */
   --hover-dim:#0000000f;
 
   /* —— 文字 —— */
-  --txt:#1f2430;
-  --txt-strong:#3b414f;     /* 标题 */
-  --txt-2:#4a4f5c;          /* 常规可点文字 */
-  --txt-3:#5b6170;
-  --muted:#656b7a;
-  --muted2:#767d8d;
-  --placeholder:#c4cad6;
-  --icon:#6b7180;
+  --txt:#111418;
+  --txt-strong:#1c2128;     /* 标题 */
+  --txt-2:#2c3138;          /* 常规可点文字 */
+  --txt-3:#424852;
+  --muted:#535a66;
+  --muted2:#68707c;
+  --placeholder:#b8c0cc;
+  --icon:#59606c;
   --on-accent:#ffffff;      /* 彩色底上的字/图标 */
 
   /* —— 强调色(只保留灰色亮色主题,删去 mac 8 色主题切换)—— */
@@ -79,9 +88,9 @@
   --dot-idle:#c2c7d0;
 
   /* —— 外观切换页的样本色（不跟随当前主题，固定为 light/dark 实际配色） —— */
-  --sample-light-bg:#f4f5f7;
+  --sample-light-bg:#f5f7fa;
   --sample-light-panel:#ffffff;
-  --sample-light-line:#e9eaee;
+  --sample-light-line:#e2e8f0;
   --sample-dark-bg:#161b22;
   --sample-dark-panel:#21262d;
   --sample-dark-line:#484f58;

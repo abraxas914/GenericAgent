@@ -1,142 +1,267 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title data-i18n="setup.title">GenericAgent</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenericAgent — Fix startup</title>
 <style>
-:root{--bg:#fff;--text:#0a0a0a;--muted:#6b6b6b;--border:#e8e8e8;--accent:#0a0a0a;--accent-text:#fff;--radius:10px;--font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",Helvetica,Arial,sans-serif}
-@media(prefers-color-scheme:dark){:root{--bg:#1a1a1a;--text:#ededed;--muted:#a0a0a0;--border:#2a2a2a;--accent:#ededed;--accent-text:#0a0a0a}}
-*{box-sizing:border-box}
-html,body{margin:0;height:100%;font-family:var(--font);background:var(--bg);color:var(--text);display:flex;align-items:center;justify-content:center}
-.card{max-width:480px;width:90%;padding:2.5rem;border:1px solid var(--border);border-radius:var(--radius);text-align:center}
-h1{font-size:1.4rem;margin:0 0 .5rem}
-p{color:var(--muted);font-size:.9rem;margin:.4rem 0;line-height:1.5}
-.input-row{display:flex;gap:8px;margin-top:1.2rem}
-input[type=text]{flex:1;padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:.9rem;background:var(--bg);color:var(--text);outline:none}
-input[type=text]:focus{border-color:var(--accent)}
-button{padding:10px 18px;border:none;border-radius:6px;font-size:.9rem;cursor:pointer;background:var(--accent);color:var(--accent-text);font-weight:500}
-button:hover{opacity:.85}
-button:disabled{opacity:.4;cursor:not-allowed}
-.field-label{display:block;text-align:left;font-size:.8rem;font-weight:500;margin-top:1rem;margin-bottom:.3rem;color:var(--text)}
-#status{margin-top:1rem;font-size:.85rem;min-height:1.2em}
-.err{color:#dc2626}.ok{color:#16a34a}
-</style>
-<script src="i18n.js?v=2"></script>
-</head>
-<body>
-<div class="card">
-  <h1><span aria-hidden="true">⚙️</span> <span data-i18n="setup.heading"></span></h1>
-  <p data-i18n="setup.backend_failed"></p>
-
-  <label class="field-label" data-i18n="setup.py_label"></label>
-  <div class="input-row">
-    <input id="pypath" type="text" data-i18n-placeholder="setup.py_placeholder" spellcheck="false">
-  </div>
-  <p style="color:var(--muted);font-size:.75rem;margin-top:.3rem" data-i18n="setup.py_hint"></p>
-
-  <label class="field-label" data-i18n="setup.project_label"></label>
-  <div class="input-row">
-    <input id="projdir" type="text" data-i18n-placeholder="setup.project_placeholder" spellcheck="false">
-  </div>
-  <p style="color:var(--muted);font-size:.75rem;margin-top:.3rem" data-i18n="setup.project_hint"></p>
-
-  <button id="start-btn" onclick="doStart()" style="margin-top:1.2rem;width:100%" data-i18n="setup.start"></button>
-  <div id="status"></div>
-</div>
-<script>
-const bootT = window.GA_BOOT_I18N?.t || ((key, vars) => vars?.error ? `${key}: ${vars.error}` : key);
-window.GA_BOOT_I18N?.apply(document);
-const {invoke} = window.__TAURI__.core;
-const {getCurrentWindow, Window} = window.__TAURI__.window;
-const statusEl = document.getElementById('status');
-const btn = document.getElementById('start-btn');
-const pyInput = document.getElementById('pypath');
-const dirInput = document.getElementById('projdir');
-
-// Pre-fill from Rust config discovery
-invoke('get_config').then(([py, dir]) => {
-  if (py) pyInput.value = py;
-  if (dir) dirInput.value = dir;
-}).catch(()=>{});
-
-// Surface the actual first-run prepare error (if this screen was reached via a
-// failed install), instead of only showing the generic "configure paths" text.
-invoke('get_prepare_error').then(err => {
-  if (!err) return;
-  const box = document.createElement('p');
-  box.className = 'err';
-  box.style.cssText = 'text-align:left;white-space:pre-wrap;font-size:.8rem;max-height:8em;overflow:auto';
-  box.textContent = bootT('setup.prepare_error') + '\n' + err;
-  const card = document.querySelector('.card');
-  card.insertBefore(box, card.querySelector('.field-label'));
-}).catch(()=>{});
-
-async function doStart() {
-  const pythonPath = pyInput.value.trim();
-  const projectDir = dirInput.value.trim();
-  if (!pythonPath) { statusEl.className='err'; statusEl.textContent=bootT('setup.err_py'); return; }
-  if (!projectDir) { statusEl.className='err'; statusEl.textContent=bootT('setup.err_project'); return; }
-  btn.disabled = true;
-  statusEl.className=''; statusEl.textContent=bootT('setup.starting_bridge');
-  try {
-    await invoke('start_bridge_with_config', {pythonPath, projectDir});
-    statusEl.className='ok'; statusEl.textContent=bootT('setup.connected');
-    // Show main window and hide setup
-    const mainWin = await Window.getByLabel('main');
-    if (mainWin) {
-      await mainWin.show();
-      await mainWin.setFocus();
-    }
-    const setupWin = getCurrentWindow();
-    await setupWin.hide();
-  } catch(e) {
-    statusEl.className='err'; statusEl.textContent=bootT('setup.failed', { error: e });
-    btn.disabled = false;
+:root {
+  color-scheme: light dark;
+  --bg: #fff;
+  --text: #171717;
+  --muted: #6b7280;
+  --surface: #f6f7f8;
+  --border: #dedfe2;
+  --accent: #1769d2;
+  --error: #b42318;
+  --error-bg: #fff1f0;
+  --radius: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #191919;
+    --text: #eee;
+    --muted: #a3a3a3;
+    --surface: #242424;
+    --border: #383838;
+    --accent: #65a7ff;
+    --error: #ff8b82;
+    --error-bg: #351f1f;
   }
 }
-pyInput.addEventListener('keydown', e=>{ if(e.key==='Enter') dirInput.focus(); });
-dirInput.addEventListener('keydown', e=>{ if(e.key==='Enter') doStart(); });
-</script>
+* { box-sizing: border-box; }
+html, body { min-height: 100%; margin: 0; background: var(--bg); color: var(--text); }
+body { display: grid; place-items: center; padding: 28px; }
+main { width: min(100%, 480px); }
+h1 { margin: 0 0 8px; font-size: 22px; line-height: 1.25; }
+.intro { margin: 0 0 22px; color: var(--muted); font-size: 14px; line-height: 1.55; }
+.failure { display: none; margin-bottom: 20px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--error) 28%, transparent); border-radius: var(--radius); background: var(--error-bg); }
+.failure.visible { display: block; }
+.failure strong { display: block; margin-bottom: 3px; color: var(--error); font-size: 14px; }
+.failure span { color: var(--text); font-size: 13px; line-height: 1.5; }
+.field { display: block; margin: 0 0 16px; }
+.field-label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; }
+.field input { width: 100%; padding: 10px 11px; border: 1px solid var(--border); border-radius: 7px; outline: none; background: var(--surface); color: var(--text); font: inherit; font-size: 13px; }
+.field input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
+.hint { display: block; margin-top: 5px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+button { border: 0; border-radius: 7px; font: inherit; cursor: pointer; }
+.primary { width: 100%; margin-top: 3px; padding: 11px 16px; background: var(--accent); color: #fff; font-size: 14px; font-weight: 600; }
+.primary:disabled { opacity: .55; cursor: wait; }
+details { margin-top: 22px; border-top: 1px solid var(--border); padding-top: 15px; }
+summary { color: var(--muted); font-size: 13px; cursor: pointer; user-select: none; }
+.diagnostics-actions { display: flex; align-items: center; gap: 10px; margin: 12px 0 8px; }
+.copy { padding: 7px 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 12px; }
+.copy-status { color: var(--muted); font-size: 12px; }
+pre { max-height: 220px; margin: 0; padding: 12px; overflow: auto; border-radius: 7px; background: var(--surface); color: var(--text); font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.privacy { margin: 9px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="page-title">修复启动问题</h1>
+  <p class="intro" id="intro">检查下面的位置，然后重试。你的记忆、会话和配置不会受到影响。</p>
 
+  <section class="failure" id="failure" role="alert">
+    <strong id="failure-title"></strong>
+    <span id="failure-description"></span>
+  </section>
+
+  <label class="field">
+    <span class="field-label" id="project-label">GenericAgent 文件夹</span>
+    <input id="project-dir" type="text" spellcheck="false" autocomplete="off">
+    <span class="hint" id="project-hint">选择包含 GenericAgent 的本地文件夹。</span>
+  </label>
+
+  <label class="field">
+    <span class="field-label" id="python-label">Python 解释器</span>
+    <input id="python-path" type="text" spellcheck="false" autocomplete="off">
+    <span class="hint" id="python-hint">通常会自动填写；使用虚拟环境时请选择其中的 Python 程序。</span>
+  </label>
+
+  <button class="primary" id="retry" type="button">重试启动</button>
+
+  <details>
+    <summary id="diagnostics-label">诊断信息</summary>
+    <div class="diagnostics-actions">
+      <button class="copy" id="copy" type="button">复制诊断信息</button>
+      <span class="copy-status" id="copy-status" aria-live="polite"></span>
+    </div>
+    <pre id="diagnostics" tabindex="0">GenericAgent Desktop startup diagnostics</pre>
+    <p class="privacy" id="privacy">诊断信息包含本机路径和错误日志，不包含 API Key、会话或记忆内容。</p>
+  </details>
+</main>
 <script>
-// Input length limit (300 chars) — in separate script to work even without Tauri
-const MAX_LEN = 300;
-const _pyInput = document.getElementById('pypath');
-const _dirInput = document.getElementById('projdir');
-[_pyInput, _dirInput].forEach(el => {
-  if (!el) return;
-  const hint = document.createElement('span');
-  hint.style.cssText = 'color:#dc2626;font-size:.75rem;display:none;margin-top:2px';
-  el.parentNode.appendChild(hint);
+const ZH = (navigator.language || '').toLowerCase().startsWith('zh');
+const { invoke } = window.__TAURI__.core;
+const { listen } = window.__TAURI__.event || {};
+const projectInput = document.getElementById('project-dir');
+const pythonInput = document.getElementById('python-path');
+const retryButton = document.getElementById('retry');
+const failureBox = document.getElementById('failure');
+const failureTitle = document.getElementById('failure-title');
+const failureDescription = document.getElementById('failure-description');
+const diagnostics = document.getElementById('diagnostics');
+const copyStatus = document.getElementById('copy-status');
+let latestSnapshot = null;
+let latestSeq = -1;
 
-  function checkLimit() {
-    if (el.value.length > MAX_LEN) {
-      el.value = el.value.slice(0, MAX_LEN);
-    }
-    if (el.value.length >= MAX_LEN) {
-      hint.textContent = bootT('setup.limit', { n: MAX_LEN });
-      hint.style.display = 'block';
-    } else {
-      hint.style.display = 'none';
-    }
+const failures = {
+  config_unresolved: {
+    zh: ['未找到 GenericAgent', '选择 GenericAgent 文件夹后重试。'],
+    en: ['GenericAgent not found', 'Select the GenericAgent folder and retry.']
+  },
+  prepare_failed: {
+    zh: ['运行环境准备失败', '本地运行环境未准备完成。请重试；如果问题持续，请检查诊断信息。'],
+    en: ['Runtime setup failed', 'The local runtime could not be prepared. Retry, then check diagnostics if it continues.']
+  },
+  spawn_failed: {
+    zh: ['后台服务未能启动', '请检查 GenericAgent 文件夹和 Python 解释器，然后重试。'],
+    en: ['Background service could not start', 'Check the GenericAgent folder and Python interpreter, then retry.']
+  },
+  port_conflict: {
+    zh: ['本地连接被占用', '另一个程序正在占用 GenericAgent 的本地连接。关闭相关程序后重试。'],
+    en: ['Local connection is in use', 'Another process is using GenericAgent’s local connection. Close it and retry.']
+  },
+  service_timeout: {
+    zh: ['后台服务启动超时', '服务没有在预期时间内就绪。请重试；如果问题持续，请展开诊断信息。'],
+    en: ['Background service timed out', 'The service did not become ready in time. Retry, then open diagnostics if it continues.']
+  },
+  service_exited: {
+    zh: ['后台服务意外退出', '服务启动后立即停止。诊断信息中包含退出状态和最近日志。'],
+    en: ['Background service exited', 'The service stopped immediately after launch. Diagnostics include its exit status and recent logs.']
+  },
+  ui_navigation_failed: {
+    zh: ['主界面未能打开', '后台服务已经就绪，但界面加载失败。请重试启动。'],
+    en: ['Main window could not open', 'The service is ready, but the interface failed to load. Retry startup.']
+  },
+  unknown: {
+    zh: ['GenericAgent 未能启动', '请重试；如果问题持续，请复制诊断信息进行排查。'],
+    en: ['GenericAgent could not start', 'Retry. If it continues, copy the diagnostics for troubleshooting.']
+  }
+};
+
+if (!ZH) {
+  document.documentElement.lang = 'en';
+  document.getElementById('page-title').textContent = 'Fix startup';
+  document.getElementById('intro').textContent = 'Check the locations below, then retry. Your memory, sessions, and settings will not be affected.';
+  document.getElementById('project-label').textContent = 'GenericAgent folder';
+  document.getElementById('project-hint').textContent = 'Select the local folder that contains GenericAgent.';
+  document.getElementById('python-label').textContent = 'Python interpreter';
+  document.getElementById('python-hint').textContent = 'Usually filled automatically. If you use a virtual environment, select its Python executable.';
+  retryButton.textContent = 'Retry startup';
+  document.getElementById('diagnostics-label').textContent = 'Diagnostic details';
+  document.getElementById('copy').textContent = 'Copy diagnostics';
+  document.getElementById('privacy').textContent = 'Diagnostics contain local paths and error logs. They do not contain API keys, sessions, or memory content.';
+}
+
+function showFailure(failure) {
+  const code = failures[failure?.code] ? failure.code : 'unknown';
+  const copy = failures[code][ZH ? 'zh' : 'en'];
+  failureTitle.textContent = copy[0];
+  failureDescription.textContent = copy[1];
+  failureBox.classList.add('visible');
+}
+
+function diagnosticsText(snapshot) {
+  const d = snapshot?.diagnostics || {};
+  const logs = Array.isArray(d.recentLogs) ? d.recentLogs : [];
+  return [
+    'GenericAgent Desktop startup diagnostics',
+    'time: ' + new Date().toISOString(),
+    'build_id: ' + (d.buildId || ''),
+    'platform: ' + (d.platform || ''),
+    'mode: ' + (snapshot?.mode || ''),
+    'phase: ' + (snapshot?.phase || ''),
+    'failure_code: ' + (snapshot?.failure?.code || ''),
+    'project_dir: ' + (d.projectDir || ''),
+    'python_path: ' + (d.pythonPath || ''),
+    'port_state: ' + (d.portState || 'unknown'),
+    'bridge_identity: ' + (d.bridgeIdentity || ''),
+    'error: ' + (snapshot?.failure?.detail || ''),
+    'recent_logs:',
+    ...logs
+  ].join('\n');
+}
+
+function renderSnapshot(snapshot) {
+  const seq = Number.isFinite(snapshot?.seq) ? snapshot.seq : latestSeq + 1;
+  if (seq <= latestSeq) return;
+  latestSeq = seq;
+  latestSnapshot = snapshot;
+  if (snapshot?.diagnostics?.projectDir && !projectInput.value) projectInput.value = snapshot.diagnostics.projectDir;
+  if (snapshot?.diagnostics?.pythonPath && !pythonInput.value) pythonInput.value = snapshot.diagnostics.pythonPath;
+  if (snapshot?.failure) showFailure(snapshot.failure);
+  diagnostics.textContent = diagnosticsText(snapshot);
+}
+
+async function refresh() {
+  const [config, snapshot] = await Promise.all([
+    invoke('get_config').catch(() => ['', '']),
+    invoke('get_bootstrap_snapshot')
+  ]);
+  if (config?.[0]) pythonInput.value = config[0];
+  if (config?.[1]) projectInput.value = config[1];
+  renderSnapshot(snapshot);
+}
+
+async function retry() {
+  const projectDir = projectInput.value.trim();
+  const pythonPath = pythonInput.value.trim();
+  if (!projectDir) {
+    showFailure({ code: 'config_unresolved' });
+    return;
   }
 
-  // Intercept paste: only take first MAX_LEN chars from clipboard
-  el.addEventListener('paste', e => {
-    e.preventDefault();
-    const text = (e.clipboardData || window.clipboardData).getData('text') || '';
-    const start = el.selectionStart;
-    const end = el.selectionEnd;
-    const remaining = MAX_LEN - el.value.length + (end - start);
-    const insert = text.slice(0, Math.max(0, remaining));
-    el.value = el.value.slice(0, start) + insert + el.value.slice(end);
-    el.setSelectionRange(start + insert.length, start + insert.length);
-    checkLimit();
-  });
+  retryButton.disabled = true;
+  retryButton.textContent = ZH ? '正在重试…' : 'Retrying…';
+  copyStatus.textContent = '';
+  try {
+    await invoke('retry_bootstrap', { pythonPath, projectDir });
+  } catch (_) {
+    const snapshot = await invoke('get_bootstrap_snapshot').catch(() => latestSnapshot);
+    renderSnapshot(snapshot);
+    retryButton.disabled = false;
+    retryButton.textContent = ZH ? '重试启动' : 'Retry startup';
+  }
+}
 
-  // Fallback: keyboard input beyond limit
-  el.addEventListener('input', checkLimit);
-});
+async function copyDiagnostics() {
+  const text = diagnostics.textContent || '';
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copyStatus.textContent = ZH ? '已复制，可粘贴给部署智能体排查。' : 'Copied. Paste it to your deployment agent for troubleshooting.';
+      return;
+    } catch (_) {}
+  }
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(diagnostics);
+  selection.removeAllRanges();
+  selection.addRange(range);
+  diagnostics.focus();
+  copyStatus.textContent = ZH ? '请手动复制已选中的诊断信息。' : 'Copy the selected diagnostics manually.';
+}
+
+retryButton.addEventListener('click', retry);
+document.getElementById('copy').addEventListener('click', copyDiagnostics);
+projectInput.addEventListener('keydown', event => { if (event.key === 'Enter') pythonInput.focus(); });
+pythonInput.addEventListener('keydown', event => { if (event.key === 'Enter') retry(); });
+async function initialize() {
+  if (typeof listen === 'function') {
+    await listen('bootstrap', event => renderSnapshot(event.payload));
+  }
+  await refresh();
+}
+
+initialize().catch(error => renderSnapshot({
+  seq: latestSeq + 1,
+  mode: 'cold_start',
+  phase: 'failed',
+  failure: { code: 'unknown', detail: String(error) },
+  diagnostics: { recentLogs: [], portState: 'unknown' }
+}));
 </script>
 </body>
 </html>
