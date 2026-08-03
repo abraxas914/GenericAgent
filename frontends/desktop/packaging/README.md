@@ -36,10 +36,13 @@ frontends/desktop/packaging/
 
 ## 自动化测试体系
 
-打包前通过 `npm run test:all` 一键验证。测试分四层：
+CI 会先运行零依赖的 `npm run test:ci-contract`，确认 workflow、npm 清单与锁文件、
+Rust E2E feature、Tauri 配置、窗口权限及 fallback 镜像没有发生跨文件漂移；通过后
+再进入四层测试：
 
 | 层 | 命令 | 说明 |
 |---|---|---|
+| Preflight | `npm run test:ci-contract` | CI 输入及桌面运行时契约一致性 |
 | Layer 1 | `npm run test` | UI/store/逻辑测试（vitest + happy-dom） |
 | Layer 2 | `npm run test:bridge` | Bridge 连接协议、状态机、API 契约 |
 | Layer 3 | `npm run test:bundle` | 构建产物完整性（dist 结构、JS bundle 存在性） |
@@ -48,6 +51,7 @@ frontends/desktop/packaging/
 分层跑：
 
 ```bash
+npm run test:ci-contract # 安装依赖前也可直接运行的契约预检
 npm run test              # Layer 1 全部
 npm run test:stress       # Layer 1 压力子集
 npm run test:bridge       # Layer 2
