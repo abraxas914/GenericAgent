@@ -25,12 +25,32 @@ name: Build Desktop Portable Packages
 permissions:
   contents: write
 
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  contract-preflight:
+    name: CI contract preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Verify workflow, manifest, and desktop runtime contracts
+        run: node frontends/desktop/scripts/verify-ci-contract.mjs
+
   # ----------------------------------------------------------------------------
   build-windows:
     name: Windows portable
+    needs: contract-preflight
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event.inputs.target == 'all' || github.event.inputs.target == 'windows' }}
     runs-on: windows-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -229,8 +249,10 @@ jobs:
   # ----------------------------------------------------------------------------
   build-linux:
     name: Linux portable
+    needs: contract-preflight
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event.inputs.target == 'all' || github.event.inputs.target == 'linux' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -400,8 +422,10 @@ jobs:
   # ----------------------------------------------------------------------------
   build-macos:
     name: macOS DMG
+    needs: contract-preflight
     if: ${{ startsWith(github.ref, 'refs/tags/') || github.event.inputs.target == 'all' || github.event.inputs.target == 'macos' }}
     runs-on: macos-latest
+    timeout-minutes: 120
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -641,6 +665,7 @@ jobs:
       - build-linux
       - build-macos
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
@@ -732,6 +757,9 @@ jobs:
           - Windows: 解压 ZIP，运行 `GenericAgent.exe`。
           - Linux: 解压 `tar.gz`，为 AppImage 添加执行权限后启动。
           - macOS: 打开 DMG，将 `GenericAgent.app` 拖入 Applications；若 Gatekeeper 阻止启动，请使用 DMG 内的 `open_anyway.command`。
+          - 如果 Windows Defender 防火墙拦截 `127.0.0.1` / `localhost`，请允许 `GenericAgent.exe` 和随包的 `python.exe` 访问本机回环连接后重启。
+
+          If Windows Defender Firewall blocks `127.0.0.1` / `localhost`, allow `GenericAgent.exe` and the bundled `python.exe` to use the local loopback connection, then restart the app.
 
           所有包均内置 Python、运行时依赖、桌面桥接服务和静态前端资源，无需另行安装 Python。
           EOF
