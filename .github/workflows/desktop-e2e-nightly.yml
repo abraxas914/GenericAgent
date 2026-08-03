@@ -7,14 +7,28 @@ on:
 
 concurrency:
   group: desktop-nightly-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
+  contract-preflight:
+    name: CI contract preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify workflow, manifest, and desktop runtime contracts
+        run: node frontends/desktop/scripts/verify-ci-contract.mjs
+
   native:
     name: Native ${{ matrix.os }}
+    needs: contract-preflight
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -41,7 +55,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: frontends/desktop/src-tauri -> target
-      - name: Install Node dependencies
+      - name: Install locked desktop dependencies
         working-directory: frontends/desktop
         run: npm ci
       - name: Install bridge runtime
@@ -61,10 +75,13 @@ jobs:
           name: native-${{ runner.os }}-${{ github.run_id }}
           path: frontends/desktop/e2e-results
           if-no-files-found: ignore
+          retention-days: 14
 
   canary:
     name: Real-model protocol canary
+    needs: contract-preflight
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -72,7 +89,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontends/desktop/package-lock.json
-      - name: Install dependencies
+      - name: Install locked desktop dependencies
         working-directory: frontends/desktop
         run: npm ci
       - name: Run canary when dedicated credentials exist
@@ -83,7 +100,7 @@ jobs:
           GA_E2E_CANARY_MODEL: ${{ secrets.GA_E2E_CANARY_MODEL }}
         run: |
           if [ -z "$GA_E2E_CANARY_KEY" ]; then
-            echo "Dedicated canary credentials are not configured; skipping."
+            echo "Dedicated canary credentials are not configured; skipping." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           npm run e2e:canary
