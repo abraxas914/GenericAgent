@@ -57,6 +57,8 @@ const COPY = {
     copied: '已复制，可粘贴给部署智能体排查。',
     selectCopy: '请手动复制已选中的诊断信息。',
     privacy: '诊断信息包含本机路径和错误日志，不包含 API Key、会话或记忆内容。',
+    helpFeedback: '帮助与反馈',
+    contact: '如果仍无法安装或启动，可添加微信联系：',
   },
   en: {
     pageTitle: 'Fix startup',
@@ -72,6 +74,8 @@ const COPY = {
     copied: 'Copied. Paste it to your deployment agent for troubleshooting.',
     selectCopy: 'Copy the selected diagnostics manually.',
     privacy: 'Diagnostics contain local paths and error logs. They do not contain API keys, sessions, or memory content.',
+    helpFeedback: 'Help & Feedback',
+    contact: 'If installation or startup still fails, contact us on WeChat:',
   },
 } as const;
 

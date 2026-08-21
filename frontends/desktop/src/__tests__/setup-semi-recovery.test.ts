@@ -73,5 +73,8 @@ describe('setup recovery contracts', () => {
     expect(html).toContain("invoke('retry_bootstrap'");
     expect(html).toContain("listen('bootstrap'");
     expect(html).not.toContain("location.replace('setup.html')");
+    expect(html).toContain('RoundSquisheen');
+    expect(html).toContain('_Ashes_in_the_Snow_');
+    expect(html).toContain('help-feedback-label');
   });
 });

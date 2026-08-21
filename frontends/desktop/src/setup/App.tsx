@@ -253,6 +253,15 @@ export function SetupApp() {
               {copy.privacy}
             </Typography.Paragraph>
           </Collapse.Panel>
+          <Collapse.Panel itemKey="help-feedback" header={copy.helpFeedback}>
+            <Typography.Paragraph type="tertiary" size="small" className="ga-setup-contact-copy">
+              {copy.contact}
+            </Typography.Paragraph>
+            <div className="ga-setup-contact-ids">
+              <code>RoundSquisheen</code>
+              <code>_Ashes_in_the_Snow_</code>
+            </div>
+          </Collapse.Panel>
         </Collapse>
       </section>
     </main>
