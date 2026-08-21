@@ -96,6 +96,27 @@ const releaseWorkflow = readText('.github/workflows/desktop-release-package.yml'
 for (const job of ['build-windows', 'build-linux', 'build-macos']) {
   check(new RegExp(`^  ${job}:\\s*$`, 'm').test(releaseWorkflow), `release workflow keeps upstream job: ${job}`);
 }
+const macJobOffset = releaseWorkflow.search(/^  build-macos:\s*$/m);
+const macJobWorkflow = macJobOffset >= 0 ? releaseWorkflow.slice(macJobOffset) : '';
+const postDmgScript = readText('scripts/post-dmg.sh');
+check(
+  macJobWorkflow.includes('python3 -m pip install --break-system-packages ds_store'),
+  'macOS packaging installs the DMG layout dependency',
+);
+check(
+  /bash frontends\/desktop\/scripts\/post-dmg\.sh "artifacts\/macos\/out\/GenericAgent-Desktop-macOS\.dmg"/.test(macJobWorkflow),
+  'macOS packaging applies the curated Finder layout',
+);
+check(
+  postDmgScript.includes('Only contains .app + Applications symlink + .DS_Store'),
+  'DMG post-processing keeps the curated two-item volume',
+);
+check(
+  postDmgScript.includes("'WindowBounds': '{{100, 100}, {540, 380}}'")
+    && postDmgScript.includes("struct.pack('>II', 140, 190)")
+    && postDmgScript.includes("struct.pack('>II', 400, 190)"),
+  'DMG post-processing preserves the established window and icon positions',
+);
 check(
   !/\b(?:aiortc|cryptography)\b/.test(releaseWorkflow),
   'portable packages do not add optional heavy P2P dependencies',
