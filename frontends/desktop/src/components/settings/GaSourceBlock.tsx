@@ -15,7 +15,9 @@ function truncatePath(p: string, max = 40): string {
 
 function mapSourceError(msg: string, t: (k: string) => string): string {
   if (msg.includes('agentmain.py')) return t('data.localRepoErrNoAgent');
-  if (msg.includes('desktop_bridge.py')) return t('data.localRepoErrNoBridge');
+  if (msg.includes('not compatible') || msg.includes('compatibility probe')) {
+    return t('data.localRepoErrIncompatible');
+  }
   if (msg.includes('20s') || msg.includes('ready')) return t('data.localRepoErrTimeout');
   if (msg.includes('no GenericAgent source')) return t('data.localRepoErrNoResolve');
   return t('data.localRepoSwitchFailed');

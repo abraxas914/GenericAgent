@@ -315,6 +315,18 @@ class TestPersistAtomicNoDataLoss:
 class TestSessionContinuityAfterRestart:
     """Verify that llm_history is injected when agent is recreated (simulates bridge restart)."""
 
+    def test_stale_turn_cannot_mutate_a_reused_session(self, manager: AgentManager):
+        sess = _make_session(sid="sess-stale-turn", messages=[])
+        sess.active_turn_id = "new-turn"
+        manager.sessions[sess.id] = sess
+
+        with patch.object(manager, "make_agent") as make_agent:
+            manager.run_agent_turn(sess, "old work", turn_id="old-turn")
+
+        make_agent.assert_not_called()
+        assert sess.status == "idle"
+        assert sess.messages == []
+
     def test_run_agent_turn_injects_history(self, manager: AgentManager):
         """After bridge restart (agent=None, llm_history populated), run_agent_turn
         should inject persisted llm_history into the newly created agent."""

@@ -161,34 +161,36 @@ Result: user sees "导入密钥配置" at scan level; hovering reveals "从本�
 
 | # | Failure | Cause | Rust behavior | User sees |
 |---|---------|-------|---------------|-----------|
-| F1 | 结构验证失败 | 选的目录缺 `agentmain.py` 或 `frontends/desktop_bridge.py` | `set_ga_source` returns Err immediately | Toast error — 具体缺什么 |
-| F2 | 运行时启动超时 | bridge 脚本存在但 20s 内没绑定 port 14168（依赖缺失、Python 版本不兼容、端口占用） | `switch_bridge` returns Err after 20s | Toast error — 启动超时 |
-| F3 | 启动时静默 fallback | 上次连接的仓库已被移动/删除 | `valid_ga_source_override()` returns None → 用 bundle | 状态回到 idle + 一次性 toast 告知 |
+| F1 | 结构验证失败 | 选的目录缺 `agentmain.py` | `set_ga_source` returns Err immediately | Toast error — 无效仓库 |
+| F2 | 兼容性探测失败 | 外部核心不满足 Desktop 2.0 契约 | 写设置前返回 Err | Toast error — 核心不兼容 |
+| F3 | 运行时启动超时 | 包内 bridge 没有在预期时间就绪 | 恢复旧设置并回滚启动 | Toast error — 启动超时 |
+| F4 | 启动时静默 fallback | 上次连接的仓库已被移动/删除 | `valid_ga_source_override()` returns None → 用 bundle | 状态回到 idle + 一次性 toast 告知 |
 
 ### Error Microcopy Table
 
 | Key | zh | en | Trigger |
 |-----|----|----|---------|
 | `data.localRepoErrNoAgent` | 无效仓库 — 未找到 agentmain.py | Invalid — agentmain.py not found | F1: missing agentmain |
-| `data.localRepoErrNoBridge` | 无效仓库 — 未找到 desktop_bridge.py | Invalid — desktop_bridge.py not found | F1: missing bridge script |
-| `data.localRepoErrTimeout` | 启动超时 — 仓库环境可能不完整 | Startup timed out — environment may be incomplete | F2: 20s timeout |
+| `data.localRepoErrIncompatible` | 该核心与 Desktop 2.0 不兼容 | This core is incompatible with Desktop 2.0 | F2: probe failure |
+| `data.localRepoErrTimeout` | 启动超时 — 仓库环境可能不完整 | Startup timed out — environment may be incomplete | F3: readiness timeout |
 | `data.localRepoErrNoResolve` | 无法定位运行时 | Cannot resolve runtime | F2: empty project string |
 | `data.localRepoFallback` | 上次连接的仓库不可用，已回到内置运行时 | Previously linked repository unavailable — using built-in runtime | F3: startup fallback |
 | `data.localRepoSwitchFailed` | 切换失败 | Switch failed | Catch-all |
 
 ### Design Decisions
 
-1. **F1 区分两种缺文件**：用户可能选了上层目录或 subfolder — 明确说缺什么文件让他们自己判断选错了哪级
-2. **F2 不暴露技术细节**：不说 "port 14168" 或 "Python" — 说"环境可能不完整"引导用户去检查依赖
-3. **F3 用一次性 toast**：启动时的 fallback 不应该弹 modal 打断用户；一条 info toast 足够让用户知道发生了什么，之后在设置中可以重新连接
+1. **F1 只验证核心入口**：外部仓库不需要自带 Desktop bridge。
+2. **F2 提供产品级结论**：不在 Toast 展开 probe 细节，只告知与 Desktop 2.0 不兼容。
+3. **F3 不暴露技术细节**：不说 "port 14168" 或 "Python" — 说"环境可能不完整"。
+4. **F4 用一次性 toast**：启动时的 fallback 不应该弹 modal 打断用户。
 4. **错误消息不用 confirm/retry 按钮**：所有操作可逆且可重试，toast 消失后用户自然会重新操作
 
 ### Fallback Safety Net (Rust layer — DO NOT MODIFY)
 
 ```
 valid_ga_source_override():
-  settings.ga_source_override → validate(agentmain.py + desktop_bridge.py)
-  → valid: return Some(path)  → used as project root
+  settings.ga_source_override → validate(agentmain.py)
+  → valid: return Some(path)  → injected as GA_ROOT into the bundled bridge
   → invalid/missing: return None → fallback to bundle's runtime/app/
 ```
 
@@ -201,7 +203,9 @@ The Rust error strings are English technical messages. Frontend should pattern-m
 ```tsx
 function mapSourceError(msg: string, t: TFn): string {
   if (msg.includes('agentmain.py')) return t('data.localRepoErrNoAgent');
-  if (msg.includes('desktop_bridge.py')) return t('data.localRepoErrNoBridge');
+  if (msg.includes('not compatible') || msg.includes('compatibility probe')) {
+    return t('data.localRepoErrIncompatible');
+  }
   if (msg.includes('20s') || msg.includes('ready')) return t('data.localRepoErrTimeout');
   if (msg.includes('no GenericAgent source')) return t('data.localRepoErrNoResolve');
   return t('data.localRepoSwitchFailed');

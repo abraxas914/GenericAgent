@@ -164,15 +164,15 @@ describe('GaSourceBlock logic', () => {
       ).rejects.toThrow('agentmain.py');
     });
 
-    it('rejects repo without desktop_bridge.py', async () => {
+    it('rejects a core that fails the package compatibility probe', async () => {
       mockTauriInvoke
         .mockResolvedValueOnce('/Users/test/partial-ga')
-        .mockRejectedValueOnce(new Error('frontends/desktop_bridge.py not found'));
+        .mockRejectedValueOnce(new Error('this GenericAgent core is not compatible: missing sessions'));
 
       const picked = await mockTauriInvoke('pick_directory', {});
       await expect(
         mockTauriInvoke('set_ga_source', { dir: picked }),
-      ).rejects.toThrow('desktop_bridge.py');
+      ).rejects.toThrow('not compatible');
     });
 
     it('handles bridge startup timeout', async () => {
@@ -206,7 +206,9 @@ describe('GaSourceBlock logic', () => {
   describe('mapSourceError', () => {
     function mapSourceError(msg: string): string {
       if (msg.includes('agentmain.py')) return 'data.localRepoErrNoAgent';
-      if (msg.includes('desktop_bridge.py')) return 'data.localRepoErrNoBridge';
+      if (msg.includes('not compatible') || msg.includes('compatibility probe')) {
+        return 'data.localRepoErrIncompatible';
+      }
       if (msg.includes('20s') || msg.includes('ready')) return 'data.localRepoErrTimeout';
       if (msg.includes('no GenericAgent source')) return 'data.localRepoErrNoResolve';
       return 'data.localRepoSwitchFailed';
@@ -217,9 +219,9 @@ describe('GaSourceBlock logic', () => {
         .toBe('data.localRepoErrNoAgent');
     });
 
-    it('maps bridge script error correctly', () => {
-      expect(mapSourceError('frontends/desktop_bridge.py not found in the selected directory'))
-        .toBe('data.localRepoErrNoBridge');
+    it('maps compatibility probe errors correctly', () => {
+      expect(mapSourceError('this GenericAgent core is not compatible: missing sessions'))
+        .toBe('data.localRepoErrIncompatible');
     });
 
     it('maps timeout error correctly', () => {

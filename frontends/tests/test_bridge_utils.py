@@ -4,8 +4,11 @@ Tests pure functions that don't require agent/session infrastructure.
 Run: pytest frontends/tests/test_bridge_utils.py -v
 """
 import ast
+import os
+import shutil
 import sys
 import re
+import time
 from pathlib import Path
 
 # Add project root so we can import bridge helpers
@@ -18,6 +21,74 @@ spec = importlib.util.spec_from_file_location("desktop_bridge", ROOT / "frontend
 
 # We can't import the whole module (it starts aiohttp etc.) so we extract functions manually
 _bridge_source = (ROOT / "frontends" / "desktop_bridge.py").read_text(encoding="utf-8")
+
+
+def _load_named_helpers(names, namespace):
+    tree = ast.parse(_bridge_source)
+    nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names
+    ]
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), "desktop_bridge.py", "exec"), namespace)
+    return namespace
+
+
+class TestGaRootBoundary:
+    def test_external_core_override_needs_only_agentmain(self, tmp_path, monkeypatch):
+        external = tmp_path / "external core"
+        external.mkdir()
+        (external / "agentmain.py").write_text("# core\n", encoding="utf-8")
+        monkeypatch.setenv("GA_ROOT", str(external))
+        monkeypatch.setattr(sys, "argv", ["desktop_bridge.py"])
+
+        helpers = _load_named_helpers(
+            {"_ga_root_override"},
+            {"os": os, "sys": sys, "Path": Path, "Optional": __import__("typing").Optional},
+        )
+
+        assert helpers["_ga_root_override"]() == external.resolve()
+
+    def test_invalid_override_falls_back_instead_of_becoming_app_dir(self, tmp_path, monkeypatch):
+        missing = tmp_path / "deleted-core"
+        monkeypatch.setenv("GA_ROOT", str(missing))
+        monkeypatch.setattr(sys, "argv", ["desktop_bridge.py"])
+        helpers = _load_named_helpers(
+            {"_ga_root_override"},
+            {"os": os, "sys": sys, "Path": Path, "Optional": __import__("typing").Optional},
+        )
+
+        assert helpers["_ga_root_override"]() is None
+
+
+class TestMemoryImport:
+    def test_backup_overwrite_and_response_add_only(self, tmp_path):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "same.md").write_text("new", encoding="utf-8")
+        (source / "memory" / "added.md").write_text("added", encoding="utf-8")
+        (source / "temp" / "model_responses").mkdir(parents=True)
+        (source / "temp" / "model_responses" / "same.json").write_text("new", encoding="utf-8")
+        (source / "temp" / "model_responses" / "added.json").write_text("added", encoding="utf-8")
+        (target / "memory").mkdir(parents=True)
+        (target / "memory" / "same.md").write_text("old", encoding="utf-8")
+        (target / "temp" / "model_responses").mkdir(parents=True)
+        (target / "temp" / "model_responses" / "same.json").write_text("old", encoding="utf-8")
+
+        helpers = _load_named_helpers(
+            {"_import_memory_from"},
+            {"Path": Path, "shutil": shutil, "time": time},
+        )
+        result = helpers["_import_memory_from"](str(source), str(target))
+
+        assert result["memoryCopied"] == 2
+        assert result["responsesCopied"] == 1
+        assert result["responsesSkipped"] == 1
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "new"
+        assert (target / "temp" / "model_responses" / "same.json").read_text(encoding="utf-8") == "old"
+        backup = Path(result["backupDir"])
+        assert (backup / "memory" / "same.md").read_text(encoding="utf-8") == "old"
 
 
 def _load_empty_turn_helpers():

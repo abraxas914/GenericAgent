@@ -76,7 +76,6 @@ check(!/^package-lock\.json\s*$/m.test(gitignore), 'package-lock.json is not ign
 console.log('\n[2] workflow command contract');
 const workflowPaths = [
   '.github/workflows/desktop-ci.yml',
-  '.github/workflows/desktop-e2e-nightly.yml',
   '.github/workflows/desktop-release-package.yml',
 ];
 for (const workflowPath of workflowPaths) {
@@ -94,8 +93,17 @@ for (const workflowPath of workflowPaths) {
 }
 
 const releaseWorkflow = readText('.github/workflows/desktop-release-package.yml', repoRoot);
-check(!/^\s*run:\s+npm install\s*$/m.test(releaseWorkflow), 'release workflow uses npm ci, not npm install');
-check(/^\s{2}publish-release:\s*$/m.test(releaseWorkflow), 'release workflow has one centralized publisher');
+for (const job of ['build-windows', 'build-linux', 'build-macos']) {
+  check(new RegExp(`^  ${job}:\\s*$`, 'm').test(releaseWorkflow), `release workflow keeps upstream job: ${job}`);
+}
+check(
+  !/\b(?:aiortc|cryptography)\b/.test(releaseWorkflow),
+  'portable packages do not add optional heavy P2P dependencies',
+);
+check(
+  !fs.existsSync(path.join(repoRoot, '.github/workflows/desktop-e2e-nightly.yml')),
+  'fork-only nightly workflow is absent',
+);
 
 console.log('\n[3] Tauri and native E2E contract');
 const cargoToml = readText('src-tauri/Cargo.toml');
@@ -107,6 +115,11 @@ const requiredFiles = [
   'e2e/run.ts',
   'e2e/wdio.browser.conf.ts',
   'e2e/wdio.desktop.conf.ts',
+  'e2e/package/real_package_journey.py',
+  'e2e/package/verify_candidate_evidence.py',
+  'e2e/windows/Invoke-WindowsUserJourney.ps1',
+  'e2e/linux/Invoke-LinuxUserJourney.sh',
+  'e2e/macos/Invoke-macOSUserJourney.sh',
   'src-tauri/tauri.e2e.conf.json',
   'tsconfig.e2e.json',
 ];
@@ -123,9 +136,10 @@ check(
 );
 
 console.log('\n[4] bootstrap and window capability contract');
-const publicFallback = fs.readFileSync(path.join(desktopRoot, 'public/fallback.html'));
-const staticFallback = fs.readFileSync(path.join(desktopRoot, 'static/fallback.html'));
-check(publicFallback.equals(staticFallback), 'public and static fallback pages are byte-identical');
+for (const relativePath of ['public/fallback.html', 'public/i18n.js', 'public/styles.css']) {
+  const absolutePath = path.join(desktopRoot, relativePath);
+  check(fs.existsSync(absolutePath) && fs.statSync(absolutePath).size > 0, `${relativePath} is present`);
+}
 
 const capability = readJson('src-tauri/capabilities/default.json');
 const permissions = new Set(capability.permissions ?? []);

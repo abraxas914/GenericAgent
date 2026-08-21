@@ -42,8 +42,8 @@ Failed runs retain their sentinel sandbox and copy redacted reports to `frontend
 
 Set `GA_E2E_PYTHON` when automatic Python discovery cannot find a runtime with `aiohttp`. Set `GA_E2E_ARTIFACT_DIR` to change the stable report-copy destination. `GA_E2E_APPLICATION` may point to an already-built binary only when that binary was compiled with the same `VITE_BRIDGE_BASE`; normal use should let `e2e:desktop` build it after allocating ports.
 
-## CI topology
+## Validation topology
 
 - Pull requests: TypeScript, Vitest, Python ledger/process contracts, Rust production/E2E feature tests, production isolation, browser E2E, and Linux native Tauri smoke.
-- Nightly/manual: native Tauri on Windows, Linux, and macOS, plus the credentialed real-model protocol canary when dedicated secrets are configured.
-- The existing Windows portable-package journey remains under `e2e/windows/` and continues to validate packaged first-run and port-conflict behavior.
+- P2 candidate: native Tauri validation plus real Windows ZIP, Ubuntu tar/AppImage, and macOS DMG journeys. Platform wrappers are under `e2e/windows/`, `e2e/linux/`, and `e2e/macos/`; `e2e/package/` enforces their common production and evidence contract.
+- Manual only: the credentialed real-model protocol canary, which never blocks P2. No fork-only nightly workflow is part of the PR.

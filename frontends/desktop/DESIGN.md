@@ -4,6 +4,15 @@
 
 ---
 
+## 0. v1 / v2 代码所有权
+
+- `frontends/desktop/static/**` 是 upstream 的 Desktop v1，在 React 2.0 PR 中必须保持相对 upstream 零差异。
+- React Desktop 2.0 只拥有 `src/**`、`public/**`、Vite 配置与生成的 `dist/**`。
+- `public/**` 与 `static/**` 没有字节同步契约；两套入口、loading 和 fallback 分别验证。
+- Tauri 默认桌面入口是 Vite `dist`，但 v1 static 仍由 upstream 独立维护。
+
+---
+
 ## 1. 功能架构分区
 
 ### 1.1 四域模型

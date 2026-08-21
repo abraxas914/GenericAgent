@@ -1,128 +1,68 @@
-# 连接本地仓库 — 设计逻辑与契约
+# 连接本地核心：包内 bridge + 外部 `GA_ROOT`
 
-## 1. Scope / Trigger
+## 架构边界
 
-用户在设置 → 数据维护 → "连接本地仓库" 选择一个本地 GA 仓库目录，使桌面端切换运行时。
+Desktop 2.0 始终执行发布包内的 `frontends/desktop_bridge.py` 与
+`frontends/conductor.py`。用户选择的仓库只作为外部核心和数据根，通过 `GA_ROOT`
+传给包内进程；外部仓库中的桌面脚本不会被执行。
 
-## 2. 连接流程
+因此 identity 必须同时满足：
 
-```
-用户选目录 → 静态验证 → 持久化 → 切换 bridge → 等待就绪
-```
+- `app_dir` 位于发布包的 `runtime/app/frontends`；
+- `ga_root` 等于当前有效外部核心；没有有效 override 时，Windows/Linux 等于包内
+  `runtime/app`，macOS `.app` 等于 Application Support 中的版本化可写副本；
+- `build_id` 等于当前 Desktop 构建。
 
-### 2.1 静态验证（set_ga_source，同步/瞬间）
+`frontends/desktop/static/**` 属于 upstream Desktop v1，React v2 不读取、复制或校验其
+字节内容。React v2 只拥有 `src/**`、`public/**`、Vite 配置和 `dist/**`。
 
-检查两个文件存在：
-- `{dir}/agentmain.py`
-- `{dir}/frontends/desktop_bridge.py`
+## `set_ga_source`
 
-任一缺失 → 立即返回错误，不写入设置。
+1. 检查目标包含 `agentmain.py`；不要求目标包含 `desktop_bridge.py`。
+2. 使用包内 Python 和包内 `frontends/ga_contract_probe.py` 探测目标，显式把候选路径传为
+   `GA_ROOT`。探测缺失、无结论或不兼容均失败。
+3. 探测通过后才写入 `ga_source_override`。
+4. 异步重启包内 bridge，并等待 `/services/identity` 的 `ga_root` 指向候选核心。
+5. 任一步失败都恢复旧设置，并重新启动旧工作区；若回滚也失败，错误同时报告两段结果。
 
-### 2.2 持久化
+## `clear_ga_source`
 
-写入 `~/.ga_desktop_settings.json`:
-```json
-{ "ga_source_override": "/path/to/repo" }
-```
+清除 override 后异步重启包内 bridge，等待 identity 回到默认核心。Windows/Linux 默认核心
+是包内 `runtime/app`；macOS 为避免首启修改签名 `.app`，会在首次需要时原子复制到
+`~/Library/Application Support/GenericAgent/runtime/<version>/app` 并使用该可写副本。失败时
+恢复原 override 并重启原工作区。
 
-### 2.3 切换运行时（switch_bridge，异步，最多 ~26s）
+启动时若保存的 override 已被移动或删除，`valid_ga_source_override` 会忽略它，bridge
+自动回退包内 runtime；`get_ga_source` 对这种失效设置返回空字符串。
 
-1. **停止当前 bridge**：发 POST `/services/bridge/exit`；kill 进程；轮询端口释放（最多 ~11s）
-2. **解析 Python 路径**：`find_python()` 优先 bundle 内置 Python → `.portable/uv-python` → 系统 `python3`
-3. **启动新 bridge**：`spawn_bridge_process(python, new_dir)` — 用上述 Python 跑新仓库的 `desktop_bridge.py`
-4. **等待就绪**：轮询 `127.0.0.1:14168`（最多 20s）
-5. **刷新 WebView**：`show_bridge_window` 导航回 `tauri://localhost/index.html`
+## `move_ga_runtime`
 
-### 2.4 启动时重验证（valid_ga_source_override，每次 app 启动）
+命令保持既有 Tauri 调用形态，但内部通过后台任务复制：
 
-- 检查 `agentmain.py` + `frontends/desktop_bridge.py` 存在
-- 无效 → 忽略 override，静默回退到内置 bundle
+1. 源为当前有效外部核心；没有外部核心时为平台默认核心（macOS 是可写副本）。
+2. 复制完成后，将目标作为新 override，按上述带回滚流程切换并验证 identity。
+3. 只有切换成功后才允许删除旧源。
+4. 包内 `runtime/app` 和平台默认内部核心永远不删除；失败时旧源和旧设置都保留。
 
-## 3. 契约
+React 2.0 本轮不提供此命令的 UI 入口，但权限、注册和后端契约继续保留。
 
-### 验证标准
+## 用户可见错误
 
-| 检查项 | 实现 | 不检查 |
-|--------|------|--------|
-| agentmain.py 存在 | PathBuf::exists | 文件内容/版本 |
-| desktop_bridge.py 存在 | PathBuf::exists | Python 环境/依赖 |
+| 类别 | UI 文案 |
+| --- | --- |
+| 缺少 `agentmain.py` | 无效仓库 / Invalid repository |
+| compatibility probe 不通过 | 与 Desktop 2.0 不兼容 / Incompatible with Desktop 2.0 |
+| bridge readiness 超时 | 启动超时 / Startup timed out |
+| 无法解析包内 runtime | 无法定位运行时 / Cannot resolve runtime |
+| 其他或回滚失败 | 切换失败 / Switch failed |
 
-不验证：Python venv 完整性、依赖安装情况、mykey.py 有效性。bridge 是否能真正启动全靠 20s 超时兜底。
+## 必测场景
 
-### 前端状态机
-
-```
-idle → (pick_directory) → switching → connected | idle(回滚)
-connected → (change/disconnect) → switching → connected | idle
-```
-
-- `switching` 状态下按钮 disabled，显示 "切换中…" + 动画点
-- 超时/错误 → 回滚到 prevState + Toast 错误
-
-### 错误路由（mapSourceError）
-
-| Rust 错误消息关键词 | 用户可见消息 |
-|-------------------|-------------|
-| `agentmain.py` | 无效仓库 — 未找到 agentmain.py |
-| `desktop_bridge.py` | 无效仓库 — 未找到 desktop_bridge.py |
-| `20s` / `ready` | 启动超时 — 仓库环境可能不完整 |
-| `no GenericAgent source` | 无法定位运行时 |
-| 其他 | 切换失败 |
-
-## 4. 密钥与仓库的关系
-
-切换仓库 = 切换 bridge 工作目录。每个仓库有独立的 `mykey.py`：
-
-- 切到有 mykey 的仓库 → 模型列表立即反映新仓库的配置
-- 切到无 mykey 的仓库 → bridge 从 `mykey_template.py` 生成空模板，模型列表为空
-- 断开连接 → 回到内置 bundle 的 mykey
-- "导入密钥配置" 写入的是**当前活跃仓库**的 mykey.py，不跨仓库迁移
-
-## 5. Rust 命令签名
-
-```rust
-#[tauri::command]
-async fn set_ga_source(app_handle: AppHandle, dir: String) -> Result<String, String>
-
-#[tauri::command]
-async fn clear_ga_source(app_handle: AppHandle) -> Result<String, String>
-
-#[tauri::command]
-fn get_ga_source() -> String  // 返回当前 override 路径或空串
-
-#[tauri::command]
-fn pick_directory(title: Option<String>) -> Option<String>  // rfd 文件夹选择器
-```
-
-`set_ga_source` / `clear_ga_source` 为 async — 切换过程在 tokio 线程池执行，不阻塞主线程（避免 macOS 彩虹球）。
-
-## 6. Wrong vs Correct
-
-### Wrong — 同步阻塞主线程
-```rust
-#[tauri::command]
-fn set_ga_source(...) -> Result<String, String> {
-    // switch_bridge 内有 thread::sleep 循环
-    // → 主线程被阻塞 20+s → macOS 彩虹球
-    switch_bridge(&app_handle)
-}
-```
-
-### Correct — async 调度到后台
-```rust
-#[tauri::command]
-async fn set_ga_source(...) -> Result<String, String> {
-    // 同样的阻塞代码，但跑在 tokio 线程池
-    // → 主线程空闲，前端 "切换中…" 动画正常渲染
-    switch_bridge(&app_handle)
-}
-```
-
-## 7. Tests Required
-
-- 选一个有效仓库 → 20s 内显示"已连接" + 绿点 + 路径
-- 选一个没有 agentmain.py 的目录 → 瞬间报错"无效仓库"
-- 选一个有 agentmain.py 但 Python 环境缺依赖的仓库 → 20s 后报"启动超时"
-- 断开连接 → 回到 idle，bridge 使用内置 runtime
-- app 启动时 override 指向已删除目录 → 静默回退，无报错
-- 切换期间 UI 不卡顿（无彩虹球），按钮 disabled，动画播放
+- 兼容核心连接成功，identity 的 `app_dir` 仍属于发布包、`ga_root` 指向外部核心。
+- 不兼容核心在设置写入前失败。
+- 从核心 A 切换核心 B 失败时恢复 A，并可继续聊天。
+- override 被删除后重启，自动回退包内 runtime。
+- foreign port 不被强杀；端口释放后可恢复启动。
+- 包整体移动到含空格和非 ASCII 字符的路径后仍能定位包内 bridge。
+- macOS DMG 已带 `.prepared`，首启、重启和移动前后 `.app` 文件树不得变化。
+- `move_ga_runtime` 成功、复制失败、切换失败和包内源保护路径均有 Rust/原生覆盖。

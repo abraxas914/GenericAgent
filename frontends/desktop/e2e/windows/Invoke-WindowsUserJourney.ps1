@@ -26,6 +26,16 @@ $ReportDir = Join-Path $WorkDir "report"
 $ScreensDir = Join-Path $ReportDir "screenshots"
 $ReportPath = Join-Path $ReportDir "e2e-report.json"
 $RunSucceeded = $false
+$PortWasFreeAtStart = $false
+$UserHome = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$SettingsPath = Join-Path $UserHome ".ga_desktop_settings.json"
+$SettingsExisted = Test-Path -LiteralPath $SettingsPath
+[byte[]]$SettingsBackupBytes = @()
+$SettingsAttributes = $null
+if ($SettingsExisted) {
+    $SettingsBackupBytes = [System.IO.File]::ReadAllBytes($SettingsPath)
+    $SettingsAttributes = [System.IO.File]::GetAttributes($SettingsPath)
+}
 
 $Report = [ordered]@{
     repo = $Repo
@@ -45,6 +55,9 @@ $Report = [ordered]@{
         maximizeRestoreWorks = "manual"
         closeHidesToTray = "manual"
         sidebarNavHasNoBlankRow = "manual"
+        nativeDirectoryPicker = "manual"
+        shortcutSelfHealsAfterMove = "manual"
+        loadingFallbackAndMainRender = "manual"
     }
     failures = @()
     startedAt = (Get-Date).ToUniversalTime().ToString("o")
@@ -140,7 +153,9 @@ function Test-Sha256([string]$ZipPath) {
     $hash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     $shaFile = $ZipPath + ".sha256"
     if (-not (Test-Path -LiteralPath $shaFile)) {
-        $matches = @(Get-ChildItem -LiteralPath (Split-Path -Parent $ZipPath) -Recurse -Filter "*.sha256")
+        $matches = @(Get-ChildItem -LiteralPath (Split-Path -Parent $ZipPath) -Recurse -File | Where-Object {
+            $_.Name -like "*.sha256" -or $_.Name -like "SHA256SUMS*.txt"
+        })
         if ($matches.Count -eq 1) {
             $shaFile = $matches[0].FullName
         }
@@ -157,8 +172,7 @@ function Test-Sha256([string]$ZipPath) {
         $script:Report.package.sha256File = $shaFile
         $script:Report.package.expectedSha256 = $expectedHash
     } else {
-        $script:Report.package.expectedSha256 = $null
-        $script:Report.checks.sha256Sidecar = "missing"
+        Fail "SHA-256 sidecar not found next to $ZipPath"
     }
     $script:Report.package.sha256 = $hash
 }
@@ -513,6 +527,55 @@ function Invoke-PortConflictScenario([string]$PackageRoot) {
     $script:Report.checks.portConflictRecovery = $true
 }
 
+function Invoke-ProductionContractJourney(
+    [string]$PackageRoot,
+    [string]$ZipPath
+) {
+    Write-Step "Run production package chat, data, relocation, and fallback journey"
+    if (-not $ExpectedCommit) {
+        Fail "Full mode requires -ExpectedCommit for the production build identity assertion"
+    }
+    Stop-GenericAgent
+    Stop-BridgeOnPort
+    Start-Sleep -Seconds 2
+
+    # The package itself must be movable while the journey is running.  Running the driver
+    # with runtime\python\python.exe would keep that executable open and make Windows reject
+    # the relocation, so copy the already-prepared embedded interpreter outside the package.
+    $driverPythonRoot = Join-Path $WorkDir "production-contract-python"
+    if (Test-Path -LiteralPath $driverPythonRoot) {
+        Remove-Item -LiteralPath $driverPythonRoot -Recurse -Force
+    }
+    Copy-Item -LiteralPath (Join-Path $PackageRoot "runtime\python") `
+        -Destination $driverPythonRoot -Recurse -Force
+    $python = Join-Path $driverPythonRoot "python.exe"
+    if (-not (Test-Path -LiteralPath $python)) {
+        Fail "Could not create an out-of-package Python for the relocation journey"
+    }
+    $driver = [System.IO.Path]::GetFullPath((Join-Path $ScriptRoot "..\package\real_package_journey.py"))
+    $contractReport = Join-Path $ReportDir "production-contract"
+    $contractWork = Join-Path $WorkDir "production-contract-work"
+    $relocated = Join-Path $ExtractDir "relocated\含 空格\GenericAgent 包"
+    & $python $driver `
+        --platform windows `
+        --artifact $ZipPath `
+        --expected-commit $ExpectedCommit `
+        --package-root $PackageRoot `
+        --application-relative "GenericAgent.exe" `
+        --runtime-relative "runtime" `
+        --relocated-root $relocated `
+        --report-dir $contractReport `
+        --work-dir $contractWork `
+        --allow-user-settings-mutation `
+        --screenshots-optional
+    if ($LASTEXITCODE -ne 0) {
+        Fail "Production package contract journey failed; see $contractReport"
+    }
+    $script:Report.checks.productionContract = [System.IO.File]::ReadAllText(
+        (Join-Path $contractReport "real-package-report.json")
+    ) | ConvertFrom-Json
+}
+
 try {
     Ensure-Dir $WorkDir
     Ensure-Dir $ReportDir
@@ -533,6 +596,10 @@ try {
     Assert-PackageShape $packageRoot
     $Report.environment.initialPortState = @(Get-PortState)
     $Report.environment.initialProcesses = @(Get-GaProcesses)
+    if ($Report.environment.initialPortState.Count -gt 0) {
+        Fail "127.0.0.1:14168 was already occupied before the package journey"
+    }
+    $script:PortWasFreeAtStart = $true
 
     if ($Mode -eq "Smoke" -or $Mode -eq "Full") {
         Invoke-FreshLaunch $packageRoot
@@ -540,9 +607,18 @@ try {
     if ($Mode -eq "FailureOnly" -or $Mode -eq "Full") {
         Invoke-PortConflictScenario $packageRoot
     }
+    if ($Mode -eq "Full") {
+        Invoke-ProductionContractJourney $packageRoot $zip
+    }
 
+    Stop-GenericAgent
+    Stop-BridgeOnPort
+    Start-Sleep -Seconds 2
     $Report.environment.finalPortState = @(Get-PortState)
     $Report.environment.finalProcesses = @(Get-GaProcesses)
+    if ($Report.environment.finalPortState.Count -gt 0) {
+        Fail "Package journey left a listener on 127.0.0.1:14168"
+    }
     $Report.success = $true
     $script:RunSucceeded = $true
     Save-Report
@@ -557,6 +633,25 @@ try {
     Write-Error $_.Exception.Message
     exit 1
 } finally {
+    if ($script:PortWasFreeAtStart) {
+        Stop-GenericAgent
+        Stop-BridgeOnPort
+    }
+    if ($SettingsExisted) {
+        [System.IO.File]::WriteAllBytes($SettingsPath, $SettingsBackupBytes)
+        if ($null -ne $SettingsAttributes) {
+            [System.IO.File]::SetAttributes($SettingsPath, $SettingsAttributes)
+        }
+    } else {
+        Remove-Item -LiteralPath $SettingsPath -Force -ErrorAction SilentlyContinue
+    }
+    $script:Report.checks.settingsRestored = if ($SettingsExisted) {
+        [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($SettingsPath)) -eq `
+            [Convert]::ToBase64String($SettingsBackupBytes)
+    } else {
+        -not (Test-Path -LiteralPath $SettingsPath)
+    }
+    Save-Report
     if ($script:RunSucceeded -and -not $KeepWorkDir) {
         Remove-Item -LiteralPath $ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $DownloadDir -Recurse -Force -ErrorAction SilentlyContinue

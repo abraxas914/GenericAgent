@@ -8,6 +8,11 @@ Image Pipeline Integration Test
 """
 import base64, json, os, sys, time, urllib.request, urllib.error
 
+# This is an operator-run integration script, not a hermetic pytest module.  Keep
+# its descriptive test_* function names without allowing a repository-wide
+# pytest invocation to collect it as an unattended test suite.
+__test__ = False
+
 BRIDGE = "http://127.0.0.1:14168"
 
 # 1x1 red PNG (最小有效图片)
