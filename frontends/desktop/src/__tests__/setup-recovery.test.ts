@@ -50,6 +50,9 @@ function byId<T>(recoveryWindow: Window, id: string): T {
 function createRecoveryWindow(options?: {
   snapshots?: BootstrapSnapshot[];
   retryError?: Error;
+  legacy?: boolean;
+  prepareError?: string | null;
+  startError?: Error;
 }) {
   const recoveryWindow = new Window({ url: 'tauri://localhost/fallback.html' });
   const snapshots = [...(options?.snapshots ?? [failedSnapshot('service_timeout')])];
@@ -58,8 +61,13 @@ function createRecoveryWindow(options?: {
   const invoke = vi.fn(async (command: string, args?: unknown) => {
     calls.push({ command, args });
     if (command === 'get_config') return ['C:\\SavedPython\\python.exe', 'C:\\SavedGA'];
+    if (command === 'get_bootstrap_snapshot' && options?.legacy) {
+      throw new Error('Command get_bootstrap_snapshot not found');
+    }
     if (command === 'get_bootstrap_snapshot') return snapshots.shift() ?? failedSnapshot('unknown');
+    if (command === 'get_prepare_error') return options?.prepareError ?? null;
     if (command === 'retry_bootstrap' && options?.retryError) throw options.retryError;
+    if (command === 'start_bridge_with_config' && options?.startError) throw options.startError;
     return undefined;
   });
 
@@ -147,6 +155,28 @@ describe('setup bootstrap recovery', () => {
       disabled: true,
       textContent: '正在重试…',
     });
+  });
+
+  it('recovers with upstream v1 config, prepare-error, and start commands', async () => {
+    const { recoveryWindow, calls } = createRecoveryWindow({
+      legacy: true,
+      prepareError: 'offline dependency installation failed',
+    });
+    await flush();
+
+    expect(recoveryWindow.document.getElementById('failure-title')?.textContent).toBe('运行环境准备失败');
+    expect(recoveryWindow.document.getElementById('diagnostics')?.textContent).toContain(
+      'offline dependency installation failed',
+    );
+
+    byId<{ click: () => void }>(recoveryWindow, 'retry').click();
+    await flush();
+
+    expect(calls).toContainEqual({
+      command: 'start_bridge_with_config',
+      args: { pythonPath: 'C:\\SavedPython\\python.exe', projectDir: 'C:\\SavedGA' },
+    });
+    expect(byId<{ disabled: boolean }>(recoveryWindow, 'retry').disabled).toBe(true);
   });
 
   it('copies the stable diagnostics text when the Clipboard API is available', async () => {

@@ -82,7 +82,9 @@ describe('DataSection logic', () => {
         title: 'Choose the new GA workspace location',
       });
       if (!picked) return null;
-      return mockTauriInvoke('move_ga_runtime', { dir: picked });
+      const movedPath = await mockTauriInvoke('move_ga_runtime', { dir: picked });
+      await Promise.all([mockLoadSessions(), mockLoadFromBridge()]);
+      return movedPath;
     }
 
     it('picks a parent directory and passes it to move_ga_runtime', async () => {
@@ -98,6 +100,8 @@ describe('DataSection logic', () => {
       expect(mockTauriInvoke).toHaveBeenNthCalledWith(2, 'move_ga_runtime', {
         dir: '/Users/test/Data',
       });
+      expect(mockLoadSessions).toHaveBeenCalledOnce();
+      expect(mockLoadFromBridge).toHaveBeenCalledOnce();
       expect(result).toBe('/Users/test/Data/GenericAgent');
     });
 
@@ -118,6 +122,17 @@ describe('DataSection logic', () => {
       expect(mockTauriInvoke).toHaveBeenLastCalledWith('move_ga_runtime', {
         dir: '/Users/test/Data',
       });
+      expect(mockLoadSessions).not.toHaveBeenCalled();
+      expect(mockLoadFromBridge).not.toHaveBeenCalled();
+    });
+
+    it('refreshes the persisted source after moving', async () => {
+      mockTauriInvoke.mockResolvedValueOnce('/Users/test/Data/GenericAgent');
+
+      const source = await mockTauriInvoke('get_ga_source', {});
+
+      expect(source).toBe('/Users/test/Data/GenericAgent');
+      expect(mockTauriInvoke).toHaveBeenCalledWith('get_ga_source', {});
     });
   });
 

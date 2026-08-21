@@ -2,7 +2,14 @@ import { IconCopy, IconRefresh } from '@douyinfe/semi-icons';
 import { Banner, Button, Collapse, Form, Typography } from '@douyinfe/semi-ui';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BootstrapFailureCode, BootstrapSnapshot } from '../loading/types';
-import { getSetupTauri, isNewerSnapshot } from './bootstrap';
+import {
+  getSetupTauri,
+  isNewerSnapshot,
+  legacyFailureSnapshot,
+  loadSetupBootstrap,
+  retrySetupBootstrap,
+  type SetupBootstrapMode,
+} from './bootstrap';
 import { diagnosticsText, failureMessage, setupCopy, setupLanguage } from './copy';
 
 interface SetupValues {
@@ -43,6 +50,7 @@ export function SetupApp() {
   const [copyStatus, setCopyStatus] = useState('');
   const latestSeq = useRef(-1);
   const snapshotRef = useRef<BootstrapSnapshot | null>(null);
+  const bootstrapMode = useRef<SetupBootstrapMode>('snapshot');
 
   const renderSnapshot = useCallback((next: BootstrapSnapshot) => {
     const previousSnapshot = snapshotRef.current;
@@ -80,20 +88,23 @@ export function SetupApp() {
     let stopListening: (() => void) | undefined;
     void (async () => {
       if (tauri.event?.listen) {
-        const removeListener = await tauri.event.listen('bootstrap', (event) => {
-          if (active) renderSnapshot(event.payload);
-        });
-        if (!active) {
-          removeListener();
-          return;
+        try {
+          const removeListener = await tauri.event.listen('bootstrap', (event) => {
+            if (active) renderSnapshot(event.payload);
+          });
+          if (!active) {
+            removeListener();
+            return;
+          }
+          stopListening = removeListener;
+        } catch (error) {
+          console.warn('[setup] bootstrap events unavailable; using command compatibility mode', error);
         }
-        stopListening = removeListener;
       }
-      const [config, current] = await Promise.all([
-        tauri.core.invoke<[string, string]>('get_config').catch(() => ['', '']),
-        tauri.core.invoke<BootstrapSnapshot>('get_bootstrap_snapshot'),
-      ]);
+      const loaded = await loadSetupBootstrap(tauri.core.invoke, latestSeq.current + 1);
       if (!active) return;
+      bootstrapMode.current = loaded.mode;
+      const config = loaded.config;
       const configured = { pythonPath: config?.[0] || '', projectDir: config?.[1] || '' };
       valuesRef.current = {
         pythonPath: valuesRef.current.pythonPath || configured.pythonPath,
@@ -101,7 +112,7 @@ export function SetupApp() {
       };
       setValues(valuesRef.current);
       formApiRef.current?.setValues(valuesRef.current);
-      renderSnapshot(current);
+      renderSnapshot(loaded.snapshot);
     })().catch((error) => {
       if (active) renderSnapshot(syntheticFailure(error, latestSeq.current + 1));
     });
@@ -136,12 +147,31 @@ export function SetupApp() {
 
     setRetrying(true);
     const tauri = getSetupTauri();
-    try {
-      if (!tauri?.core.invoke) throw new Error('Tauri bootstrap API is unavailable');
-      await tauri.core.invoke('retry_bootstrap', { pythonPath, projectDir });
-    } catch (_) {
-      const next = await tauri?.core.invoke<BootstrapSnapshot>('get_bootstrap_snapshot').catch(() => snapshotRef.current);
-      if (next) renderSnapshot(next);
+    if (!tauri?.core.invoke) {
+      renderSnapshot(syntheticFailure('Tauri bootstrap API is unavailable', latestSeq.current + 1));
+      setRetrying(false);
+      return;
+    }
+
+    const result = await retrySetupBootstrap(
+      tauri.core.invoke,
+      { pythonPath, projectDir },
+      bootstrapMode.current,
+    );
+    bootstrapMode.current = result.mode;
+    if (result.error) {
+      if (result.mode === 'legacy') {
+        renderSnapshot(legacyFailureSnapshot(
+          [pythonPath, projectDir],
+          result.error,
+          latestSeq.current + 1,
+          'spawn_failed',
+        ));
+      } else {
+        const next = await tauri.core.invoke<BootstrapSnapshot>('get_bootstrap_snapshot')
+          .catch(() => snapshotRef.current);
+        if (next) renderSnapshot(next);
+      }
       setRetrying(false);
     }
   }, [renderSnapshot]);

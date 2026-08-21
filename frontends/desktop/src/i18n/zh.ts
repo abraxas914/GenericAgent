@@ -413,6 +413,7 @@ export const zh: Record<string, string> = {
   'data.movePickerTitle': '选择新的 GA 工作目录位置',
   'data.moveConfirmTitle': '复制并切换 GA 工作目录？',
   'data.moveConfirmMessage': '当前 GA 工作目录会复制到你选择的位置，并重启后端使用新目录。安装包内置目录会保留以保证桌面壳可启动；如果当前已是外部目录，旧目录会在切换成功后删除。是否继续？',
+  'data.moveConfirmBtn': '移动并切换',
   'data.moveSuccess': '已切换到新的 GA 工作目录：{path}',
   'data.moveError': '移动 GA 工作目录失败',
   'data.localRepo': '连接本地仓库',

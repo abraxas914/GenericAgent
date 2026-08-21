@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import type { ModelProfile } from '../services/bridge';
 import * as bridge from '../services/bridge';
-import * as legacy from '../services/legacy';
 
 const STORE_KEYS = {
   lang: 'ga_lang',
@@ -76,8 +75,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setAppearance: (app) => {
     set({ appearance: app });
     applyToDOM(app, get().chatFontSize);
-    legacy.applyAppearance(app, false);
-    legacy.syncHljsTheme();
     get().persist();
   },
 
@@ -91,7 +88,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setLang: (lang) => {
     set({ lang });
     document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
-    legacy.refreshAfterLangChange();
     get().persist();
   },
 
@@ -102,7 +98,6 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const profile = profiles[no];
     if (!profile) return;
     set({ defaultModelNo: no });
-    legacy.selectModel(no, profile.name || profile.model);
     get().persist();
   },
 
