@@ -413,6 +413,7 @@ export const en: Record<string, string> = {
   'data.movePickerTitle': 'Choose the new GA workspace location',
   'data.moveConfirmTitle': 'Copy and switch GA workspace?',
   'data.moveConfirmMessage': 'The current GA workspace will be copied to the selected location and the backend will restart from it. The bundled folder is kept so the desktop shell can still start; if the current folder is already external, the old folder is deleted after a successful switch. Continue?',
+  'data.moveConfirmBtn': 'Move and switch',
   'data.moveSuccess': 'Switched to the new GA workspace: {path}',
   'data.moveError': 'Failed to move GA workspace',
   'data.localRepo': 'Connect local repository',

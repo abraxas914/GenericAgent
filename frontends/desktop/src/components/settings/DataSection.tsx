@@ -36,6 +36,7 @@ export function DataSection() {
   const { t } = useI18n();
   const [importing, setImporting] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [sourceRevision, setSourceRevision] = useState(0);
 
   const handleImportKey = useCallback(() => {
     const input = document.createElement('input');
@@ -120,20 +121,26 @@ export function DataSection() {
       Modal.confirm({
         title: t('data.moveConfirmTitle'),
         content: t('data.moveConfirmMessage'),
-        okText: t('data.moveBtn'),
+        okText: t('data.moveConfirmBtn'),
         cancelText: t('common.cancel'),
         onOk: async () => {
           setMoving(true);
           try {
             const path = await bridge.tauriInvoke('move_ga_runtime', { dir: picked }) as string;
+            setSourceRevision((revision) => revision + 1);
+            const refreshResults = await Promise.allSettled([
+              useChatStore.getState().loadSessions(),
+              useSettingsStore.getState().loadFromBridge(),
+            ]);
+            refreshResults.forEach((result) => {
+              if (result.status === 'rejected') {
+                console.error('[DataSection] post-move refresh failed:', result.reason);
+              }
+            });
             Toast.success({ content: t('data.moveSuccess', { path: path || picked }) });
-            useChatStore.getState().loadSessions();
-          } catch (e: any) {
+          } catch (e) {
             console.error('[DataSection] moveData failed:', e);
-            const message = typeof e?.message === 'string'
-              ? e.message.replace(/\s+/g, ' ').trim().slice(0, 180)
-              : '';
-            Toast.error({ content: message ? `${t('data.moveError')}: ${message}` : t('data.moveError') });
+            Toast.error({ content: t('data.moveError') });
           } finally {
             setMoving(false);
           }
@@ -177,7 +184,7 @@ export function DataSection() {
             disabled={moving}
           />
           <div className="ga-data-divider" />
-          <GaSourceBlock />
+          <GaSourceBlock refreshKey={sourceRevision} />
         </>
       )}
     </div>

@@ -1,102 +1,49 @@
-# Frontend Refactor — Phase 1 完成记录
+# React Desktop 2.0 — 当前前端边界
 
-> Decision Record: Settings React Island 迁移 + Semi Design 引入 + FOUC 防御
+## 架构状态
 
-## 已完成工作
+Desktop 2.0 是完整的 React 18 + Semi Design 应用，不再是挂在 Desktop v1 上的 React
+Island。生产界面通过 HTTP bridge 和 Tauri IPC 直接完成配置、会话、模型、上传、协作与本地
+文件操作，不依赖 `static/app.js` 提供的运行时全局对象。
 
-### Phase 0: 脚手架 (已 commit)
-- Vite 6 + React 18 + TypeScript 构建体系
-- `static/app.js` 通过 ES module side-effect import 纳入 Vite 模块图
-- `public/` 目录存放非打包资源（fonts, vendor libs）
-- Tauri v2 配置指向 Vite dev/build 产出
+fork 保留完整 React/TypeScript 源码、测试和 Vite 构建；如 upstream 只接受编译产物，交付分支
+可将同一 fork commit 的 `dist/**` 发布到 upstream 的 `frontends/desktop/static/**`，但不能据此
+把 fork 的源码与 upstream 的 Desktop v1 源码重新耦合。
 
-### Phase 1: Settings React Island
-第一个 React Island——Settings 弹窗，从 vanilla DOM 迁移为 React + Semi Design 组件。
+## 入口与恢复链
 
-**架构：**
-```
-app.js (openSettings → dispatch 'ga:open-settings')
-        ↓ CustomEvent
-SettingsModal.tsx (监听事件 → 打开 Modal)
-        ↓ Zustand store
-各 Section 组件 (读/写 store → 调 bridge/legacy service)
-        ↓
-bridge.ts (window.ga.* → HTTP API)    |  legacy.ts (window.gaLegacy.*)
-```
+- `index.html`：React Desktop 2.0 主界面。
+- `loading.html`：Semi 启动界面；优先消费 fork 的 bootstrap snapshot/event，同时兼容 upstream
+  旧壳注入的 `window.gaProgress(pct, key)`。
+- `setup.html`：React/Semi 恢复界面；模块加载、初始化、Promise 异常或看门狗超时会转到
+  `fallback.html`。
+- `public/fallback.html`：无 React、Semi 或 Vite chunk 依赖的独立恢复页；优先调用 fork 的
+  `get_bootstrap_snapshot` / `retry_bootstrap`，缺少这些命令时兼容 upstream 的
+  `get_prepare_error` / `start_bridge_with_config`。
 
-**组件库选择：Semi Design（@douyinfe/semi-ui）**
-- 最初选用 TDesign，后切换为 Semi Design
-- 理由：Semi 按需加载更优（不需要全局 CSS import）、字节生态更熟悉、Bundle 更小
-- 产出对比：TDesign 全量引入 622KB → Semi 按需 564KB（gzip 178KB）
+## 生产接口
 
-**迁移的功能区块：**
-1. 外观切换（light/dark RadioGroup）
-2. 字体大小（Slider 10-20px）
-3. 语言切换（zh/en RadioGroup）
-4. 模型管理（列表 + 添加/编辑/删除 Modal）
-5. 功能区（导入/导出 mykey、服务管理跳转）
-
-**简化决策：**
-- 去掉 plain mode（简洁模式）——使用率极低，增加代码复杂度
-- 去掉语言国旗 SVG——视觉噪音，文字已足够
-
-### FOUC 三层防御
-1. `<link rel="stylesheet" href="/styles.css">` in `<head>` — 同步阻塞渲染
-2. `public/styles.css` → symlink to `../static/styles.css` — 保证 dev/prod 一致
-3. `<body class="no-transition">` + `setTimeout` 移除 — 抑制首次 paint 的 transition
-
-### Dev Mock
-`services/bridge.ts` 在 bridge 不可用时返回 mock 数据，允许纯前端开发（无需启动 Python bridge）。
-
-## 技术栈
-
-| 层 | 选择 |
-|----|------|
-| 构建 | Vite 6 |
-| UI 框架 | React 18 |
-| 组件库 | Semi Design 2.x (@douyinfe/semi-ui) |
-| 状态管理 | Zustand 5 |
-| 类型 | TypeScript 5.6 |
-| 测试 | Vitest + Testing Library (待补) |
-
-## 文件结构
-
-```
-frontends/desktop/
-├── src/
-│   ├── main.tsx                    # 入口：import CSS/app.js → mount React
-│   ├── components/settings/
-│   │   ├── SettingsModal.tsx       # Semi Modal 壳
-│   │   ├── AppearanceSection.tsx   # 外观 RadioGroup
-│   │   ├── FontSizeSection.tsx     # 字体 Slider
-│   │   ├── LanguageSection.tsx     # 语言 RadioGroup
-│   │   ├── ModelSection.tsx        # 模型列表 + CRUD
-│   │   ├── AddModelModal.tsx       # 添加/编辑模型表单
-│   │   ├── FeatureSection.tsx      # mykey 导入导出 + 服务管理
-│   │   └── settings.css           # Settings 专用样式
-│   ├── services/
-│   │   ├── bridge.ts              # window.ga.* 封装 + dev mock
-│   │   └── legacy.ts             # window.gaLegacy.* 过渡桥接
-│   └── stores/
-│       └── settings.ts            # Zustand store
-├── static/
-│   ├── app.js                     # 6200行老代码（暴露 gaLegacy, openSettings 改事件派发）
-│   └── styles.css                 # 全局样式
-├── public/
-│   ├── styles.css → ../static/styles.css  # symlink for FOUC prevention
-│   ├── vendor/marked.min.js
-│   ├── phosphor-icons.js
-│   └── assets/fonts/
-├── index.html                     # Vite 入口 HTML
-├── vite.config.ts
-├── tsconfig.json
-└── package.json
+```text
+React stores/components
+    ├── HTTP bridge: config, models, sessions, chat, uploads, services
+    └── Tauri IPC: directory picker, workspace connection/move, shell actions
 ```
 
-## 下一步 (Phase 2)
+设置变更由 Zustand 更新 React 状态与 DOM，再通过 bridge 持久化；语言、外观和默认模型不得
+调用 Desktop v1 全局对象。连接本地仓库和移动工作区遵守
+`spec/local-repo-connection.md` 的包内 bridge + 外部 `GA_ROOT` 契约。
 
-- Chat 页消息渲染迁移为 React 组件
-- 直接 fetch bridge HTTP API 替代 window.ga.* 间接调用
-- 添加 Vitest 单元测试
-- Semi Design 主题定制（暗色模式 token 对齐）
-- Bundle 优化（manualChunks 拆分 app.js 和 Semi）
+## 样式与组件
+
+- Semi Design 提供主界面、loading、setup、异常页和确认框组件。
+- `public/styles.css` 是 React 主界面的独立生产样式，不链接 `static/styles.css`。
+- `public/fallback.html` 的自定义 class 统一使用 `.ga-` 前缀，保证独立资源损坏恢复能力。
+- 首屏内联骨架只负责避免空白与闪烁，React 挂载后由正式组件接管。
+
+## 必要验证
+
+- TypeScript、Vitest、生产构建与 bundle/isolation contract。
+- 浏览器 E2E 覆盖主界面与恢复旅程。
+- fork 真包验证新 bootstrap snapshot/event；compiled-only upstream 候选还必须验证旧
+  `gaProgress`、旧恢复命令、首次启动失败和重试成功路径。
+- 构建产物不得包含对 `window.gaLegacy` 的引用。

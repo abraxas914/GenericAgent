@@ -23,19 +23,29 @@ function mapSourceError(msg: string, t: (k: string) => string): string {
   return t('data.localRepoSwitchFailed');
 }
 
-export function GaSourceBlock() {
+export function GaSourceBlock({ refreshKey = 0 }: { refreshKey?: number }) {
   const { t } = useI18n();
   const [state, setState] = useState<SourceState>('idle');
   const [sourcePath, setSourcePath] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+
     bridge.tauriInvoke('get_ga_source', {}).then((path) => {
+      if (cancelled) return;
       if (path) {
         setState('connected');
         setSourcePath(path as string);
+      } else {
+        setState('idle');
+        setSourcePath(null);
       }
     }).catch(() => {});
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   const refreshSessions = useCallback(() => {
     useChatStore.getState().loadSessions();
