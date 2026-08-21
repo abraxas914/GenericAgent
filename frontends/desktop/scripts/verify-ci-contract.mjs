@@ -99,9 +99,34 @@ for (const job of ['build-windows', 'build-linux', 'build-macos']) {
 const macJobOffset = releaseWorkflow.search(/^  build-macos:\s*$/m);
 const macJobWorkflow = macJobOffset >= 0 ? releaseWorkflow.slice(macJobOffset) : '';
 const postDmgScript = readText('scripts/post-dmg.sh');
+const macInstallScript = readText('packaging/scripts/macos/install_macos.sh');
 check(
   macJobWorkflow.includes('python3 -m pip install --break-system-packages ds_store'),
   'macOS packaging installs the DMG layout dependency',
+);
+check(
+  macJobWorkflow.includes('pip install --no-compile --no-index --find-links "$RUNTIME_SRC/wheels"')
+    && macJobWorkflow.includes('pip uninstall --yes setuptools wheel')
+    && macJobWorkflow.includes("-name '__pycache__' -empty -delete"),
+  'macOS packaging omits installed build tools and bytecode caches',
+);
+check(
+  macJobWorkflow.includes('fastapi uvicorn websockets pydantic setuptools wheel')
+    && macJobWorkflow.includes('(\"setuptools\", \"wheel\", \"pkg_resources\")'),
+  'macOS packaging keeps recovery wheels but rejects build-tool runtime imports',
+);
+check(
+  macJobWorkflow.includes('DMG_SITE_PACKAGES="$DMG_APP/Contents/Resources/runtime/python/lib/python3.12/site-packages"')
+    && macJobWorkflow.includes('PYTHONDONTWRITEBYTECODE=1 "$DMG_APP/Contents/Resources/runtime/python/bin/python3"')
+    && macJobWorkflow.includes('find "$DMG_SITE_PACKAGES" -type d -name \'__pycache__\'')
+    && macJobWorkflow.includes('find "$DMG_SITE_PACKAGES" -type f'),
+  'macOS packaging verifies the final DMG app remains bytecode-cache free',
+);
+check(
+  macInstallScript.includes('export PYTHONDONTWRITEBYTECODE=1')
+    && macInstallScript.includes('pip install --no-compile --no-index --find-links "$WHEEL_DIR"')
+    && macInstallScript.includes('pip install --upgrade pip setuptools wheel'),
+  'macOS offline repair is cache-free and keeps build-tool bootstrap online-only',
 );
 check(
   /bash frontends\/desktop\/scripts\/post-dmg\.sh "artifacts\/macos\/out\/GenericAgent-Desktop-macOS\.dmg"/.test(macJobWorkflow),
