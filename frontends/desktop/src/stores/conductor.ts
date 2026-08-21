@@ -248,13 +248,14 @@ export const useConductorStore = create<ConductorState>((set, get) => {
     },
 
     async killWorker(id) {
-      try {
-        await fetch(`${CONDUCTOR_BASE}/subagent/${id}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'kill' }),
-        });
-      } catch {}
+      const response = await fetch(`${CONDUCTOR_BASE}/subagent/${id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'kill' }),
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to terminate worker (${response.status})`);
+      }
     },
 
     async loadModel() {

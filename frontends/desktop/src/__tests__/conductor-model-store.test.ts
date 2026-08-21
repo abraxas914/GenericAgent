@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 
 const api = vi.hoisted(() => ({
@@ -44,6 +44,10 @@ describe('Conductor model store', () => {
       effective: 2,
       fallbackReason: null,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('keeps persisted config separate from the running model received over WS', async () => {
@@ -111,6 +115,21 @@ describe('Conductor model store', () => {
     await expect(useConductorStore.getState().selectModel(2)).resolves.toBeUndefined();
 
     expect(useConductorStore.getState().modelConfig?.configured).toBe(1);
+    useConductorStore.getState().disconnect();
+  });
+
+  it('rejects worker termination when the conductor returns an error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503 });
+    vi.stubGlobal('fetch', fetchMock);
+    const { useConductorStore } = await import('../stores/conductor');
+
+    await expect(useConductorStore.getState().killWorker('worker-1')).rejects.toThrow(
+      'Failed to terminate worker (503)',
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:8900/subagent/worker-1',
+      expect.objectContaining({ method: 'POST' }),
+    );
     useConductorStore.getState().disconnect();
   });
 });

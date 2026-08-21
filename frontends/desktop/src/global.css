@@ -127,3 +127,52 @@ button, input, select, textarea {
 .ga-mixin-member-name {
   font-family: var(--font-mono);
 }
+
+/* ── Root-level React recovery ── */
+.ga-root-error {
+  width: min(100%, 620px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: 48px 32px;
+  overflow: auto;
+  color: var(--semi-color-text-0);
+}
+
+.ga-root-error-result.semi-empty {
+  padding: 32px 0 18px;
+}
+
+.ga-root-error-details {
+  margin-top: 18px;
+  border-top: 1px solid var(--semi-color-border);
+}
+
+.ga-root-error-details .semi-collapse-header {
+  padding-inline: 4px;
+  color: var(--semi-color-text-2);
+}
+
+.ga-root-error-details .semi-typography {
+  margin-top: 0;
+}
+
+.ga-root-error-details pre {
+  max-height: 280px;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--semi-color-border);
+  border-radius: var(--semi-border-radius-medium);
+  outline: none;
+  background: var(--semi-color-fill-0);
+  color: var(--semi-color-text-1);
+  font: 12px/1.55 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.ga-root-error-details pre:focus-visible {
+  border-color: var(--semi-color-primary);
+  box-shadow: 0 0 0 2px var(--semi-color-primary-light-default);
+}

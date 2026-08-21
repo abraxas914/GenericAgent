@@ -31,11 +31,11 @@ export function LoadingApp() {
   }
 
   return (
-    <div className="bootstrap-shell">
+    <div className="ga-bootstrap-shell">
       {isWindows && <WindowsTitlebar />}
-      <div className="bootstrap-app" data-route={state.route}>
+      <main className="ga-bootstrap-app" data-route={state.route}>
         {content}
-      </div>
+      </main>
     </div>
   );
 }

@@ -1,6 +1,8 @@
 import { useCallback } from 'react';
+import { Modal, Toast } from '@douyinfe/semi-ui';
 import type { Worker } from '../../stores/conductor';
 import { useConductorStore } from '../../stores/conductor';
+import { useI18n } from '../../i18n';
 
 function relTime(ts?: number): string {
   if (!ts) return '';
@@ -35,14 +37,26 @@ interface Props {
 }
 
 export function WorkerCard({ worker, onClick }: Props) {
+  const { t } = useI18n();
   const killWorker = useConductorStore((s) => s.killWorker);
 
-  const handleContextMenu = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    if (confirm(`Kill agent "${worker.title}"?`)) {
-      killWorker(worker.id);
-    }
-  }, [worker, killWorker]);
+  const handleContextMenu = useCallback((event: React.MouseEvent) => {
+    event.preventDefault();
+    Modal.confirm({
+      title: t('collab.terminateWorker'),
+      content: t('collab.terminateWorkerConfirm', { name: worker.title }),
+      okText: t('collab.terminateWorker'),
+      cancelText: t('common.cancel'),
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          await killWorker(worker.id);
+        } catch {
+          Toast.error({ content: t('collab.terminateWorkerFailed') });
+        }
+      },
+    });
+  }, [worker.id, worker.title, killWorker, t]);
 
   return (
     <article
