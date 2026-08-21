@@ -220,8 +220,8 @@ jobs:
             Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
           - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
             Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，请右键应用选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
+            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, right-click the app and choose Open, or allow it in System Settings → Privacy & Security. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
 
           ## 首次启动 / First launch
           首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
@@ -433,8 +433,8 @@ jobs:
             Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
           - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
             Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，请右键应用选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
+            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, right-click the app and choose Open, or allow it in System Settings → Privacy & Security. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
 
           ## 首次启动 / First launch
           首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
@@ -481,6 +481,9 @@ jobs:
       - name: Install desktop dependencies
         working-directory: frontends/desktop
         run: npm install
+
+      - name: Install Python packaging tools
+        run: python3 -m pip install --break-system-packages ds_store
 
       - name: Build macOS .app
         working-directory: frontends/desktop
@@ -609,7 +612,8 @@ jobs:
           codesign --force --deep --sign - "$PORTABLE/GenericAgent.app"
           codesign --verify --deep --strict "$PORTABLE/GenericAgent.app" || true
 
-          # Standard DMG: GenericAgent.app + Applications alias + first-launch helper/guide.
+          # Standard DMG: GenericAgent.app + Applications alias. The post-build
+          # repackager below writes the curated two-icon Finder layout.
           ditto "$APP_SRC" "$DMG_APP"
           mkdir -p "$DMG_APP/Contents/Resources"
           ditto "$RUNTIME_SRC" "$DMG_APP/Contents/Resources/runtime"
@@ -620,56 +624,6 @@ jobs:
           codesign --verify --deep --strict "$DMG_APP" || true
           ln -s /Applications "$DMG_STAGE/Applications"
 
-          cat > "$DMG_STAGE/open_anyway.command" <<'EOF'
-          #!/bin/bash
-          set -e
-          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          TARGET="/Applications/GenericAgent.app"
-          if [[ ! -d "$TARGET" ]]; then
-            TARGET="$DIR/GenericAgent.app"
-          fi
-          xattr -cr "$TARGET" 2>/dev/null || true
-          osascript -e 'display dialog "GenericAgent 已处理完成。请将 GenericAgent.app 拖入 Applications 后，从 Applications 中启动；如果已经安装，可以直接重新打开。" buttons {"OK"} default button "OK"' >/dev/null 2>&1 || true
-          EOF
-          chmod +x "$DMG_STAGE/open_anyway.command"
-
-          cat > "$DMG_STAGE/readme.txt" <<'EOF'
-          ================ 中文 ================
-          GenericAgent Desktop — macOS DMG 安装版
-
-          安装
-          1. 双击打开 GenericAgent-Desktop-macOS.dmg。
-          2. 将 GenericAgent.app 拖入 Applications。
-          3. 打开“应用程序 / Applications”，双击 GenericAgent.app 启动。
-
-          若出现“无法验证开发者”“Apple 无法检查其是否包含恶意软件”或无法打开：
-          1. 回到 DMG 窗口。
-          2. 双击“open_anyway.command”。
-          3. 再从 Applications 中打开 GenericAgent.app。
-          也可以右键 GenericAgent.app，选择“打开”。
-
-          卸载
-          先退出 GenericAgent，再从 Applications 删除 GenericAgent.app。
-
-          ================ English ================
-          GenericAgent Desktop — macOS DMG installer
-
-          Installation
-          1. Open GenericAgent-Desktop-macOS.dmg.
-          2. Drag GenericAgent.app to Applications.
-          3. Open Applications and launch GenericAgent.app.
-
-          If macOS says the developer cannot be verified, Apple cannot check it for malicious software, or the app cannot be opened:
-          1. Go back to the DMG window.
-          2. Double-click "open_anyway.command".
-          3. Launch GenericAgent.app from Applications again.
-          You can also right-click GenericAgent.app and choose Open.
-
-          Uninstall
-          Quit GenericAgent, then delete GenericAgent.app from Applications.
-          EOF
-          sed -i '' 's/^          //' "$DMG_STAGE/readme.txt"
-
           mkdir -p artifacts/macos/out
           hdiutil create \
             -volname "GenericAgent Desktop" \
@@ -677,8 +631,16 @@ jobs:
             -ov \
             -format UDZO \
             "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
-          shasum -a 256 "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg" \
-            > "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg.sha256"
+
+          # Restore the intentionally minimal Finder presentation: only the app
+          # and Applications shortcut, with the established window/icon layout.
+          bash frontends/desktop/scripts/post-dmg.sh "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
+
+          (
+            cd artifacts/macos/out
+            shasum -a 256 "GenericAgent-Desktop-macOS.dmg" \
+              > "GenericAgent-Desktop-macOS.dmg.sha256"
+          )
 
           echo "DMG stage tree:"
           find "$DMG_STAGE" -maxdepth 2 -print | sort
@@ -710,8 +672,8 @@ jobs:
             Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
           - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
             Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，先双击 DMG 内的 `open_anyway.command`，再启动。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, double-click `open_anyway.command` inside the DMG first, then launch again. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，请右键应用选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
+            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, right-click the app and choose Open, or allow it in System Settings → Privacy & Security. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
 
           ## 首次启动 / First launch
           首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。

@@ -123,6 +123,7 @@ if (!fs.existsSync(scriptsDir)) {
   }
 
   for (const relative of [
+    'scripts/post-dmg.sh',
     'e2e/linux/Invoke-LinuxUserJourney.sh',
     'e2e/macos/Invoke-macOSUserJourney.sh',
   ]) {
