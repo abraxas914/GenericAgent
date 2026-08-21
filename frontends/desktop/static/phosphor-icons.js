@@ -78,7 +78,7 @@
     const d = PATHS[name];
     if (!d) return '';
     const cls = className ? ` class="${className}"` : '';
-    return `<svg${cls} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true" focusable="false"><path d="${d}"/></svg>`;
+    return `<svg${cls} xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true" focusable="false"><path d="${d}"/></svg>`;
   }
 
   function gaHydrateIcons(root = document) {
