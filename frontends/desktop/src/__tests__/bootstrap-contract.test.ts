@@ -114,6 +114,55 @@ describe('bootstrap snapshot contract', () => {
     expect(dispatch).toHaveBeenCalledWith({ type: 'snapshot', snapshot: current });
   });
 
+  it('accepts upstream v1 gaProgress updates when snapshot commands are unavailable', async () => {
+    const dispatch = vi.fn();
+    (window as any).__TAURI__ = {
+      event: {
+        listen: vi.fn(async () => () => {}),
+      },
+      core: {
+        invoke: vi.fn(async () => {
+          throw new Error('Command get_bootstrap_snapshot not found');
+        }),
+      },
+    };
+
+    await subscribe(dispatch);
+    (window as any).gaProgress(45, 'deps');
+
+    expect(dispatch).toHaveBeenLastCalledWith({
+      type: 'snapshot',
+      snapshot: expect.objectContaining({
+        mode: 'prepare',
+        phase: 'preparing',
+        stage: 'dependencies',
+        progress: 45,
+      }),
+    });
+  });
+
+  it('keeps legacy progress sequence monotonic across StrictMode re-subscriptions', async () => {
+    (window as any).__TAURI__ = {
+      core: {
+        invoke: vi.fn(async () => {
+          throw new Error('Command get_bootstrap_snapshot not found');
+        }),
+      },
+    };
+    const firstDispatch = vi.fn();
+    await subscribe(firstDispatch);
+    (window as any).gaProgress(15, 'venv');
+    const firstSeq = firstDispatch.mock.calls.at(-1)?.[0].snapshot.seq;
+
+    unsubscribe();
+    const secondDispatch = vi.fn();
+    await subscribe(secondDispatch);
+    (window as any).gaProgress(45, 'deps');
+    const secondSeq = secondDispatch.mock.calls.at(-1)?.[0].snapshot.seq;
+
+    expect(secondSeq).toBeGreaterThan(firstSeq);
+  });
+
   it('cancels an in-flight subscription during StrictMode effect cleanup', async () => {
     const stop = vi.fn();
     let resolveListen: ((stop: () => void) => void) | undefined;
@@ -141,10 +190,15 @@ describe('bootstrap snapshot contract', () => {
 
     expect(publicFallback).toContain("invoke('get_bootstrap_snapshot')");
     expect(publicFallback).toContain("invoke('retry_bootstrap'");
+    expect(publicFallback).toContain("invoke('get_prepare_error')");
+    expect(publicFallback).toContain("invoke('start_bridge_with_config'");
     expect(publicFallback).toContain('修复启动问题');
     expect(publicFallback).toContain('诊断信息');
     expect(publicFallback).toContain('复制诊断信息');
-    expect(publicFallback).not.toContain("invoke('get_prepare_error')");
+
+    const loadingHtml = fs.readFileSync(path.join(desktopRoot, 'loading.html'), 'utf8');
+    expect(loadingHtml).toContain('window.gaProgress');
+    expect(loadingHtml).toContain('__GA_LEGACY_PROGRESS__');
   });
 
   it('treats upstream static v1 as an independent non-empty source boundary', () => {

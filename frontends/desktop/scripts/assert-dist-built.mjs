@@ -57,10 +57,25 @@ export function checkDistBuilt(distDir) {
   if (!fs.existsSync(loadingPath)) {
     return { ok: false, error: 'loading.html is missing from dist/ (required for Tauri cold start)' };
   }
+  const loadingContent = fs.readFileSync(loadingPath, 'utf8');
+  if (!loadingContent.includes('gaProgress') || !loadingContent.includes('__GA_LEGACY_PROGRESS__')) {
+    return { ok: false, error: 'loading.html is missing the upstream v1 progress compatibility bridge' };
+  }
 
   const fallbackPath = path.join(distDir, 'fallback.html');
   if (!fs.existsSync(fallbackPath)) {
     return { ok: false, error: 'fallback.html is missing from dist/ (required for bootstrap recovery)' };
+  }
+  const fallbackContent = fs.readFileSync(fallbackPath, 'utf8');
+  for (const command of [
+    'get_bootstrap_snapshot',
+    'retry_bootstrap',
+    'get_prepare_error',
+    'start_bridge_with_config',
+  ]) {
+    if (!fallbackContent.includes(command)) {
+      return { ok: false, error: `fallback.html is missing the ${command} recovery contract` };
+    }
   }
 
   // 4. assets/ contains at least one JS bundle
@@ -72,6 +87,12 @@ export function checkDistBuilt(distDir) {
   const jsFiles = assetFiles.filter((f) => f.endsWith('.js'));
   if (jsFiles.length === 0) {
     return { ok: false, error: 'no built JS bundle found in dist/assets/' };
+  }
+  for (const jsFile of jsFiles) {
+    const content = fs.readFileSync(path.join(assetsDir, jsFile), 'utf8');
+    if (content.includes('gaLegacy')) {
+      return { ok: false, error: `React bundle still depends on the Desktop v1 gaLegacy global (${jsFile})` };
+    }
   }
 
   // 5. No oversized chunks
@@ -120,7 +141,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
 
   console.log(`  ✓ dist/index.html present`);
   console.log(`  ✓ dist/loading.html present`);
-  console.log(`  ✓ React v2 public recovery assets and dist/fallback.html are present`);
+  console.log(`  ✓ dual-contract loading and recovery assets are present`);
+  console.log(`  ✓ React bundles contain no Desktop v1 gaLegacy dependency`);
   console.log(`  ✓ ${jsFiles.length} JS bundle(s), ${cssFiles.length} CSS file(s)`);
   console.log(`  ✓ Total assets size: ${(totalSize / 1024).toFixed(0)} KB`);
   console.log(`\n  PASS\n`);
