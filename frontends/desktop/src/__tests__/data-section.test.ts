@@ -76,6 +76,51 @@ describe('DataSection logic', () => {
     });
   });
 
+  describe('move GA workspace', () => {
+    async function pickAndMove(): Promise<string | null> {
+      const picked = await mockTauriInvoke('pick_directory', {
+        title: 'Choose the new GA workspace location',
+      });
+      if (!picked) return null;
+      return mockTauriInvoke('move_ga_runtime', { dir: picked });
+    }
+
+    it('picks a parent directory and passes it to move_ga_runtime', async () => {
+      mockTauriInvoke
+        .mockResolvedValueOnce('/Users/test/Data')
+        .mockResolvedValueOnce('/Users/test/Data/GenericAgent');
+
+      const result = await pickAndMove();
+
+      expect(mockTauriInvoke).toHaveBeenNthCalledWith(1, 'pick_directory', {
+        title: 'Choose the new GA workspace location',
+      });
+      expect(mockTauriInvoke).toHaveBeenNthCalledWith(2, 'move_ga_runtime', {
+        dir: '/Users/test/Data',
+      });
+      expect(result).toBe('/Users/test/Data/GenericAgent');
+    });
+
+    it('does not move when directory selection is cancelled', async () => {
+      mockTauriInvoke.mockResolvedValueOnce(null);
+
+      await expect(pickAndMove()).resolves.toBeNull();
+      expect(mockTauriInvoke).toHaveBeenCalledTimes(1);
+      expect(mockTauriInvoke).not.toHaveBeenCalledWith('move_ga_runtime', expect.anything());
+    });
+
+    it('rejects when move_ga_runtime fails', async () => {
+      mockTauriInvoke
+        .mockResolvedValueOnce('/Users/test/Data')
+        .mockRejectedValueOnce(new Error('failed to restart bridge'));
+
+      await expect(pickAndMove()).rejects.toThrow('failed to restart bridge');
+      expect(mockTauriInvoke).toHaveBeenLastCalledWith('move_ga_runtime', {
+        dir: '/Users/test/Data',
+      });
+    });
+  });
+
   describe('import memory & sessions', () => {
     it('posts sourceDir to /memory/import and returns counts', async () => {
       mockFetch.mockResolvedValue({

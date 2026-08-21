@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Button, Toast, Tooltip } from '@douyinfe/semi-ui';
+import { Button, Modal, Toast, Tooltip } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import * as bridge from '../../services/bridge';
 import { useChatStore } from '../../stores/chat';
@@ -35,6 +35,7 @@ function OpRow({ label, tip, btnText, onClick, disabled }: OpRowProps) {
 export function DataSection() {
   const { t } = useI18n();
   const [importing, setImporting] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const handleImportKey = useCallback(() => {
     const input = document.createElement('input');
@@ -109,6 +110,41 @@ export function DataSection() {
     }
   }, [t]);
 
+  const handleMoveData = useCallback(async () => {
+    try {
+      const picked = await bridge.tauriInvoke('pick_directory', {
+        title: t('data.movePickerTitle'),
+      }) as string | null;
+      if (!picked) return;
+
+      Modal.confirm({
+        title: t('data.moveConfirmTitle'),
+        content: t('data.moveConfirmMessage'),
+        okText: t('data.moveBtn'),
+        cancelText: t('common.cancel'),
+        onOk: async () => {
+          setMoving(true);
+          try {
+            const path = await bridge.tauriInvoke('move_ga_runtime', { dir: picked }) as string;
+            Toast.success({ content: t('data.moveSuccess', { path: path || picked }) });
+            useChatStore.getState().loadSessions();
+          } catch (e: any) {
+            console.error('[DataSection] moveData failed:', e);
+            const message = typeof e?.message === 'string'
+              ? e.message.replace(/\s+/g, ' ').trim().slice(0, 180)
+              : '';
+            Toast.error({ content: message ? `${t('data.moveError')}: ${message}` : t('data.moveError') });
+          } finally {
+            setMoving(false);
+          }
+        },
+      });
+    } catch (e) {
+      console.error('[DataSection] pick move directory failed:', e);
+      Toast.error({ content: t('data.moveError') });
+    }
+  }, [t]);
+
   return (
     <div className="ga-set-block">
       <div className="ga-set-sec-t">{t('data.title')}</div>
@@ -132,6 +168,13 @@ export function DataSection() {
             btnText={t('data.importDataBtn')}
             onClick={handleImportData}
             disabled={importing}
+          />
+          <OpRow
+            label={t('data.move')}
+            tip={t('data.moveTip')}
+            btnText={moving ? t('data.moving') : t('data.moveBtn')}
+            onClick={handleMoveData}
+            disabled={moving}
           />
           <div className="ga-data-divider" />
           <GaSourceBlock />
