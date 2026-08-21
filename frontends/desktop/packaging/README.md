@@ -37,16 +37,18 @@ frontends/desktop/packaging/
 ## 自动化测试体系
 
 CI 会先运行零依赖的 `npm run test:ci-contract`，确认 workflow、npm 清单与锁文件、
-Rust E2E feature、Tauri 配置、窗口权限及 fallback 镜像没有发生跨文件漂移；通过后
-再进入四层测试：
+Rust E2E feature、Tauri 配置、窗口权限、v1 static 边界与 v2 public/dist 边界没有发生
+跨文件漂移。P2 使用 L0–L6 分层：
 
-| 层 | 命令 | 说明 |
+| 层 | 主要入口 | 证明范围 |
 |---|---|---|
-| Preflight | `npm run test:ci-contract` | CI 输入及桌面运行时契约一致性 |
-| Layer 1 | `npm run test` | UI/store/逻辑测试（vitest + happy-dom） |
-| Layer 2 | `npm run test:bridge` | Bridge 连接协议、状态机、API 契约 |
-| Layer 3 | `npm run test:bundle` | 构建产物完整性（dist 结构、JS bundle 存在性） |
-| Layer 4 | `npm run test:packaging` | 打包前置条件（tauri.conf、icons、脚本语法） |
+| L0 合并不变量 | `npm run test:ci-contract` + Git 边界检查 | 无冲突标记、static 零差异、本地资料不入库、workflow 范围、版本一致 |
+| L1 单元/契约 | `npm run test`、`pytest frontends/tests`、Rust lib tests | React 状态、Python GA_ROOT/导入/降级、Rust 路径/迁移/回滚 |
+| L2 服务集成 | Python bridge integration | 隔离目录中的 HTTP/WS、会话、上传、记忆、模型与 conductor |
+| L3 浏览器 E2E | `npm run e2e:browser` | Vite UI + 真实 bridge 的关键用户旅程 |
+| L4 原生 E2E | `npm run e2e:desktop` / `e2e:desktop:full` | Tauri IPC、bridge 生命周期、foreign port 与 retry |
+| L5 发布包 E2E | `e2e/{windows,linux,macos}/` | 真实 ZIP/AppImage/DMG、首启、重启、移动、文件效果与系统集成 |
+| L6 人工/canary | 真机短清单、`npm run e2e:canary` | 原生视觉/Gatekeeper/托盘/文件选择器；真实模型 canary 非阻塞 |
 
 分层跑：
 
@@ -59,3 +61,15 @@ npm run test:bundle       # Layer 3（需先 npm run build）
 npm run test:packaging    # Layer 4
 npm run test:all          # Layer 1-3 一键
 ```
+
+## 发布候选证据
+
+L5 三个平台必须来自同一 commit SHA。每个真包报告记录产物 SHA-256、OS/架构、
+bootstrap phase、bridge identity、PID/端口、移动前后路径、截图、脱敏日志和清理结果。
+自动旅程通过后仍需完成平台短人工清单，最后由
+`e2e/package/verify_candidate_evidence.py` 合成候选证据清单。缺少任一平台、manual item、
+macOS `.app` 不可变证明或最终进程清理时，P2 不完成。
+
+真包脚本会临时备份并改写真实的 `~/.ga_desktop_settings.json`，结束时按字节恢复；请只在
+专用 OS 测试账号中执行。macOS 失效 override 回退场景可能在 Application Support 创建
+正常的版本化可写 runtime，这是产品数据而非 `.app` 内容。

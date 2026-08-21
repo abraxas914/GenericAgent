@@ -64,7 +64,27 @@ def bridge_print(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 
+def _ga_root_override() -> Optional[Path]:
+    """Resolve an external core while keeping this bundled bridge as the executable surface."""
+    value = ""
+    for index, argument in enumerate(sys.argv):
+        if argument == "--ga-root" and index + 1 < len(sys.argv):
+            value = sys.argv[index + 1]
+        elif argument.startswith("--ga-root="):
+            value = argument.split("=", 1)[1]
+    if not value:
+        value = os.environ.get("GA_ROOT", "")
+    value = (value or "").strip()
+    if not value:
+        return None
+    root = Path(value).expanduser().resolve()
+    return root if (root / "agentmain.py").exists() else None
+
+
 def find_default_ga_root() -> Path:
+    override = _ga_root_override()
+    if override is not None:
+        return override
     candidates = [
         APP_DIR / "..",
         APP_DIR / ".." / "..",
@@ -180,6 +200,7 @@ class Session:
     agent: Any = None
     thread: Optional[threading.Thread] = None
     cancel_requested: bool = False
+    active_turn_id: str = ""
     last_error: str = ""
     pinned: bool = False
     untitled: bool = True
@@ -821,13 +842,20 @@ class AgentManager:
             if image_metas:
                 extra["images"] = image_metas
             user_msg = self.add_message(sess, "user", prompt, **extra)
+            turn_id = uuid.uuid4().hex
             sess.status = "running"
             sess.cancel_requested = False
+            sess.active_turn_id = turn_id
             sess.last_error = ""
             sess.partial = {"id": sess.msg_seq + 1, "role": "assistant", "content": "", "ts": time.time(), "partial": True,
                             "curr_turn": 0, "turn_segs": []}  # turn_segs[i]=第i轮全文(权威结构化,前端按轮渲染);content保留双轮兜底
             image_paths = [m["path"] for m in (image_metas or []) if m.get("path")]
-            t = threading.Thread(target=self.run_agent_turn, args=(sess, agent_prompt, image_paths or None), daemon=True, name=f"Turn-{sid}")
+            t = threading.Thread(
+                target=self.run_agent_turn,
+                args=(sess, agent_prompt, image_paths or None, turn_id),
+                daemon=True,
+                name=f"Turn-{sid}",
+            )
             sess.thread = t
             t.start()
             seq = sess.msg_seq
@@ -873,15 +901,31 @@ class AgentManager:
 
         backend.ask = patched_ask
 
-    def run_agent_turn(self, sess: Session, prompt: str, images: Optional[list] = None):
+    def run_agent_turn(
+        self,
+        sess: Session,
+        prompt: str,
+        images: Optional[list] = None,
+        turn_id: str = "",
+    ):
+        def turn_state() -> tuple[bool, bool]:
+            with self.lock:
+                return sess.active_turn_id == turn_id, sess.cancel_requested
+
         try:
+            is_current, _ = turn_state()
+            if not is_current:
+                return
             if _consume_e2e_next_turn() == "empty":
                 with self.lock:
+                    if sess.active_turn_id != turn_id:
+                        return
                     sess.partial = None
                     self.add_message(sess, "assistant", empty_turn_fallback())
                     sess.running_llm_no = None
                     sess.running_model = None
                     sess.status = "idle"
+                    sess.active_turn_id = ""
                     sess.last_error = ""
                 emit_session_state(sess, "idle")
                 return
@@ -919,7 +963,10 @@ class AgentManager:
                 pieces = []
                 import queue as _queue
                 while True:
-                    if sess.cancel_requested:
+                    is_current, is_cancelled = turn_state()
+                    if not is_current:
+                        return
+                    if is_cancelled:
                         break
                     try:
                         item = display_q.get(timeout=1.0)
@@ -930,7 +977,7 @@ class AgentManager:
                             text = str(item["next"])
                             pieces.append(text)
                             with self.lock:
-                                if sess.partial is not None:
+                                if sess.partial is not None and sess.active_turn_id == turn_id:
                                     sess.partial["content"] = "".join(pieces) if getattr(agent, "inc_out", False) else text
                                     sess.partial["ts"] = time.time()
                                     sess.updated_at = time.time()
@@ -955,7 +1002,7 @@ class AgentManager:
                             done_outputs = normalize_final_turn_segs(full, item.get("outputs"))  # done时=turn_resps.copy()全量轮
                             if done_outputs:
                                 with self.lock:
-                                    if sess.partial is not None:
+                                    if sess.partial is not None and sess.active_turn_id == turn_id:
                                         sess.partial["content"] = full
                                         sess.partial["ts"] = time.time()
                                         sess.partial["updatedAt"] = sess.partial["ts"] if "updatedAt" in sess.partial else sess.partial.get("updatedAt")
@@ -969,13 +1016,18 @@ class AgentManager:
                     full = pieces[-1] if not getattr(agent, "inc_out", False) else "".join(pieces)
             else:
                 full = "GenericAgent object has no put_task method"
+            is_current, is_cancelled = turn_state()
+            if not is_current:
+                return
             if not full:
                 full = empty_turn_fallback()
-            if sess.cancel_requested:
+            if is_cancelled:
                 with self.lock:
                     sess.partial = None
                     sess.running_llm_no = None
                     sess.running_model = None
+                    if sess.active_turn_id == turn_id:
+                        sess.active_turn_id = ""
                     # Ensure status stays cancelled (don't overwrite)
                     if sess.status != "cancelled":
                         sess.status = "cancelled"
@@ -983,6 +1035,8 @@ class AgentManager:
                 emit_session_state(sess, "cancelled")
                 return
             with self.lock:
+                if sess.active_turn_id != turn_id:
+                    return
                 sess.partial = None
                 full = strip_final_info_marker(full)
                 import plan_state
@@ -998,15 +1052,19 @@ class AgentManager:
                 sess.running_llm_no = None
                 sess.running_model = None
                 sess.status = "idle"
+                sess.active_turn_id = ""
                 sess.last_error = ""
             emit_session_state(sess, "idle")
         except Exception as e:
             tb = traceback.format_exc()
             with self.lock:
+                if sess.active_turn_id != turn_id:
+                    return
                 sess.partial = None
                 sess.running_llm_no = None
                 sess.running_model = None
                 sess.status = "error"
+                sess.active_turn_id = ""
                 sess.last_error = str(e)
                 self.add_message(sess, "error", str(e))
             bridge_print(f"[turn] error: {e}")
@@ -1060,6 +1118,7 @@ class AgentManager:
             if partial_text:
                 self.add_message(sess, "assistant", partial_text, stopped=True)
             sess.status = "cancelled"
+            sess.active_turn_id = ""
             sess.partial = None
             sess.updated_at = time.time()
         emit_session_state(sess, "cancelled")
@@ -1235,11 +1294,13 @@ def discover_extra_services(ga_root: Path) -> List[dict]:
     # conductor 跟 scheduler 一样,bridge 启动时自动拉起。--no-browser 是关键:
     # conductor.py 默认会用 webbrowser.open 在用户浏览器弹一个 8900 端口 UI,
     # 桌面版自启时不需要这个独立 UI(用户从「指挥家」页直接访问)。
-    conductor = ga_root / "frontends" / "conductor.py"
+    # The desktop conductor evolves with this bridge. Keep both package-owned and inject the
+    # external core through GA_ROOT instead of executing arbitrary UI glue from that checkout.
+    conductor = APP_DIR / "conductor.py"
     if conductor.is_file():
         out.append({
             "id": "frontends/conductor.py",
-            "cmd": [sys.executable, "frontends/conductor.py", "--no-browser"],
+            "cmd": [sys.executable, str(conductor), "--no-browser"],
             "port": 8900,
         })
     return out
@@ -1473,7 +1534,12 @@ class ServiceManager:
             self._notify(sid, err=err)
             return {"ok": False, "error": "not_configured", "service": self._state(sid, err=err)}
         self.buffers[sid] = deque(maxlen=500)
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+        env = {
+            **os.environ,
+            "PYTHONUNBUFFERED": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "GA_ROOT": str(self.ga_root),
+        }
         kw: Dict[str, Any] = dict(
             cwd=str(self.ga_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,

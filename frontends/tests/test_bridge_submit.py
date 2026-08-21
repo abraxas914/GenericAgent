@@ -186,27 +186,19 @@ class TestRunAgentTurnScope:
 
     @staticmethod
     def _extract_method_body(source: str, method_name: str) -> str:
-        """Extract a method body from source (indentation-based)."""
-        import re
-        pattern = rf"^\s+def {method_name}\(self.*?:\n"
-        match = re.search(pattern, source, re.MULTILINE)
-        if not match:
-            return ""
-        start = match.end()
-        lines = source[start:].split("\n")
-        body_lines = []
-        base_indent = None
-        for line in lines:
-            if not line.strip():
-                body_lines.append(line)
-                continue
-            indent = len(line) - len(line.lstrip())
-            if base_indent is None:
-                base_indent = indent
-            if indent < base_indent and line.strip():
-                break
-            body_lines.append(line)
-        return "\n".join(body_lines)
+        """Extract a method with Python's parser so multiline signatures remain supported."""
+        import ast
+        tree = ast.parse(source)
+        method = next(
+            (
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == method_name
+            ),
+            None,
+        )
+        return ast.get_source_segment(source, method) if method is not None else ""
 
     def test_run_agent_turn_does_not_reference_bare_sid(self):
         """run_agent_turn must use sess.id, never bare 'sid' (which is out of scope)."""

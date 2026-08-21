@@ -136,16 +136,19 @@ describe('bootstrap snapshot contract', () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it('keeps both fallback sources aligned with the recovery command and copy contract', () => {
+  it('keeps the React v2 recovery page aligned with the bootstrap command contract', () => {
     const publicFallback = fs.readFileSync(path.join(desktopRoot, 'public/fallback.html'), 'utf8');
-    const staticFallback = fs.readFileSync(path.join(desktopRoot, 'static/fallback.html'), 'utf8');
 
-    expect(publicFallback).toBe(staticFallback);
     expect(publicFallback).toContain("invoke('get_bootstrap_snapshot')");
     expect(publicFallback).toContain("invoke('retry_bootstrap'");
     expect(publicFallback).toContain('修复启动问题');
     expect(publicFallback).toContain('诊断信息');
     expect(publicFallback).toContain('复制诊断信息');
     expect(publicFallback).not.toContain("invoke('get_prepare_error')");
+  });
+
+  it('treats upstream static v1 as an independent non-empty source boundary', () => {
+    const staticFallback = fs.readFileSync(path.join(desktopRoot, 'static/fallback.html'), 'utf8');
+    expect(staticFallback.trim().length).toBeGreaterThan(0);
   });
 });

@@ -25,7 +25,12 @@ sys.modules["agentmain"] = agentmain_stub
 spec = importlib.util.spec_from_file_location("conductor_model_under_test", CONDUCTOR_PATH)
 conductor = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
-spec.loader.exec_module(conductor)
+_argv = sys.argv
+try:
+    sys.argv = [str(CONDUCTOR_PATH), "--no-browser"]
+    spec.loader.exec_module(conductor)
+finally:
+    sys.argv = _argv
 if previous_agentmain is None:
     del sys.modules["agentmain"]
 else:

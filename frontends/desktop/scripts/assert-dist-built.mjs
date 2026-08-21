@@ -28,15 +28,13 @@ const CHUNK_WARN_SIZE = 2 * 1024 * 1024; // 2 MB
 export function checkDistBuilt(distDir) {
   const warnings = [];
 
-  // The vanilla bridge still serves static/fallback.html while Vite packages public/fallback.html.
-  // They are intentionally identical so recovery behavior cannot drift by launch path.
-  const publicFallback = path.join(DESKTOP_ROOT, 'public', 'fallback.html');
-  const staticFallback = path.join(DESKTOP_ROOT, 'static', 'fallback.html');
-  if (!fs.existsSync(publicFallback) || !fs.existsSync(staticFallback)) {
-    return { ok: false, error: 'public/static fallback source is missing' };
-  }
-  if (fs.readFileSync(publicFallback, 'utf8') !== fs.readFileSync(staticFallback, 'utf8')) {
-    return { ok: false, error: 'public/fallback.html and static/fallback.html have drifted' };
+  // React v2 public assets are an independent packaging boundary. The upstream static v1 tree is
+  // deliberately not read here; its zero-diff invariant is enforced against the PR base in CI.
+  for (const publicAsset of ['fallback.html', 'i18n.js', 'styles.css']) {
+    const sourcePath = path.join(DESKTOP_ROOT, 'public', publicAsset);
+    if (!fs.existsSync(sourcePath) || fs.statSync(sourcePath).size === 0) {
+      return { ok: false, error: `public/${publicAsset} is missing or empty` };
+    }
   }
 
   // 1. dist/ exists
@@ -122,7 +120,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
 
   console.log(`  ✓ dist/index.html present`);
   console.log(`  ✓ dist/loading.html present`);
-  console.log(`  ✓ dist/fallback.html present and fallback sources match`);
+  console.log(`  ✓ React v2 public recovery assets and dist/fallback.html are present`);
   console.log(`  ✓ ${jsFiles.length} JS bundle(s), ${cssFiles.length} CSS file(s)`);
   console.log(`  ✓ Total assets size: ${(totalSize / 1024).toFixed(0)} KB`);
   console.log(`\n  PASS\n`);

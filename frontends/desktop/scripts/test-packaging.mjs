@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -26,6 +26,7 @@ const PACKAGING_DIR = path.join(DESKTOP_ROOT, 'packaging');
 let pass = 0;
 let fail = 0;
 const warnings = [];
+const RELEASE_VERSION = '0.2.0';
 
 function ok(msg) { console.log(`  ✓ ${msg}`); pass++; }
 function bad(msg) { console.error(`  ✗ ${msg}`); fail++; }
@@ -120,22 +121,62 @@ if (!fs.existsSync(scriptsDir)) {
       bad(`syntax error: ${path.relative(DESKTOP_ROOT, script)}\n    ${e.stdout?.toString().trim() || e.message}`);
     }
   }
+
+  for (const relative of [
+    'e2e/linux/Invoke-LinuxUserJourney.sh',
+    'e2e/macos/Invoke-macOSUserJourney.sh',
+  ]) {
+    const script = path.join(DESKTOP_ROOT, relative);
+    try {
+      execFileSync('bash', ['-n', script], { timeout: 5000 });
+      ok(`syntax OK: ${relative}`);
+    } catch (e) {
+      bad(`syntax error: ${relative}\n    ${e.stderr?.toString().trim() || e.message}`);
+    }
+  }
+
+  for (const relative of [
+    'e2e/package/real_package_journey.py',
+    'e2e/package/verify_candidate_evidence.py',
+  ]) {
+    const script = path.join(DESKTOP_ROOT, relative);
+    try {
+      execFileSync('python3', [script, '--help'], { timeout: 5000, stdio: 'ignore' });
+      ok(`CLI contract OK: ${relative}`);
+    } catch (e) {
+      bad(`CLI contract failed: ${relative}: ${e.message}`);
+    }
+  }
 }
 
-// ── 4. Cargo.toml version consistency ──
+// ── 4. Release version consistency ──
 console.log('\n[4] Version consistency');
 
 const cargoPath = path.join(TAURI_DIR, 'Cargo.toml');
-if (fs.existsSync(cargoPath) && fs.existsSync(confPath)) {
+const cargoLockPath = path.join(TAURI_DIR, 'Cargo.lock');
+const packagePath = path.join(DESKTOP_ROOT, 'package.json');
+const packageLockPath = path.join(DESKTOP_ROOT, 'package-lock.json');
+if (fs.existsSync(cargoPath) && fs.existsSync(cargoLockPath) && fs.existsSync(confPath) && fs.existsSync(packagePath) && fs.existsSync(packageLockPath)) {
   const cargoContent = fs.readFileSync(cargoPath, 'utf8');
   const cargoVersion = cargoContent.match(/^version\s*=\s*"([^"]+)"/m)?.[1];
+  const cargoLock = fs.readFileSync(cargoLockPath, 'utf8');
+  const cargoLockVersion = cargoLock.match(/\[\[package\]\]\s+name = "ga-desktop"\s+version = "([^"]+)"/m)?.[1];
   const tauriConf = JSON.parse(fs.readFileSync(confPath, 'utf8'));
-
-  if (cargoVersion && tauriConf.version) {
-    if (cargoVersion === tauriConf.version) {
-      ok(`versions match: ${cargoVersion}`);
+  const packageJson = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
+  const packageLock = JSON.parse(fs.readFileSync(packageLockPath, 'utf8'));
+  const versions = {
+    'package.json': packageJson.version,
+    'package-lock.json': packageLock.version,
+    'package-lock root': packageLock.packages?.['']?.version,
+    'Cargo.toml': cargoVersion,
+    'Cargo.lock ga-desktop': cargoLockVersion,
+    'tauri.conf.json': tauriConf.version,
+  };
+  for (const [source, version] of Object.entries(versions)) {
+    if (version === RELEASE_VERSION) {
+      ok(`${source} version is ${RELEASE_VERSION}`);
     } else {
-      warn(`version mismatch: Cargo.toml=${cargoVersion}, tauri.conf.json=${tauriConf.version}`);
+      bad(`${source} version is ${version ?? 'missing'}; expected ${RELEASE_VERSION}`);
     }
   }
 }

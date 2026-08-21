@@ -218,6 +218,7 @@ let bridgeUiOffline = false;
       case 'services/mykey/save': return http('/services/mykey', { method: 'POST', body: params || {} });
       case 'services/conductor/model/get': return http('/services/conductor/model');
       case 'services/conductor/model/save': return http('/services/conductor/model', { method: 'POST', body: params || {} });
+      case 'memory/import': return http('/memory/import', { method: 'POST', body: params || {} });
       case 'app/path/selectGaRoot': return http('/config');
       case 'list_continuable_sessions': return { sessions: [] };
       case 'restore_session': throw new Error('restore_session is not implemented in web2 bridge');
@@ -288,6 +289,7 @@ let bridgeUiOffline = false;
     getGaSource: () => tauriInvoke('get_ga_source'),
     setGaSource: (dir) => tauriInvoke('set_ga_source', { dir }),
     clearGaSource: () => tauriInvoke('clear_ga_source'),
+    moveGaRuntime: (dir) => tauriInvoke('move_ga_runtime', { dir }),
     getConductorModel: () => rpc('services/conductor/model/get', {}),
     saveConductorModel: (llmNo) => rpc('services/conductor/model/save', { llmNo }),
     tauriInvoke,
@@ -715,6 +717,29 @@ bindClick('import-memory-btn', async (e) => {
     showChanToast(t('err.memoryImport'), err.message || String(err), 'err');
   }
 });
+bindClick('move-ga-runtime-btn', async (e) => {
+  e.stopPropagation();
+  if (!window.__TAURI__?.core?.invoke) {
+    showChanToast(t('err.gaRuntimeDesktopOnly'), '', 'err');
+    return;
+  }
+  try {
+    const dir = await window.ga.tauriInvoke('pick_directory', { title: t('sys.gaRuntimeMoveTitle') });
+    if (!dir) return;
+    const confirmed = await showConfirmDialog({
+      title: t('confirm.gaRuntimeMoveTitle'),
+      message: t('confirm.gaRuntimeMove'),
+      okText: t('set.moveGaRuntime'),
+    });
+    if (!confirmed) return;
+    showChanToast(t('sys.gaRuntimeMoving'), dir, 'ok');
+    const project = await window.ga.moveGaRuntime(dir);
+    await refreshGaSource();
+    showChanToast(t('sys.gaRuntimeMoved'), project || dir, 'ok');
+  } catch (err) {
+    showChanToast(t('err.gaRuntimeMove'), err.message || String(err), 'err');
+  }
+});
 const gaSourceCurrentEl = document.getElementById('ga-source-current');
 const gaSourceClearBtn = document.getElementById('ga-source-clear-btn');
 async function refreshGaSource() {
@@ -750,6 +775,12 @@ bindClick('ga-source-btn', async (e) => {
 });
 bindClick('ga-source-clear-btn', async (e) => {
   e.stopPropagation();
+  const confirmed = await showConfirmDialog({
+    title: t('confirm.gaSourceClearTitle'),
+    message: t('confirm.gaSourceClear'),
+    okText: t('set.gaSourceClear'),
+  });
+  if (!confirmed) return;
   try {
     showChanToast(t('sys.gaSourceSwitching'), '', 'ok');
     await window.ga.clearGaSource();
@@ -760,12 +791,25 @@ bindClick('ga-source-clear-btn', async (e) => {
   }
 });
 refreshGaSource();
-// 侧边栏「快速接入」：点击官方模型按钮 → 打开预填好的添加模型表单
+// 侧边栏「快速接入」：官方模型 → 预填表单；ga-token → 开 portal 写 mykey
 const pqEl = document.getElementById('provider-quickstart');
+const pqGaBtn = document.getElementById('pq-ga-token');
+if (pqGaBtn) bridgeFetch('/subscription-portal').then(r => { pqGaBtn.hidden = !r?.available; }).catch(() => {});
 if (pqEl) pqEl.addEventListener('click', (e) => {
   const btn = e.target.closest('.pq-btn[data-provider]');
   if (!btn) return;
   e.preventDefault(); e.stopPropagation();
+  if (btn.dataset.provider === 'ga-token') {
+    window.ga.getMykeyContent().then(r => {
+      const base = r?.content || '', t0 = Date.now();
+      bridgeFetch('/subscription-portal', { method: 'POST', body: {} });
+      const timer = setInterval(async () => {
+        const cur = (await window.ga.getMykeyContent().catch(() => null))?.content;
+        if ((cur != null && cur !== base) || Date.now() - t0 > 3e5) { clearInterval(timer); if (cur !== base) await loadModelProfiles(); }
+      }, 3000);
+    });
+    return;
+  }
   openAddModelFormForProvider(btn.dataset.provider);
 });
 // 「快速接入」卡片折叠/展开（向下箭头），状态记忆到 localStorage
@@ -775,11 +819,8 @@ if (pqEl && pqToggle) {
     pqEl.classList.toggle('collapsed', collapsed);
     pqToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
   };
-  let pqCollapsed = true;
-  try {
-    const saved = localStorage.getItem('ga_pq_collapsed');
-    if (saved != null) pqCollapsed = saved === '1';
-  } catch (_) {}
+  let pqCollapsed = false;
+  try { pqCollapsed = localStorage.getItem('ga_pq_collapsed') === '1'; } catch (_) {}
   applyPq(pqCollapsed);
   const togglePq = (e) => {
     if (e) e.stopPropagation();
@@ -2694,6 +2735,7 @@ function setActiveSession(id) {
   r.draftEl = null;
   resetTypewriterState(r);
   renderAllMessages(sess);
+  scrollBottom(true);
   setBusy(sess, rt(sess).busy);
   renderSessionList();
   refreshPlanBar(null);
@@ -3830,7 +3872,12 @@ function renderSettingsModels() {
   applyI18n();
 }
 function openSettings() {
-  window.dispatchEvent(new Event('ga:open-settings'));
+  openModal('settings-modal');
+  renderSettingsModels();
+  renderLangList();
+  applyTheme(theme, { persist: false });
+  applyAppearance(appearance, plainUi, { persist: false });
+  applyChatFontSize(chatFontSize, { persist: false });
 }
 async function loadModelProfiles() {
   try {
@@ -5601,12 +5648,8 @@ if (chanListEl) {
 }
 
 /* ═══════════════ 启动 ═══════════════ */
-window.gaLegacy = { applyAppearance, applyI18n, syncHljsTheme, selectModel, updateModelChip, renderSessionList, refreshStatusLabel };
-
 (async () => {
-try {
 await loadSessions();
-} catch (_) {}
 applyAppearance(appearance, plainUi, { persist: false });
 applyTheme(theme, { persist: false });
 initChatFontStepper();
@@ -5621,9 +5664,11 @@ loadHiddenBuiltins();
 renderAllPresets();
 if (state.activeId) setActiveSession(state.activeId);
 else refreshEmptyState(null);
+// bridge-ready 可能在上面的 await 期间就已到达（WS 一连上 bridge 即推送），
+// 此时 state.bridgeReady 已为 true，直接按真实状态渲染，避免把「就绪」覆盖回「连接中」。
 if (state.bridgeReady) refreshStatusLabel();
 else chatStatus.setConnecting();
-try { window.ga.startBridge && window.ga.startBridge(); } catch (_) {}
+window.ga.startBridge && window.ga.startBridge();
 })();
 
 /* 聊天 / Conductor 共用 composer 绑定（结构：.composer > .composer-slot > .composer-inset） */

@@ -414,7 +414,7 @@ export const en: Record<string, string> = {
   'data.localRepoCleared': 'Disconnected — using built-in runtime',
   'data.localRepoError': 'Invalid repository',
   'data.localRepoErrNoAgent': 'Invalid — agentmain.py not found',
-  'data.localRepoErrNoBridge': 'Invalid — desktop_bridge.py not found',
+  'data.localRepoErrIncompatible': 'This core is incompatible with Desktop 2.0',
   'data.localRepoErrTimeout': 'Startup timed out — environment may be incomplete',
   'data.localRepoErrNoResolve': 'Cannot resolve runtime',
   'data.localRepoFallback': 'Previously linked repository unavailable — using built-in runtime',

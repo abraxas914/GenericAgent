@@ -414,7 +414,7 @@ export const zh: Record<string, string> = {
   'data.localRepoCleared': '已断开，回到内置运行时',
   'data.localRepoError': '无效仓库',
   'data.localRepoErrNoAgent': '无效仓库 — 未找到 agentmain.py',
-  'data.localRepoErrNoBridge': '无效仓库 — 未找到 desktop_bridge.py',
+  'data.localRepoErrIncompatible': '该核心与 Desktop 2.0 不兼容',
   'data.localRepoErrTimeout': '启动超时 — 仓库环境可能不完整',
   'data.localRepoErrNoResolve': '无法定位运行时',
   'data.localRepoFallback': '上次连接的仓库不可用，已回到内置运行时',
