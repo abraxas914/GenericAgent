@@ -25,6 +25,9 @@ setTimeout(() => {
 }, 0);
 
 import React from 'react';
+import { Button, Collapse, Empty, Typography } from '@douyinfe/semi-ui';
+import { IconRefresh } from '@douyinfe/semi-icons';
+import { IllustrationFailure, IllustrationFailureDark } from '@douyinfe/semi-illustrations';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
 
@@ -44,12 +47,37 @@ class RootErrorBoundary extends React.Component<
 
   render() {
     if (this.state.error) {
+      const isZh = (navigator.language || '').toLowerCase().startsWith('zh');
+      const error = this.state.error;
       return (
-        <pre style={{ padding: 24, color: 'red', whiteSpace: 'pre-wrap' }}>
-          {this.state.error.message}
-          {'\n\n'}
-          {this.state.error.stack}
-        </pre>
+        <main className="ga-root-error" role="alert">
+          <Empty
+            className="ga-root-error-result"
+            image={<IllustrationFailure />}
+            darkModeImage={<IllustrationFailureDark />}
+            title={isZh ? '界面遇到问题' : 'Something went wrong'}
+            description={isZh
+              ? 'GenericAgent 的界面未能继续运行。你的会话和记忆不会受到影响。'
+              : 'The GenericAgent interface could not continue. Your sessions and memory are safe.'}
+          >
+            <Button
+              type="primary"
+              theme="solid"
+              icon={<IconRefresh />}
+              onClick={() => window.location.reload()}
+            >
+              {isZh ? '重新加载' : 'Reload'}
+            </Button>
+          </Empty>
+          <Collapse className="ga-root-error-details" accordion>
+            <Collapse.Panel itemKey="technical-details" header={isZh ? '技术详情' : 'Technical details'}>
+              <Typography.Paragraph type="tertiary">
+                {isZh ? '复制以下信息可帮助排查问题。' : 'Copy the information below to help troubleshoot the issue.'}
+              </Typography.Paragraph>
+              <pre tabIndex={0}>{[error.message, error.stack].filter(Boolean).join('\n\n')}</pre>
+            </Collapse.Panel>
+          </Collapse>
+        </main>
       );
     }
     return this.props.children;

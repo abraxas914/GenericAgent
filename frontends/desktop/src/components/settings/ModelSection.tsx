@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { Button, Toast, Tag } from '@douyinfe/semi-ui';
+import { Button, Modal, Toast, Tag } from '@douyinfe/semi-ui';
 import { useSettingsStore } from '../../stores/settings';
 import { useI18n } from '../../i18n';
 import * as bridge from '../../services/bridge';
@@ -45,15 +45,23 @@ export function ModelSection({ onAdd, onEdit }: Props) {
     setDefaultModel(idx);
   }, [setDefaultModel]);
 
-  const handleDelete = useCallback(async (id: number, name: string) => {
-    if (!confirm(`${t('common.delete')} "${name}"？`)) return;
-    try {
-      const profiles = await bridge.deleteModelProfile(id);
-      setModelProfiles(profiles);
-      Toast.success({ content: t('common.delete') });
-    } catch {
-      Toast.error({ content: t('err.modelDelete') });
-    }
+  const handleDelete = useCallback((id: number, name: string) => {
+    Modal.confirm({
+      title: t('common.delete'),
+      content: `${t('common.delete')} "${name}"？`,
+      okText: t('common.delete'),
+      cancelText: t('common.cancel'),
+      okType: 'danger',
+      onOk: async () => {
+        try {
+          const profiles = await bridge.deleteModelProfile(id);
+          setModelProfiles(profiles);
+          Toast.success({ content: t('common.delete') });
+        } catch {
+          Toast.error({ content: t('err.modelDelete') });
+        }
+      },
+    });
   }, [setModelProfiles, t]);
 
   const handleEdit = useCallback((id: number) => {

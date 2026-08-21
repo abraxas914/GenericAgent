@@ -82,6 +82,7 @@ export default defineConfig({
       input: {
         main: path.resolve(__dirname, 'index.html'),
         loading: path.resolve(__dirname, 'loading.html'),
+        setup: path.resolve(__dirname, 'setup.html'),
       },
     },
   },

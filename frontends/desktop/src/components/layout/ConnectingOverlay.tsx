@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { Spin } from '@douyinfe/semi-ui';
+import { Banner, Button, Card, Spin, Typography } from '@douyinfe/semi-ui';
+import { IconAlertTriangle, IconRefresh } from '@douyinfe/semi-icons';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import { useBridgeEverConnected } from '../../hooks/useBridgeEverConnected';
 import { useBridgeFailCount } from '../../hooks/useBridgeFailCount';
@@ -29,30 +30,43 @@ export function ConnectingOverlay() {
 
   if (isOffline) {
     return (
-      <div className="ga-connecting-overlay">
-        <div className="ga-connecting-overlay-card">
-          <h2 className="ga-connecting-overlay-title">{t('bridge.offline')}</h2>
-          <p className="ga-connecting-overlay-sub">
-            {t('bridge.offlineHint')}
-          </p>
-          <button
-            className="ga-connecting-overlay-retry"
+      <div className="ga-connecting-overlay" role="alert">
+        <Card className="ga-connecting-overlay-card" shadows="hover">
+          <Banner
+            type="danger"
+            fullMode={false}
+            bordered
+            closeIcon={null}
+            icon={<IconAlertTriangle />}
+            title={t('bridge.offline')}
+            description={t('bridge.offlineHint')}
+          />
+          <Button
+            type="primary"
+            theme="solid"
+            icon={<IconRefresh />}
             onClick={() => window.location.reload()}
           >
             {t('collab.retry')}
-          </button>
-        </div>
+          </Button>
+        </Card>
       </div>
     );
   }
 
   return (
-    <div className={`ga-connecting-overlay ${fadeOut ? 'ga-connecting-overlay--fade' : ''}`}>
-      <div className="ga-connecting-overlay-content">
-        <div className="ga-connecting-overlay-brand">GENERIC AGENT</div>
+    <div
+      className={`ga-connecting-overlay ${fadeOut ? 'ga-connecting-overlay--fade' : ''}`}
+      role="status"
+      aria-live="polite"
+    >
+      <Card className="ga-connecting-overlay-content" shadows="hover">
+        <Typography.Title heading={4} className="ga-connecting-overlay-brand">
+          GenericAgent
+        </Typography.Title>
         <Spin size="large" />
-        <span className="ga-connecting-overlay-text">{t('bridge.connecting')}</span>
-      </div>
+        <Typography.Text type="tertiary">{t('bridge.connecting')}</Typography.Text>
+      </Card>
     </div>
   );
 }

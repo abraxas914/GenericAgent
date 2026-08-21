@@ -44,6 +44,12 @@ async function importAppLayout() {
     ResizeGroup: ({ children }: any) => <div>{children}</div>,
     ResizeItem: ({ children }: any) => <div>{children}</div>,
     ResizeHandler: () => null,
+    Spin: () => <span role="progressbar" />,
+    Typography: {
+      Title: ({ children, ...props }: any) => <h2 {...props}>{children}</h2>,
+      Paragraph: ({ children, ...props }: any) => <p {...props}>{children}</p>,
+      Text: ({ children, ...props }: any) => <span {...props}>{children}</span>,
+    },
   }));
 
   return import('../components/layout/AppLayout');

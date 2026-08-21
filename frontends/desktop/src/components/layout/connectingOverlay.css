@@ -6,7 +6,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--semi-color-bg-0);
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--semi-color-primary) 8%, transparent), transparent 40%),
+    var(--semi-color-bg-0);
   transition: opacity 400ms ease-out;
 }
 
@@ -15,55 +18,38 @@
   pointer-events: none;
 }
 
-.ga-connecting-overlay-content {
+.ga-connecting-overlay-content.semi-card,
+.ga-connecting-overlay-card.semi-card {
+  width: min(100%, 380px);
+  border-color: var(--semi-color-border);
+  background: color-mix(in srgb, var(--semi-color-bg-0) 94%, transparent);
+}
+
+.ga-connecting-overlay-content .semi-card-body {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 16px;
-}
-
-.ga-connecting-overlay-brand {
-  font-size: 18px;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  color: var(--semi-color-text-0);
-}
-
-.ga-connecting-overlay-text {
-  font-size: 13px;
-  color: var(--semi-color-text-2);
-}
-
-/* Offline card state */
-.ga-connecting-overlay-card {
+  padding: 34px;
   text-align: center;
-  padding: 32px;
 }
 
-.ga-connecting-overlay-title {
-  font-size: 16px;
-  font-weight: 600;
+.ga-connecting-overlay-brand.semi-typography {
+  margin: 0;
+  letter-spacing: -0.01em;
   color: var(--semi-color-text-0);
-  margin: 0 0 8px;
 }
 
-.ga-connecting-overlay-sub {
-  font-size: 13px;
-  color: var(--semi-color-text-2);
-  margin: 0 0 16px;
-  font-family: var(--semi-font-family-code, monospace);
+.ga-connecting-overlay-card .semi-card-body {
+  display: grid;
+  gap: 18px;
+  padding: 24px;
 }
 
-.ga-connecting-overlay-retry {
-  padding: 6px 16px;
-  border: 1px solid var(--semi-color-border);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--semi-color-primary);
-  font-size: 13px;
-  cursor: pointer;
+.ga-connecting-overlay-card .semi-banner {
+  border-radius: var(--semi-border-radius-medium);
 }
 
-.ga-connecting-overlay-retry:hover {
-  background: var(--semi-color-fill-0);
+.ga-connecting-overlay-card .semi-button {
+  justify-self: center;
 }

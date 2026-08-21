@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
 # GenericAgent Desktop macOS portable installer/preparer.
 # Intended bundle layout:
@@ -108,7 +109,6 @@ install_deps() {
   [[ "$SKIP_PIP_INSTALL" == "1" ]] && return
   progress deps
   log_step "Install desktop bridge dependencies"
-  "$py" -m pip install --upgrade pip setuptools wheel
   local pkgs=(
     "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil
   )
@@ -117,10 +117,13 @@ install_deps() {
     pkgs+=( $EXTRA_PACKAGES )
   fi
   if [[ -n "$WHEEL_DIR" && -d "$WHEEL_DIR" ]]; then
-    "$py" -m pip install --no-index --find-links "$WHEEL_DIR" "${pkgs[@]}"
+    # A wheelhouse repair only needs pip itself. Keep the path fully offline and
+    # do not install setuptools/wheel into the prepared runtime.
+    "$py" -m pip install --no-compile --no-index --find-links "$WHEEL_DIR" "${pkgs[@]}"
   else
     log_warn "No wheel dir supplied; falling back to online pip install"
-    "$py" -m pip install "${pkgs[@]}"
+    "$py" -m pip install --upgrade pip setuptools wheel
+    "$py" -m pip install --no-compile "${pkgs[@]}"
   fi
 }
 

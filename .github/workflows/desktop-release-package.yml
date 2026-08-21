@@ -532,16 +532,37 @@ jobs:
 
           # Offline wheels
           mkdir -p "$RUNTIME_SRC/wheels"
-          "$PY" -m pip download --dest "$RUNTIME_SRC/wheels" \
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --dest "$RUNTIME_SRC/wheels" \
             "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil \
             fastapi uvicorn websockets pydantic setuptools wheel
 
           # macOS applications must be immutable at first launch. Install from the downloaded
           # wheelhouse before the runtime enters the signed .app, then carry a durable marker.
-          "$PY" -m pip install --no-index --find-links "$RUNTIME_SRC/wheels" \
+          # setuptools/wheel stay in the offline wheelhouse for recovery, but are build tools and
+          # are not needed in the prepared runtime. Bytecode writes are disabled at runtime too.
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip install --no-compile --no-index --find-links "$RUNTIME_SRC/wheels" \
             "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil \
-            fastapi uvicorn websockets pydantic setuptools wheel
-          "$PY" -c 'import aiohttp, fastapi, pydantic, uvicorn, websockets'
+            fastapi uvicorn websockets pydantic
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip uninstall --yes setuptools wheel
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip check
+
+          SITE_PACKAGES="$(PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+          test -d "$SITE_PACKAGES"
+          find "$SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+          find "$SITE_PACKAGES" -depth -type d -name '__pycache__' -empty -delete
+          if find "$SITE_PACKAGES" -type d -name '__pycache__' -print -quit | grep -q .; then
+            echo "Python bytecode cache directory remains in final site-packages" >&2
+            exit 1
+          fi
+          if find "$SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+            echo "Python bytecode cache remains in final site-packages" >&2
+            exit 1
+          fi
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import aiohttp, fastapi, importlib.util, pydantic, uvicorn, websockets; assert all(importlib.util.find_spec(name) is None for name in ("setuptools", "wheel", "pkg_resources"))'
+          if find "$SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+            echo "Import verification recreated Python bytecode in final site-packages" >&2
+            exit 1
+          fi
           printf 'ok\n' > "$RUNTIME_SRC/.prepared"
           test -s "$RUNTIME_SRC/.prepared"
 
@@ -618,8 +639,18 @@ jobs:
           mkdir -p "$DMG_APP/Contents/Resources"
           ditto "$RUNTIME_SRC" "$DMG_APP/Contents/Resources/runtime"
           test -s "$DMG_APP/Contents/Resources/runtime/.prepared"
-          "$DMG_APP/Contents/Resources/runtime/python/bin/python3" \
+          DMG_SITE_PACKAGES="$DMG_APP/Contents/Resources/runtime/python/lib/python3.12/site-packages"
+          test -d "$DMG_SITE_PACKAGES"
+          PYTHONDONTWRITEBYTECODE=1 "$DMG_APP/Contents/Resources/runtime/python/bin/python3" \
             -c 'import aiohttp, fastapi, pydantic, uvicorn, websockets'
+          if find "$DMG_SITE_PACKAGES" -type d -name '__pycache__' -print -quit | grep -q .; then
+            echo "Python bytecode cache directory remains in final DMG app" >&2
+            exit 1
+          fi
+          if find "$DMG_SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+            echo "Python bytecode cache remains in final DMG app" >&2
+            exit 1
+          fi
           codesign --force --deep --sign - "$DMG_APP"
           codesign --verify --deep --strict "$DMG_APP" || true
           ln -s /Applications "$DMG_STAGE/Applications"
