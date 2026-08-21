@@ -431,4 +431,9 @@ export const zh: Record<string, string> = {
   'data.localRepoErrNoResolve': '无法定位运行时',
   'data.localRepoFallback': '上次连接的仓库不可用，已回到内置运行时',
   'data.localRepoSwitchFailed': '切换失败',
+  'helpFeedback.title': '帮助与反馈',
+  'helpFeedback.description': '桌面版使用中遇到问题或有建议，可添加微信联系：',
+  'helpFeedback.copy': '复制',
+  'helpFeedback.copySuccess': '微信号已复制',
+  'helpFeedback.copyError': '复制失败，请手动复制微信号',
 };

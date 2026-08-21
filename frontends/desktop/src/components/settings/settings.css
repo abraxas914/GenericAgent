@@ -532,3 +532,41 @@
   color: var(--semi-color-text-3, #8f959e);
   margin-top: 2px;
 }
+
+/* Help & feedback */
+.ga-help-feedback-description {
+  margin-bottom: 8px;
+  color: var(--semi-color-text-2, #646a73);
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.ga-help-feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ga-help-feedback-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--semi-color-fill-0, #f5f5f5);
+}
+
+.ga-help-feedback-id {
+  min-width: 0;
+  color: var(--semi-color-text-0, #1c1f23);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ga-help-feedback-row .semi-button {
+  flex-shrink: 0;
+}

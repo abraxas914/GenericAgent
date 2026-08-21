@@ -431,4 +431,9 @@ export const en: Record<string, string> = {
   'data.localRepoErrNoResolve': 'Cannot resolve runtime',
   'data.localRepoFallback': 'Previously linked repository unavailable — using built-in runtime',
   'data.localRepoSwitchFailed': 'Switch failed',
+  'helpFeedback.title': 'Help & Feedback',
+  'helpFeedback.description': 'If you run into an issue or have a suggestion while using the desktop app, contact us on WeChat:',
+  'helpFeedback.copy': 'Copy',
+  'helpFeedback.copySuccess': 'WeChat ID copied',
+  'helpFeedback.copyError': 'Copy failed. Please copy the WeChat ID manually.',
 };

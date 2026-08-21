@@ -8,6 +8,7 @@ import { LanguageSection } from './LanguageSection';
 import { ModelSection } from './ModelSection';
 import { DataSection } from './DataSection';
 import { FeatureSection } from './FeatureSection';
+import { HelpFeedbackSection } from './HelpFeedbackSectionView';
 import { AddModelView } from './AddModelView';
 
 type View = 'main' | 'addModel';
@@ -77,6 +78,7 @@ export function SettingsModal() {
           <ModelSection onAdd={handleAddModel} onEdit={handleEditModel} />
           <DataSection />
           <FeatureSection />
+          <HelpFeedbackSection />
         </>
       ) : (
         <AddModelView editingId={editingId} onDone={handleModelDone} />
@@ -84,3 +86,4 @@ export function SettingsModal() {
     </Modal>
   );
 }
+
