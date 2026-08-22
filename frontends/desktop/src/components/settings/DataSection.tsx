@@ -11,8 +11,9 @@ import {
 } from '../../services/dataBackup';
 import { useChatStore } from '../../stores/chat';
 import { useSettingsStore } from '../../stores/settings';
+import { isTauri } from '../../utils/tauri';
 
-const isTauri = !!(window as any).__TAURI__;
+const tauriAvailable = isTauri();
 
 interface OpRowProps {
   label: string;
@@ -83,7 +84,7 @@ export function DataSection() {
   const handleExportKey = useCallback(async () => {
     try {
       const content = await bridge.getMykeyContent();
-      if (isTauri) {
+      if (tauriAvailable) {
         try {
           const path = await bridge.tauriInvoke('export_mykey', { content });
           if (path) Toast.success({ content: t('data.exportKeySuccess') });
@@ -221,7 +222,7 @@ export function DataSection() {
         btnText={t('data.exportKeyBtn')}
         onClick={handleExportKey}
       />
-      {isTauri && (
+      {tauriAvailable && (
         <>
           <OpRow
             label={t('data.importData')}

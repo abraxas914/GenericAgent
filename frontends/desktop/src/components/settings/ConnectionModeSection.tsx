@@ -3,13 +3,15 @@ import { Button, Radio, RadioGroup, Tag, Toast } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import * as bridge from '../../services/bridge';
+import { tauriErrorText } from '../../services/tauri-compat';
 import { useAppStore } from '../../stores/app';
 import { useChatStore } from '../../stores/chat';
 import { useSettingsStore } from '../../stores/settings';
+import { isTauri } from '../../utils/tauri';
 
 type ConnectionMode = 'included' | 'localRepository';
 
-const isTauri = !!(window as any).__TAURI__;
+const tauriAvailable = isTauri();
 
 function mapConnectionError(message: string, t: (key: string) => string): string {
   if (message.includes('agentmain.py')) return t('connection.errorInvalid');
@@ -36,7 +38,7 @@ export function ConnectionModeSection() {
   const [applying, setApplying] = useState(false);
 
   const loadCurrentMode = useCallback(async () => {
-    if (!isTauri) return;
+    if (!tauriAvailable) return;
     setLoading(true);
     try {
       const path = await bridge.tauriInvoke('get_ga_source', {}) as string;
@@ -67,10 +69,11 @@ export function ConnectionModeSection() {
       setPendingPath(validated);
       setPendingMode('localRepository');
       Toast.success({ content: t('connection.repositoryValidated') });
-    } catch (error: any) {
+    } catch (error) {
       console.error('[ConnectionMode] validate repository failed:', error);
-      if (!String(error?.message || error).includes('Tauri IPC')) {
-        Toast.error({ content: mapConnectionError(String(error?.message || error), t) });
+      const message = tauriErrorText(error);
+      if (!message.includes('Tauri IPC')) {
+        Toast.error({ content: mapConnectionError(message, t) });
       }
     } finally {
       setValidating(false);
@@ -118,9 +121,9 @@ export function ConnectionModeSection() {
           ? t('connection.localSuccess')
           : t('connection.includedSuccess'),
       });
-    } catch (error: any) {
+    } catch (error) {
       console.error('[ConnectionMode] apply failed:', error);
-      Toast.error({ content: mapConnectionError(String(error?.message || error), t) });
+      Toast.error({ content: mapConnectionError(tauriErrorText(error), t) });
     } finally {
       setApplying(false);
     }
@@ -144,7 +147,7 @@ export function ConnectionModeSection() {
       ? 'switching'
       : 'unavailable';
 
-  if (!isTauri) return null;
+  if (!tauriAvailable) return null;
 
   return (
     <div className="ga-set-block ga-connection-section" data-testid="connection-mode-section">
