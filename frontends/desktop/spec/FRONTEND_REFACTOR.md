@@ -36,8 +36,11 @@ React stores/components
 ## 样式与组件
 
 - Semi Design 提供主界面、loading、setup、异常页和确认框组件。
-- `public/styles.css` 是 React 主界面的独立生产样式，不链接 `static/styles.css`。
-- `public/fallback.html` 的自定义 class 统一使用 `.ga-` 前缀，保证独立资源损坏恢复能力。
+- React 主入口从 `src/global.css` 加载全局样式，各组件直接导入自己的 CSS；Vite 将它们编译为
+  `dist/assets/**` 下的带哈希样式包，不加载已移除的 `public/styles.css`，也不链接
+  `static/styles.css`。
+- `public/fallback.html` 自带内联样式和恢复脚本，不依赖 React、Semi、Vite chunk 或上述全局样式；
+  其自定义 class 统一使用 `.ga-` 前缀，保证主资源损坏时仍可独立恢复。
 - 首屏内联骨架只负责避免空白与闪烁，React 挂载后由正式组件接管。
 
 ## 必要验证
