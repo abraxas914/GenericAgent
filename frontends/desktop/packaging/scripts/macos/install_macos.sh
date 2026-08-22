@@ -119,7 +119,10 @@ install_deps() {
   if [[ -n "$WHEEL_DIR" && -d "$WHEEL_DIR" ]]; then
     # A wheelhouse repair only needs pip itself. Keep the path fully offline and
     # do not install setuptools/wheel into the prepared runtime.
-    "$py" -m pip install --no-compile --no-index --find-links "$WHEEL_DIR" "${pkgs[@]}"
+    local locked_requirements="$WHEEL_DIR/requirements.txt"
+    [[ -f "$locked_requirements" ]] || fail "Pinned offline requirements are missing: $locked_requirements"
+    "$py" -m pip install --no-compile --no-index --find-links "$WHEEL_DIR" \
+      --requirement "$locked_requirements" "${pkgs[@]:6}"
   else
     log_warn "No wheel dir supplied; falling back to online pip install"
     "$py" -m pip install --upgrade pip setuptools wheel

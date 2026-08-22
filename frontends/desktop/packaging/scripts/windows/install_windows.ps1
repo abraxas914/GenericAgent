@@ -159,6 +159,10 @@ function Install-Dependencies([string]$root, [string]$py) {
     # Offline mode (portable bundle): install from local wheels only, no network, no pip self-upgrade.
     if ($WheelDir) {
         $wd = (Resolve-Path $WheelDir -ErrorAction Stop).Path
+        $lockedRequirements = Join-Path $wd "requirements.txt"
+        if (-not (Test-Path $lockedRequirements -PathType Leaf)) {
+            Fail "Pinned offline requirements are missing: $lockedRequirements"
+        }
         Write-Ok "offline wheels: $wd"
         if ($extra.Count) { Write-Ok "extra packages: $($extra -join ', ')" }
         Write-Host "GAPROGRESS|deps"
@@ -167,7 +171,7 @@ function Install-Dependencies([string]$root, [string]$py) {
         # project's absolute path into a .pth. With -NoVenv (deps go into the relocatable embedded
         # python) this keeps the portable bundle movable. The bridge adds the source to sys.path
         # itself (ensure_ga_import_path), so the project itself need not be installed.
-        & $py -m pip install --no-index --find-links $wd "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil @extra
+        & $py -m pip install --no-index --find-links $wd --requirement $lockedRequirements @extra
         if ($LASTEXITCODE -ne 0) { Fail "offline pip install failed (check wheels dir)." }
         Write-Host "GAPROGRESS|done"
         return

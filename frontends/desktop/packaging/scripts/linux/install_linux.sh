@@ -199,13 +199,15 @@ install_dependencies() {
   if [[ -n "$WHEEL_DIR" ]]; then
     # Offline (portable bundle): install from local wheels only, no network, no pip self-upgrade.
     log_step "Install dependencies offline from $WHEEL_DIR"
+    local locked_requirements="$WHEEL_DIR/requirements.txt"
+    [[ -f "$locked_requirements" ]] || fail "Pinned offline requirements are missing: $locked_requirements"
     # Install deps directly (NOT an editable -e of the source): an editable install bakes the
     # project's absolute path into a .pth. Combined with --no-venv (deps go into the relocatable
     # embedded python) this keeps the portable bundle movable. The bridge adds the source to
     # sys.path itself (ensure_ga_import_path), so no install of the project is needed.
     # shellcheck disable=SC2086
     "$py" -m pip install --no-index --find-links "$WHEEL_DIR" \
-      "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil $EXTRA_PACKAGES \
+      --requirement "$locked_requirements" $EXTRA_PACKAGES \
       || fail "Offline pip install failed (check wheel dir)."
   else
     log_step "Install/refresh minimal Python dependencies"

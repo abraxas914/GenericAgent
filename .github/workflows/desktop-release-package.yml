@@ -23,34 +23,46 @@ name: Build Desktop Portable Packages
           - "macos"
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  NODE_VERSION: "22.23.2"
+  RUST_TOOLCHAIN: "1.95.0"
+  PBS_RELEASE: "20260814"
+  PBS_PYTHON_VERSION: "3.12.14"
 
 jobs:
   # ----------------------------------------------------------------------------
   build-windows:
     name: Windows portable
-    if: ${{ startsWith(github.ref, 'refs/tags/') || github.event.inputs.target == 'all' || github.event.inputs.target == 'windows' }}
-    runs-on: windows-latest
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-portable-')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'windows')) }}
+    runs-on: windows-2025
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable action snapshot
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: frontends/desktop/src-tauri -> target
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm install
+        run: npm ci
 
       - name: Build Windows desktop exe
         working-directory: frontends/desktop
@@ -58,8 +70,6 @@ jobs:
 
       - name: Assemble self-contained portable bundle
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -77,18 +87,16 @@ jobs:
           cp frontends/desktop/packaging/scripts/windows/uninstall.bat "$PKG/uninstall.bat"
           cp frontends/desktop/packaging/scripts/windows/uninstall_windows.ps1 "$RUNTIME/uninstall_windows.ps1"
 
-          # Embedded Python (python-build-standalone, windows x86_64, 3.12 install_only).
-          # browser_download_url is URL-encoded ('+' -> '%2B'); match loosely with '.*'.
-          PBS_URL="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
-            | grep -o '"browser_download_url": *"[^"]*"' \
-            | grep 'cpython-3\.12\.[0-9].*x86_64-pc-windows-msvc-install_only\.tar\.gz' \
-            | head -1 | sed -E 's/.*"(https[^"]+)"/\1/')"
-          [[ -n "$PBS_URL" ]] || { echo "Could not resolve python-build-standalone download URL" >&2; exit 1; }
+          # Fixed python-build-standalone Windows x86_64 archive.
+          PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/cpython-${PBS_PYTHON_VERSION}%2B${PBS_RELEASE}-x86_64-pc-windows-msvc-install_only.tar.gz"
+          PBS_SHA256="7330282b47cd43a66b702d39078d2e5a88e580cee351d82f95045f21f5ee042a"
+          PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"
           echo "Python build-standalone: $PBS_URL"
-          curl -fsSL -o /tmp/pbs.tar.gz "$PBS_URL"
-          tar -xzf /tmp/pbs.tar.gz -C "$RUNTIME"   # extracts a 'python/' dir (python.exe at top)
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$PBS_ARCHIVE" "$PBS_URL"
+          printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | sha256sum --check --strict -
+          tar -xzf "$PBS_ARCHIVE" -C "$RUNTIME"   # extracts a 'python/' dir (python.exe at top)
           PY="$RUNTIME/python/python.exe"
-          "$PY" --version
+          "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine().lower() in ("amd64", "x86_64"); print(sys.version)'
 
           # App-local UCRT: python-build-standalone links the Universal CRT dynamically
           # and does NOT bundle it. Win10/11 ship UCRT in-box, but stripped/older images
@@ -104,11 +112,11 @@ jobs:
           test -f "$RUNTIME/python/api-ms-win-crt-runtime-l1-1-0.dll" \
             || { echo "UCRT DLLs missing after copy" >&2; exit 1; }
 
-          # Offline wheels (native win_amd64 wheels for the embedded python)
+          # Offline binary-only wheels. requirements.txt pins direct and transitive versions.
           mkdir -p "$RUNTIME/wheels"
-          "$PY" -m pip download --dest "$RUNTIME/wheels" \
-            "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil \
-            fastapi uvicorn websockets pydantic setuptools wheel
+          cp frontends/desktop/packaging/python-runtime-requirements.txt "$RUNTIME/wheels/requirements.txt"
+          "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
+            --requirement "$RUNTIME/wheels/requirements.txt"
 
           # Runtime source (project root minus heavy/dev/build dirs)
           mkdir -p "$RUNTIME/app"
@@ -116,6 +124,7 @@ jobs:
             --exclude='./.git' --exclude='./.github' \
             --exclude='./frontends/desktop/src-tauri' \
             --exclude='./frontends/desktop/node_modules' \
+            --exclude='./frontends/desktop/dist' \
             --exclude='./frontends/desktop/packaging' --exclude='./docs' \
             --exclude='./assets/demo' --exclude='./assets/images' \
             --exclude='./assets/GenericAgent_Technical_Report.pdf' \
@@ -127,6 +136,7 @@ jobs:
           test -f "$RUNTIME/app/agentmain.py"
           test -f "$RUNTIME/app/frontends/desktop_bridge.py"
           test -f "$RUNTIME/app/frontends/desktop/static/index.html"
+          test ! -e "$RUNTIME/app/frontends/desktop/dist"
 
           # Drop python debug symbols (.pdb) to slim the package (~80MB)
           find "$RUNTIME/python" -name '*.pdb' -delete 2>/dev/null || true
@@ -192,7 +202,7 @@ jobs:
           Get-ChildItem artifacts/windows/out | Format-Table Name, Length
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: GenericAgent-Desktop-Windows-Portable-${{ github.run_number }}
           path: |
@@ -200,69 +210,31 @@ jobs:
             artifacts/windows/out/SHA256SUMS-windows.txt
           if-no-files-found: error
 
-      - name: Publish into unified Release (tag push only)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG_NAME="${{ github.ref_name }}"
-          TITLE="GenericAgent Desktop ${TAG_NAME}"
-          cat > "${RUNNER_TEMP:-/tmp}/ga_notes.md" <<'EOF'
-          GenericAgent Desktop 桌面版 / Desktop
-
-          无需自行安装 Python、无需联网安装依赖、无需源码；首次启动会自动准备内置运行环境。
-          No separate Python install, no internet for dependencies, no source checkout required; the bundled runtime is prepared on first launch.
-
-          ## 安装方法 / Installation
-          - Windows: 下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe` 启动。卸载时先退出应用，再双击包内 `uninstall.bat`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
-          - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，请右键应用选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, right-click the app and choose Open, or allow it in System Settings → Privacy & Security. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
-
-          ## 首次启动 / First launch
-          首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
-          The first launch prepares the runtime offline (installs deps) with a progress bar, then opens the main window; later launches are faster.
-
-          ## 说明 / Notes
-          - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
-          - Windows Defender 防火墙可能会拦截 `127.0.0.1` / `localhost` 回环连接，导致程序无法启动或连接本机服务；请允许 `GenericAgent.exe` 和随包的 `python.exe` 通过防火墙后重启。Windows Defender Firewall may block the local loopback connection; allow `GenericAgent.exe` and the bundled `python.exe` through the firewall, then restart the app.
-          - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
-          EOF
-          # Create the shared release if it does not exist yet (another OS job may win the race).
-          # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
-          # actually exists (a simultaneous create from another job can fail), so the
-          # upload below never races a not-yet-created release.
-          for _ in $(seq 1 15); do
-            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" --prerelease 2>/dev/null || true
-            sleep 3
-          done
-          gh release upload "$TAG_NAME" artifacts/windows/out/* --clobber
-
   # ----------------------------------------------------------------------------
   build-linux:
     name: Linux portable
-    if: ${{ startsWith(github.ref, 'refs/tags/') || github.event.inputs.target == 'all' || github.event.inputs.target == 'linux' }}
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-portable-')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'linux')) }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable action snapshot
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: frontends/desktop/src-tauri -> target
 
@@ -278,7 +250,7 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm install
+        run: npm ci
 
       - name: Build Linux AppImage
         working-directory: frontends/desktop
@@ -286,8 +258,6 @@ jobs:
 
       - name: Assemble self-contained portable bundle
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           APPIMAGE_SRC="$(find frontends/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
@@ -308,23 +278,22 @@ jobs:
           cp frontends/desktop/packaging/scripts/linux/uninstall.sh "$PKG/uninstall.sh"
           chmod +x "$PKG/uninstall.sh"
 
-          # Embedded Python (python-build-standalone, linux x86_64, 3.12 install_only).
-          PBS_URL="$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
-            | grep -o '"browser_download_url": *"[^"]*"' \
-            | grep 'cpython-3\.12\.[0-9].*x86_64-unknown-linux-gnu-install_only\.tar\.gz' \
-            | head -1 | sed -E 's/.*"(https[^"]+)"/\1/')"
-          [[ -n "$PBS_URL" ]] || { echo "Could not resolve python-build-standalone download URL" >&2; exit 1; }
+          # Fixed python-build-standalone Linux x86_64 archive.
+          PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/cpython-${PBS_PYTHON_VERSION}%2B${PBS_RELEASE}-x86_64-unknown-linux-gnu-install_only.tar.gz"
+          PBS_SHA256="3297691ae34f75fed81ac424e040145fccb0bafe8e581cd5cadbddfa1c0766c0"
+          PBS_ARCHIVE="${RUNNER_TEMP}/pbs-linux-x86_64.tar.gz"
           echo "Python build-standalone: $PBS_URL"
-          curl -fsSL -o /tmp/pbs.tar.gz "$PBS_URL"
-          tar -xzf /tmp/pbs.tar.gz -C "$RUNTIME"   # extracts a 'python/' dir
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$PBS_ARCHIVE" "$PBS_URL"
+          printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | sha256sum --check --strict -
+          tar -xzf "$PBS_ARCHIVE" -C "$RUNTIME"   # extracts a 'python/' dir
           PY="$RUNTIME/python/bin/python3"
-          "$PY" --version
+          "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine() == "x86_64"; print(sys.version)'
 
-          # Offline wheels (native linux wheels for the embedded python)
+          # Offline binary-only wheels. requirements.txt pins direct and transitive versions.
           mkdir -p "$RUNTIME/wheels"
-          "$PY" -m pip download --dest "$RUNTIME/wheels" \
-            "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil \
-            fastapi uvicorn websockets pydantic setuptools wheel
+          cp frontends/desktop/packaging/python-runtime-requirements.txt "$RUNTIME/wheels/requirements.txt"
+          "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
+            --requirement "$RUNTIME/wheels/requirements.txt"
 
           # Runtime source (project root minus heavy/dev/build dirs)
           mkdir -p "$RUNTIME/app"
@@ -332,6 +301,7 @@ jobs:
             --exclude='./.git' --exclude='./.github' \
             --exclude='./frontends/desktop/src-tauri' \
             --exclude='./frontends/desktop/node_modules' \
+            --exclude='./frontends/desktop/dist' \
             --exclude='./frontends/desktop/packaging' --exclude='./docs' \
             --exclude='./assets/demo' --exclude='./assets/images' \
             --exclude='./assets/GenericAgent_Technical_Report.pdf' \
@@ -343,6 +313,7 @@ jobs:
           test -f "$RUNTIME/app/agentmain.py"
           test -f "$RUNTIME/app/frontends/desktop_bridge.py"
           test -f "$RUNTIME/app/frontends/desktop/static/index.html"
+          test ! -e "$RUNTIME/app/frontends/desktop/dist"
 
           # Drop python debug/cache bits to slim the package
           find "$RUNTIME/python" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
@@ -405,7 +376,7 @@ jobs:
           ls -lh artifacts/linux/out
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: GenericAgent-Desktop-Linux-Portable-${{ github.run_number }}
           path: |
@@ -413,136 +384,91 @@ jobs:
             artifacts/linux/out/SHA256SUMS-linux.txt
           if-no-files-found: error
 
-      - name: Publish into unified Release (tag push only)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          TAG_NAME="${{ github.ref_name }}"
-          TITLE="GenericAgent Desktop ${TAG_NAME}"
-          cat > "${RUNNER_TEMP:-/tmp}/ga_notes.md" <<'EOF'
-          GenericAgent Desktop 桌面版 / Desktop
-
-          无需自行安装 Python、无需联网安装依赖、无需源码；首次启动会自动准备内置运行环境。
-          No separate Python install, no internet for dependencies, no source checkout required; the bundled runtime is prepared on first launch.
-
-          ## 安装方法 / Installation
-          - Windows: 下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe` 启动。卸载时先退出应用，再双击包内 `uninstall.bat`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
-          - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，请右键应用选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, right-click the app and choose Open, or allow it in System Settings → Privacy & Security. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
-
-          ## 首次启动 / First launch
-          首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
-          The first launch prepares the runtime offline (installs deps) with a progress bar, then opens the main window; later launches are faster.
-
-          ## 说明 / Notes
-          - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
-          - Windows Defender 防火墙可能会拦截 `127.0.0.1` / `localhost` 回环连接，导致程序无法启动或连接本机服务；请允许 `GenericAgent.exe` 和随包的 `python.exe` 通过防火墙后重启。Windows Defender Firewall may block the local loopback connection; allow `GenericAgent.exe` and the bundled `python.exe` through the firewall, then restart the app.
-          - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
-          EOF
-          # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
-          # actually exists (a simultaneous create from another job can fail), so the
-          # upload below never races a not-yet-created release.
-          for _ in $(seq 1 15); do
-            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" --prerelease 2>/dev/null || true
-            sleep 3
-          done
-          gh release upload "$TAG_NAME" artifacts/linux/out/* --clobber
-
   # ----------------------------------------------------------------------------
   build-macos:
-    name: macOS DMG
-    if: ${{ startsWith(github.ref, 'refs/tags/') || github.event.inputs.target == 'all' || github.event.inputs.target == 'macos' }}
-    runs-on: macos-latest
+    name: macOS arm64 DMG
+    if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-portable-')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'macos')) }}
+    runs-on: macos-15
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable action snapshot
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Cache Rust build
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: frontends/desktop/src-tauri -> target
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm install
+        run: npm ci
+
+      - name: Set up Python packaging runtime
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ env.PBS_PYTHON_VERSION }}
 
       - name: Install Python packaging tools
-        run: python3 -m pip install --break-system-packages ds_store
+        run: >-
+          python3 -m pip install --require-hashes --only-binary=:all:
+          --requirement frontends/desktop/packaging/dmg-build-requirements.txt
+
+      - name: Assert macOS runner architecture
+        run: test "$(uname -m)" = arm64
 
       - name: Build macOS .app
         working-directory: frontends/desktop
         run: npm run tauri build -- --bundles app
 
-      - name: Assemble self-contained portable bundle and DMG app
+      - name: Assemble self-contained DMG app
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           APP_SRC="$(find frontends/desktop/src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -n 1)"
           [[ -n "$APP_SRC" ]] || { echo "No .app found" >&2; exit 1; }
 
-          # Build one runtime/ tree, then reuse it for both macOS deliverables:
-          # 1) Portable zip: GenericAgent.app + runtime/ + helper scripts.
-          # 2) Standard DMG: GenericAgent.app with runtime embedded in Contents/Resources/runtime.
+          # Build one runtime tree and embed it only in the final DMG application.
           RUNTIME_SRC="artifacts/macos/runtime-src"
           mkdir -p "$RUNTIME_SRC"
           cp frontends/desktop/packaging/scripts/macos/install_macos.sh "$RUNTIME_SRC/install_macos.sh"
           chmod +x "$RUNTIME_SRC/install_macos.sh"
 
-          # Embedded Python (python-build-standalone, macOS, 3.12 install_only; aarch64 preferred).
-          PBS_URL="$(python3 - <<'PY'
-          import json, os, urllib.request
-          api='https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest'
-          req=urllib.request.Request(api)
-          token=os.environ.get('GH_TOKEN')
-          if token:
-              req.add_header('Authorization', 'Bearer ' + token)
-          data=json.load(urllib.request.urlopen(req, timeout=60))
-          assets=data.get('assets', [])
-          for arch in ('aarch64-apple-darwin', 'x86_64-apple-darwin'):
-              for a in assets:
-                  name=a.get('name','')
-                  if 'cpython-3.12' in name and arch in name and name.endswith('install_only.tar.gz') and 'stripped' not in name:
-                      print(a['browser_download_url']); raise SystemExit
-          raise SystemExit('No suitable python-build-standalone macOS asset found')
-          PY
-          )"
+          # Fixed python-build-standalone macOS arm64 archive.
+          PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/cpython-${PBS_PYTHON_VERSION}%2B${PBS_RELEASE}-aarch64-apple-darwin-install_only.tar.gz"
+          PBS_SHA256="4572133a5542f306b9bdb155da5800f9e38950cd0a98d469b832ce256fe299ea"
+          PBS_ARCHIVE="${RUNNER_TEMP}/pbs-macos-aarch64.tar.gz"
           echo "Python build-standalone: $PBS_URL"
-          curl -L --fail --retry 3 -o /tmp/pbs-macos.tar.gz "$PBS_URL"
-          tar -xzf /tmp/pbs-macos.tar.gz -C "$RUNTIME_SRC"   # extracts a 'python/' dir
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$PBS_ARCHIVE" "$PBS_URL"
+          printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | shasum -a 256 --check -
+          tar -xzf "$PBS_ARCHIVE" -C "$RUNTIME_SRC"   # extracts a 'python/' dir
           PY="$RUNTIME_SRC/python/bin/python3"
-          "$PY" --version
+          "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine() == "arm64"; print(sys.version)'
 
-          # Offline wheels
+          # Offline binary-only wheels. requirements.txt pins direct and transitive versions.
           mkdir -p "$RUNTIME_SRC/wheels"
-          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --dest "$RUNTIME_SRC/wheels" \
-            "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil \
-            fastapi uvicorn websockets pydantic setuptools wheel
+          cp frontends/desktop/packaging/python-runtime-requirements.txt "$RUNTIME_SRC/wheels/requirements.txt"
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME_SRC/wheels" \
+            --requirement "$RUNTIME_SRC/wheels/requirements.txt"
 
           # macOS applications must be immutable at first launch. Install from the downloaded
           # wheelhouse before the runtime enters the signed .app, then carry a durable marker.
-          # setuptools/wheel stay in the offline wheelhouse for recovery, but are build tools and
-          # are not needed in the prepared runtime. Bytecode writes are disabled at runtime too.
+          # The binary-only offline repair path needs neither setuptools nor wheel. Remove any
+          # copies shipped in the base interpreter; bytecode writes are disabled at runtime too.
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip install --no-compile --no-index --find-links "$RUNTIME_SRC/wheels" \
-            "requests>=2.28" "beautifulsoup4>=4.12" "bottle>=0.12" "simple-websocket-server>=0.4" "aiohttp>=3.9" psutil \
-            fastapi uvicorn websockets pydantic
+            --requirement "$RUNTIME_SRC/wheels/requirements.txt"
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip uninstall --yes setuptools wheel
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip check
 
@@ -572,6 +498,7 @@ jobs:
             --exclude='.git' --exclude='.github' \
             --exclude='frontends/desktop/src-tauri' \
             --exclude='frontends/desktop/node_modules' \
+            --exclude='frontends/desktop/dist' \
             --exclude='frontends/desktop/packaging' --exclude='docs' \
             --exclude='assets/demo' --exclude='assets/images' \
             --exclude='assets/GenericAgent_Technical_Report.pdf' \
@@ -583,55 +510,11 @@ jobs:
           test -f "$RUNTIME_SRC/app/agentmain.py"
           test -f "$RUNTIME_SRC/app/frontends/desktop_bridge.py"
           test -f "$RUNTIME_SRC/app/frontends/desktop/static/index.html"
+          test ! -e "$RUNTIME_SRC/app/frontends/desktop/dist"
 
-          PORTABLE="artifacts/macos/GenericAgent-Desktop-macOS-Portable"
           DMG_STAGE="artifacts/macos/dmg-stage"
           DMG_APP="$DMG_STAGE/GenericAgent.app"
-          mkdir -p "$PORTABLE" "$DMG_STAGE"
-
-          # Portable zip: keep the existing release shape and helper scripts.
-          ditto "$APP_SRC" "$PORTABLE/GenericAgent.app"
-          ditto "$RUNTIME_SRC" "$PORTABLE/runtime"
-          test -s "$PORTABLE/runtime/.prepared"
-          cp frontends/desktop/packaging/scripts/macos/uninstall.command "$PORTABLE/uninstall.command"
-          chmod +x "$PORTABLE/uninstall.command"
-          cat > "$PORTABLE/Start GenericAgent.command" <<'EOF'
-          #!/bin/bash
-          DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-          xattr -cr "$DIR/GenericAgent.app" 2>/dev/null || true
-          open "$DIR/GenericAgent.app"
-          EOF
-          chmod +x "$PORTABLE/Start GenericAgent.command"
-
-          cat > "$PORTABLE/readme.txt" <<'EOF'
-          ================ 中文 ================
-          GenericAgent Desktop — macOS 便携版（自包含）
-
-          无需安装 Python、无需联网装依赖、无需源码仓库——全部已内置。
-
-          使用
-          推荐：双击 “Start GenericAgent.command” 启动。也可直接双击 GenericAgent.app。
-          请保持目录结构不变：GenericAgent.app 与 runtime/ 必须在同一目录下。
-
-          卸载
-          双击 uninstall.command，或退出程序后删除整个便携文件夹。
-
-          ================ English ================
-          GenericAgent Desktop — macOS Portable (self-contained)
-
-          No Python install, no internet for dependencies, no source checkout — everything is bundled.
-
-          Usage
-          Recommended: double-click "Start GenericAgent.command". You can also double-click GenericAgent.app.
-          Keep the folder layout intact: GenericAgent.app and runtime/ must stay in the same directory.
-
-          Uninstall
-          Double-click uninstall.command, or quit the app and delete the whole portable folder.
-          EOF
-          sed -i '' 's/^          //' "$PORTABLE/readme.txt"
-
-          codesign --force --deep --sign - "$PORTABLE/GenericAgent.app"
-          codesign --verify --deep --strict "$PORTABLE/GenericAgent.app" || true
+          mkdir -p "$DMG_STAGE"
 
           # Standard DMG: GenericAgent.app + Applications alias. The post-build
           # repackager below writes the curated two-icon Finder layout.
@@ -651,8 +534,9 @@ jobs:
             echo "Python bytecode cache remains in final DMG app" >&2
             exit 1
           fi
+          # Ad-hoc signing only: this is not Developer ID signing or notarization.
           codesign --force --deep --sign - "$DMG_APP"
-          codesign --verify --deep --strict "$DMG_APP" || true
+          codesign --verify --deep --strict "$DMG_APP"
           ln -s /Applications "$DMG_STAGE/Applications"
 
           mkdir -p artifacts/macos/out
@@ -661,67 +545,149 @@ jobs:
             -srcfolder "$DMG_STAGE" \
             -ov \
             -format UDZO \
-            "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
+            "artifacts/macos/out/GenericAgent-Desktop-macOS-aarch64.dmg"
 
           # Restore the intentionally minimal Finder presentation: only the app
           # and Applications shortcut, with the established window/icon layout.
-          bash frontends/desktop/scripts/post-dmg.sh "artifacts/macos/out/GenericAgent-Desktop-macOS.dmg"
+          bash frontends/desktop/scripts/post-dmg.sh "artifacts/macos/out/GenericAgent-Desktop-macOS-aarch64.dmg"
 
           (
             cd artifacts/macos/out
-            shasum -a 256 "GenericAgent-Desktop-macOS.dmg" \
-              > "GenericAgent-Desktop-macOS.dmg.sha256"
+            shasum -a 256 "GenericAgent-Desktop-macOS-aarch64.dmg" \
+              > "GenericAgent-Desktop-macOS-aarch64.dmg.sha256"
           )
 
           echo "DMG stage tree:"
           find "$DMG_STAGE" -maxdepth 2 -print | sort
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: GenericAgent-Desktop-macOS-DMG-${{ github.run_number }}
-          path: artifacts/macos/out/*
+          name: GenericAgent-Desktop-macOS-aarch64-DMG-${{ github.run_number }}
+          path: |
+            artifacts/macos/out/GenericAgent-Desktop-macOS-aarch64.dmg
+            artifacts/macos/out/GenericAgent-Desktop-macOS-aarch64.dmg.sha256
           if-no-files-found: error
 
-      - name: Publish into unified Release (tag push only)
-        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+  # ----------------------------------------------------------------------------
+  publish-release:
+    name: Publish one atomic prerelease
+    needs: [build-windows, build-linux, build-macos]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-portable-') && needs.build-windows.result == 'success' && needs.build-linux.result == 'success' && needs.build-macos.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: GenericAgent-Desktop-Windows-Portable-${{ github.run_number }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Download Linux candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: GenericAgent-Desktop-Linux-Portable-${{ github.run_number }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Download macOS arm64 candidate
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: GenericAgent-Desktop-macOS-aarch64-DMG-${{ github.run_number }}
+          path: ${{ runner.temp }}/release-assets
+
+      - name: Validate six assets and publish prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+
+          ASSET_DIR="${RUNNER_TEMP}/release-assets"
+          EXPECTED=(
+            GenericAgent-Desktop-Linux-Portable.tar.gz
+            GenericAgent-Desktop-Windows-Portable.zip
+            GenericAgent-Desktop-macOS-aarch64.dmg
+            GenericAgent-Desktop-macOS-aarch64.dmg.sha256
+            SHA256SUMS-linux.txt
+            SHA256SUMS-windows.txt
+          )
+
+          if find "$ASSET_DIR" -mindepth 1 -maxdepth 1 ! -type f -print -quit | grep -q .; then
+            echo "Release staging contains a non-regular entry" >&2
+            find "$ASSET_DIR" -mindepth 1 -maxdepth 1 -print >&2
+            exit 1
+          fi
+          mapfile -t ACTUAL < <(find "$ASSET_DIR" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort)
+          if ! diff -u <(printf '%s\n' "${EXPECTED[@]}") <(printf '%s\n' "${ACTUAL[@]}"); then
+            echo "Release staging must contain exactly the six expected files" >&2
+            exit 1
+          fi
+          for filename in "${EXPECTED[@]}"; do
+            test -s "$ASSET_DIR/$filename" || { echo "Missing or empty release asset: $filename" >&2; exit 1; }
+          done
+
+          verify_checksum_manifest() {
+            local manifest="$1"
+            local payload="$2"
+            local normalized="${RUNNER_TEMP}/${manifest}.normalized"
+            tr -d '\r' < "$ASSET_DIR/$manifest" > "$normalized"
+            awk -v expected="$payload" '
+              NF == 2 && $1 ~ /^[0-9a-fA-F]{64}$/ && $2 == expected { valid += 1 }
+              END { exit !(NR == 1 && valid == 1) }
+            ' "$normalized"
+            (cd "$ASSET_DIR" && sha256sum --check --strict "$normalized")
+          }
+          verify_checksum_manifest SHA256SUMS-windows.txt GenericAgent-Desktop-Windows-Portable.zip
+          verify_checksum_manifest SHA256SUMS-linux.txt GenericAgent-Desktop-Linux-Portable.tar.gz
+          verify_checksum_manifest GenericAgent-Desktop-macOS-aarch64.dmg.sha256 GenericAgent-Desktop-macOS-aarch64.dmg
+
           TAG_NAME="${{ github.ref_name }}"
           TITLE="GenericAgent Desktop ${TAG_NAME}"
-          cat > "${RUNNER_TEMP:-/tmp}/ga_notes.md" <<'EOF'
+          NOTES_FILE="${RUNNER_TEMP}/ga-release-notes.md"
+          cat > "$NOTES_FILE" <<'EOF'
           GenericAgent Desktop 桌面版 / Desktop
 
-          无需自行安装 Python、无需联网安装依赖、无需源码；首次启动会自动准备内置运行环境。
-          No separate Python install, no internet for dependencies, no source checkout required; the bundled runtime is prepared on first launch.
+          三个平台产物来自同一提交，并在公开发布前统一验证。All three platform artifacts come from one commit and are validated before publication.
 
           ## 安装方法 / Installation
-          - Windows: 下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe` 启动。卸载时先退出应用，再双击包内 `uninstall.bat`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Windows-Portable.zip`, extract it, then double-click `GenericAgent.exe`. To uninstall, quit the app, double-click `uninstall.bat`, then delete the extracted folder.
-          - Linux: 下载 `GenericAgent-Desktop-Linux-Portable.tar.gz`，解压后执行 `chmod +x GenericAgent.AppImage`，再运行 `./GenericAgent.AppImage`。卸载时先退出应用，再运行 `./uninstall.sh`，最后删除整个解压目录。
-            Download `GenericAgent-Desktop-Linux-Portable.tar.gz`, extract it, run `chmod +x GenericAgent.AppImage`, then launch `./GenericAgent.AppImage`. To uninstall, quit the app, run `./uninstall.sh`, then delete the extracted folder.
-          - macOS: 下载 `GenericAgent-Desktop-macOS.dmg`，双击打开 DMG，把 `GenericAgent.app` 拖入 `Applications`，之后在“应用程序 / Applications”中启动。若出现“无法验证开发者”等提示，请右键应用选择“打开”，或在“系统设置 → 隐私与安全性”中允许打开。卸载时先退出应用，再从 Applications 删除 `GenericAgent.app`。
-            Download `GenericAgent-Desktop-macOS.dmg`, open it, drag `GenericAgent.app` to `Applications`, then launch it from Applications. If macOS says the developer cannot be verified, right-click the app and choose Open, or allow it in System Settings → Privacy & Security. To uninstall, quit the app, then delete `GenericAgent.app` from Applications.
+          - Windows x64：下载 `GenericAgent-Desktop-Windows-Portable.zip`，解压后双击 `GenericAgent.exe`。卸载时运行 `uninstall.bat`，再删除解压目录。
+            Windows x64: extract `GenericAgent-Desktop-Windows-Portable.zip`, then launch `GenericAgent.exe`. Run `uninstall.bat` before deleting the extracted directory.
+          - Linux x86_64：下载并解压 `GenericAgent-Desktop-Linux-Portable.tar.gz`，执行 `chmod +x GenericAgent.AppImage` 后运行它。卸载时运行 `uninstall.sh`，再删除解压目录。
+            Linux x86_64: extract `GenericAgent-Desktop-Linux-Portable.tar.gz`, run `chmod +x GenericAgent.AppImage`, then launch it. Run `uninstall.sh` before deleting the extracted directory.
+          - macOS Apple silicon (arm64)：打开 `GenericAgent-Desktop-macOS-aarch64.dmg`，把 `GenericAgent.app` 拖入 Applications。
+            macOS Apple silicon (arm64): open `GenericAgent-Desktop-macOS-aarch64.dmg` and drag `GenericAgent.app` to Applications.
 
-          ## 首次启动 / First launch
-          首次启动会自动离线准备运行环境（安装依赖），有进度条，完成后进入主界面；之后启动会更快。
-          The first launch prepares the runtime offline (installs deps) with a progress bar, then opens the main window; later launches are faster.
+          ## 签名状态 / Signing status
+          macOS 应用仅使用 ad-hoc 签名，未使用 Apple Developer ID，也未 notarize。首次打开可能需要右键选择“打开”或在“隐私与安全性”中允许。
+          The macOS app is ad-hoc signed only. It is neither Developer ID signed nor notarized; first launch may require Open from the context menu or approval in Privacy & Security.
 
-          ## 说明 / Notes
-          - 想真正对话需在程序内配置模型 / API Key。Configure a model / API key in-app to start chatting.
-          - Windows Defender 防火墙可能会拦截 `127.0.0.1` / `localhost` 回环连接，导致程序无法启动或连接本机服务；请允许 `GenericAgent.exe` 和随包的 `python.exe` 通过防火墙后重启。Windows Defender Firewall may block the local loopback connection; allow `GenericAgent.exe` and the bundled `python.exe` through the firewall, then restart the app.
-          - Windows/Linux 为便携包，可整体移动到任意目录后继续使用。Windows/Linux packages are portable and can be moved as a whole folder.
-          - Windows/Linux 包内附 `readme.txt`（中英）。Windows/Linux packages include a bilingual `readme.txt`.
+          SHA-256 清单与各产物一同发布。SHA-256 manifests are included with the artifacts.
           EOF
-          # Race-safe: the 3 OS jobs share ONE release. Retry create until the release
-          # actually exists (a simultaneous create from another job can fail), so the
-          # upload below never races a not-yet-created release.
-          for _ in $(seq 1 15); do
-            gh release view "$TAG_NAME" >/dev/null 2>&1 && break
-            gh release create "$TAG_NAME" --target "${{ github.sha }}" --title "$TITLE" --notes-file "${RUNNER_TEMP:-/tmp}/ga_notes.md" --prerelease 2>/dev/null || true
-            sleep 3
+          sed -i 's/^          //' "$NOTES_FILE"
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "A release already exists for $TAG_NAME; refusing to overwrite it" >&2
+            exit 1
+          fi
+
+          ASSETS=()
+          for filename in "${EXPECTED[@]}"; do
+            ASSETS+=("$ASSET_DIR/$filename")
           done
-          gh release upload "$TAG_NAME" artifacts/macos/out/* --clobber
+          # Keep the release invisible while all assets upload; only the final edit publishes it.
+          gh release create "$TAG_NAME" "${ASSETS[@]}" \
+            --target "${{ github.sha }}" \
+            --title "$TITLE" \
+            --notes-file "$NOTES_FILE" \
+            --draft \
+            --prerelease
+
+          mapfile -t REMOTE_ASSETS < <(gh release view "$TAG_NAME" --json assets --jq '.assets[].name' | LC_ALL=C sort)
+          diff -u <(printf '%s\n' "${EXPECTED[@]}") <(printf '%s\n' "${REMOTE_ASSETS[@]}")
+          test "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" = true
+          test "$(gh release view "$TAG_NAME" --json isPrerelease --jq '.isPrerelease')" = true
+
+          gh release edit "$TAG_NAME" --draft=false --prerelease
+          test "$(gh release view "$TAG_NAME" --json isDraft --jq '.isDraft')" = false
+          test "$(gh release view "$TAG_NAME" --json isPrerelease --jq '.isPrerelease')" = true

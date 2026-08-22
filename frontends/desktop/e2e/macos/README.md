@@ -6,10 +6,14 @@ binary, and later moves that exact app to a path containing spaces and Chinese c
 
 ```bash
 frontends/desktop/e2e/macos/Invoke-macOSUserJourney.sh \
-  --artifact /path/GenericAgent-Desktop-macOS.dmg \
+  --artifact /path/GenericAgent-Desktop-macOS-aarch64.dmg \
   --expected-commit <candidate-sha> \
   --keep-work-dir
 ```
+
+The release workflow builds this artifact on the explicit macOS 15 arm64 runner and names it
+`aarch64`; it is not an Intel/universal binary. The app is ad-hoc signed only, not Developer ID
+signed or notarized.
 
 In addition to the shared chat/data/port/relocation checks, this journey hard-fails if the DMG
 does not contain the build-time `.prepared` marker or if any file inside the `.app` changes from
