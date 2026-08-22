@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import frontends.data_backup as data_backup
 from frontends.data_backup import (
     BACKUP_FORMAT_VERSION,
     BACKUP_SCHEMA,
@@ -25,7 +26,10 @@ def _seed_data(root: Path) -> None:
     (root / "temp" / "model_responses").mkdir(parents=True)
     (root / "temp" / "model_responses" / "response.json").write_text("{}", encoding="utf-8")
     (root / "temp" / "desktop_sessions").mkdir(parents=True)
-    (root / "temp" / "desktop_sessions" / "sess-one.json").write_text("{}", encoding="utf-8")
+    (root / "temp" / "desktop_sessions" / "sess-one.json").write_text(
+        json.dumps({"id": "sess-one", "title": "One", "messages": []}),
+        encoding="utf-8",
+    )
     (root / "mykey.py").write_text("secret", encoding="utf-8")
     (root / "agentmain.py").write_text("code", encoding="utf-8")
     (root / "logs").mkdir()
@@ -156,19 +160,17 @@ class TestDataBackupInspection:
         with pytest.raises(BackupFormatError, match="duplicate"):
             inspect_import_source(str(destination))
 
-    def test_accepts_legacy_session_only_folder(self, tmp_path: Path):
+    def test_rejects_session_only_folder_as_non_ga_source(self, tmp_path: Path):
         source = tmp_path / "legacy"
         (source / "temp").mkdir(parents=True)
         (source / "temp" / "desktop_sessions.json").write_text("[]", encoding="utf-8")
 
-        result = inspect_import_source(str(source))
-
-        assert result["sourceType"] == "legacyFolder"
-        assert result["content"]["sessions"] == 1
+        with pytest.raises(BackupFormatError, match="not a GA directory"):
+            inspect_import_source(str(source))
 
 
 class TestDataBackupImport:
-    def test_materializes_backup_and_merges_without_overwrite(self, tmp_path: Path):
+    def test_materializes_backup_and_applies_the_full_merge_contract(self, tmp_path: Path):
         source = tmp_path / "source"
         source.mkdir()
         _seed_data(source)
@@ -182,8 +184,254 @@ class TestDataBackupImport:
             result = merge_data_files(str(extracted), str(target))
             assert (extracted / "temp" / "desktop_sessions" / "sess-one.json").is_file()
 
-        assert result["memoryCopied"] == 1
-        assert result["memorySkipped"] == 1
+        assert result.keys() >= {
+            "ok",
+            "memoryCopied",
+            "responsesCopied",
+            "responsesSkipped",
+            "sessionsAdded",
+            "sessionsSkipped",
+            "sessionsFileFound",
+            "backupDir",
+        }
+        assert result["memoryCopied"] == 2
+        assert result["memorySkipped"] == 0
         assert result["responsesCopied"] == 1
-        assert (target / "memory" / "notes.md").read_text(encoding="utf-8") == "current"
+        assert result["sessionsAdded"] == 1
+        assert result["sessionsSkipped"] == 0
+        assert result["sessionsFileFound"] is True
+        assert (target / "memory" / "notes.md").read_text(encoding="utf-8") == "memory"
         assert (target / "memory" / "nested" / "facts.json").is_file()
+        assert (target / "temp" / "desktop_sessions" / "sess-one.json").is_file()
+        backup_dir = Path(result["backupDir"])
+        assert backup_dir.is_dir()
+        assert (backup_dir / "memory" / "notes.md").read_text(encoding="utf-8") == "current"
+
+    def test_memory_is_source_wins_responses_are_add_only(self, tmp_path: Path):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "same.md").write_text("new", encoding="utf-8")
+        (source / "memory" / "added.md").write_text("added", encoding="utf-8")
+        (source / "temp" / "model_responses").mkdir(parents=True)
+        (source / "temp" / "model_responses" / "same.json").write_text("new", encoding="utf-8")
+        (source / "temp" / "model_responses" / "added.json").write_text("added", encoding="utf-8")
+        (target / "memory").mkdir(parents=True)
+        (target / "memory" / "same.md").write_text("old", encoding="utf-8")
+        (target / "temp" / "model_responses").mkdir(parents=True)
+        (target / "temp" / "model_responses" / "same.json").write_text("old", encoding="utf-8")
+
+        result = merge_data_files(str(source), str(target))
+
+        assert result["memoryCopied"] == 2
+        assert result["responsesCopied"] == 1
+        assert result["responsesSkipped"] == 1
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "new"
+        assert (target / "memory" / "added.md").read_text(encoding="utf-8") == "added"
+        assert (target / "temp" / "model_responses" / "same.json").read_text(encoding="utf-8") == "old"
+        assert (target / "temp" / "model_responses" / "added.json").read_text(encoding="utf-8") == "added"
+        assert (Path(result["backupDir"]) / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+
+    def test_sessions_dedupe_by_desktop_id_across_new_and_legacy_stores(self, tmp_path: Path):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        source_sessions = source / "temp" / "desktop_sessions"
+        source_sessions.mkdir(parents=True)
+        (source_sessions / "existing.json").write_text(
+            json.dumps({"id": "sess-existing", "messages": []}), encoding="utf-8"
+        )
+        (source_sessions / "new.json").write_text(
+            json.dumps({"id": "sess-new", "messages": []}), encoding="utf-8"
+        )
+        (source_sessions / "tui.json").write_text(
+            json.dumps({"id": "tui_worker", "messages": []}), encoding="utf-8"
+        )
+        (source_sessions / "corrupt.json").write_text("{bad", encoding="utf-8")
+        (source / "temp" / "desktop_sessions.json").write_text(
+            json.dumps([
+                {"id": "sess-new", "messages": []},
+                {"id": "sess-legacy", "messages": []},
+                {"id": "../../escape", "messages": []},
+            ]),
+            encoding="utf-8",
+        )
+        target_sessions = target / "temp" / "desktop_sessions"
+        target_sessions.mkdir(parents=True)
+        (target_sessions / "different-name.json").write_text(
+            json.dumps({"id": "sess-existing", "messages": []}), encoding="utf-8"
+        )
+
+        result = merge_data_files(
+            str(source), str(target), existing_session_ids={"sess-in-memory"}
+        )
+
+        assert result["sessionsAdded"] == 2
+        assert result["sessionsSkipped"] == 5
+        assert result["sessionsFileFound"] is True
+        assert (target_sessions / "sess-new.json").is_file()
+        assert (target_sessions / "sess-legacy.json").is_file()
+        assert not (tmp_path / "escape.json").exists()
+
+    def test_empty_target_needs_no_backup_and_reports_missing_sessions(self, tmp_path: Path):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "one.md").write_text("one", encoding="utf-8")
+        target.mkdir()
+
+        result = merge_data_files(str(source), str(target))
+
+        assert result["backupDir"] == ""
+        assert result["sessionsAdded"] == 0
+        assert result["sessionsSkipped"] == 0
+        assert result["sessionsFileFound"] is False
+
+    def test_backup_failure_never_writes_the_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "same.md").write_text("new", encoding="utf-8")
+        (source / "temp" / "model_responses").mkdir(parents=True)
+        (source / "temp" / "model_responses" / "added.json").write_text("new", encoding="utf-8")
+        (target / "memory").mkdir(parents=True)
+        (target / "memory" / "same.md").write_text("old", encoding="utf-8")
+
+        def fail_backup(*_args, **_kwargs):
+            raise OSError("backup disk full")
+
+        monkeypatch.setattr(data_backup, "_create_memory_backup", fail_backup)
+
+        with pytest.raises(OSError, match="backup disk full"):
+            merge_data_files(str(source), str(target))
+
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+        assert not (target / "temp" / "model_responses" / "added.json").exists()
+
+    def test_staging_copy_failure_cleans_up_without_partial_writes(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        responses = source / "temp" / "model_responses"
+        responses.mkdir(parents=True)
+        (responses / "a-ok.json").write_text("ok", encoding="utf-8")
+        (responses / "z-fail.json").write_text("fail", encoding="utf-8")
+        target.mkdir()
+        real_copy2 = data_backup.shutil.copy2
+
+        def fail_second_copy(source_path, destination_path, *args, **kwargs):
+            if Path(source_path).name == "z-fail.json":
+                raise OSError("copy failed")
+            return real_copy2(source_path, destination_path, *args, **kwargs)
+
+        monkeypatch.setattr(data_backup.shutil, "copy2", fail_second_copy)
+
+        with pytest.raises(OSError, match="copy failed"):
+            merge_data_files(str(source), str(target))
+
+        assert not (target / "temp" / "model_responses" / "a-ok.json").exists()
+        assert not list(target.glob(".genericagent-memory-import-*"))
+
+    def test_activation_partial_failure_rolls_memory_and_added_files_back(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "same.md").write_text("new", encoding="utf-8")
+        (source / "temp" / "model_responses").mkdir(parents=True)
+        (source / "temp" / "model_responses" / "fail.json").write_text("new", encoding="utf-8")
+        (target / "memory").mkdir(parents=True)
+        (target / "memory" / "same.md").write_text("old", encoding="utf-8")
+        failing_target = target / "temp" / "model_responses" / "fail.json"
+
+        real_install = data_backup._install_file_add_only
+
+        def fail_response_activation(source_path, destination_path):
+            if Path(destination_path) == failing_target:
+                raise OSError("activation failed")
+            return real_install(source_path, destination_path)
+
+        monkeypatch.setattr(
+            data_backup, "_install_file_add_only", fail_response_activation
+        )
+
+        with pytest.raises(OSError, match="activation failed"):
+            merge_data_files(str(source), str(target))
+
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+        assert not failing_target.exists()
+        backups = list((target / "temp").glob("memory_import_backup_*"))
+        assert len(backups) == 1
+        assert (backups[0] / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+
+    def test_add_only_install_falls_back_on_filesystems_without_hard_links(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        responses = source / "temp" / "model_responses"
+        responses.mkdir(parents=True)
+        (responses / "portable.json").write_text("portable", encoding="utf-8")
+        target.mkdir()
+
+        def unsupported_link(*_args, **_kwargs):
+            raise OSError(data_backup.errno.EOPNOTSUPP, "hard links unsupported")
+
+        monkeypatch.setattr(data_backup.os, "link", unsupported_link)
+
+        result = merge_data_files(str(source), str(target))
+
+        assert result["responsesCopied"] == 1
+        assert (
+            target / "temp" / "model_responses" / "portable.json"
+        ).read_text(encoding="utf-8") == "portable"
+
+    def test_concurrent_response_creation_is_never_overwritten(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "same.md").write_text("new", encoding="utf-8")
+        responses = source / "temp" / "model_responses"
+        responses.mkdir(parents=True)
+        (responses / "race.json").write_text("import", encoding="utf-8")
+        (target / "memory").mkdir(parents=True)
+        (target / "memory" / "same.md").write_text("old", encoding="utf-8")
+        racing_target = target / "temp" / "model_responses" / "race.json"
+        real_link = data_backup.os.link
+
+        def collide_then_link(source_path, destination_path, **kwargs):
+            destination = Path(destination_path)
+            if destination == racing_target:
+                destination.write_text("concurrent", encoding="utf-8")
+            return real_link(source_path, destination_path, **kwargs)
+
+        monkeypatch.setattr(data_backup.os, "link", collide_then_link)
+
+        with pytest.raises(FileExistsError):
+            merge_data_files(str(source), str(target))
+
+        assert racing_target.read_text(encoding="utf-8") == "concurrent"
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+
+    def test_memory_backup_refuses_symlinked_temp_directory(self, tmp_path: Path):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        outside = tmp_path / "outside"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "same.md").write_text("new", encoding="utf-8")
+        (target / "memory").mkdir(parents=True)
+        (target / "memory" / "same.md").write_text("old", encoding="utf-8")
+        outside.mkdir()
+        (target / "temp").symlink_to(outside, target_is_directory=True)
+
+        with pytest.raises(ValueError, match="backup destination"):
+            merge_data_files(str(source), str(target))
+
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+        assert list(outside.iterdir()) == []

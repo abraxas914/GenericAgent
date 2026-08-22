@@ -38,6 +38,93 @@ def teardown_function() -> None:
     _close_ledger()
 
 
+def test_uninitialized_append_returns_before_clock_json_and_lock(monkeypatch):
+    class ForbiddenLock:
+        def __enter__(self):
+            raise AssertionError("uninitialized TUI path acquired the ledger lock")
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(
+        cost_tracker.json,
+        "dumps",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("uninitialized TUI path serialized JSON")
+        ),
+    )
+    monkeypatch.setattr(
+        cost_tracker.time,
+        "time",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("uninitialized TUI path read the clock")
+        ),
+    )
+    monkeypatch.setattr(cost_tracker, "_ledger_lock", ForbiddenLock())
+
+    cost_tracker._append_ledger("tui-main", 1, 2, 3, 4)
+
+
+def test_public_tracker_and_context_interfaces_keep_tui_semantics(monkeypatch):
+    cost_tracker._trackers.clear()
+    tracker = cost_tracker.get("tui-main")
+    assert tracker is cost_tracker.get("tui-main")
+    tracker.requests = 2
+    tracker.input = 10
+    tracker.output = 4
+    tracker.cache_create = 3
+    tracker.cache_read = 5
+    tracker.started_at = 100.0
+    monkeypatch.setattr(cost_tracker.time, "time", lambda: 106.5)
+
+    assert tracker.total_input_side() == 18
+    assert tracker.total_tokens() == 22
+    assert tracker.cache_hit_rate() == pytest.approx(5 / 18 * 100)
+    assert tracker.elapsed_seconds() == 6.5
+    snapshot = cost_tracker.all_trackers()
+    assert snapshot == {"tui-main": tracker}
+    snapshot.clear()
+    assert cost_tracker.all_trackers() == {"tui-main": tracker}
+
+    backend = types.SimpleNamespace(
+        context_win="200",
+        history=[{"role": "user", "content": "你好"}],
+    )
+    assert cost_tracker.context_window_chars(backend) == 600
+    assert cost_tracker.current_input_chars(backend) == len(
+        json.dumps(backend.history[0], ensure_ascii=False)
+    )
+    assert cost_tracker.context_window_chars(types.SimpleNamespace(context_win="bad")) == 0
+
+
+def test_install_remains_idempotent_without_desktop_ledger(monkeypatch):
+    original_calls = []
+    printed = []
+    fake_llmcore = types.ModuleType("llmcore")
+    fake_llmcore._record_usage = lambda value, mode: original_calls.append((value, mode))
+    monkeypatch.setitem(sys.modules, "llmcore", fake_llmcore)
+    monkeypatch.setattr(cost_tracker, "_INSTALLED", False)
+    monkeypatch.setattr(cost_tracker, "_trackers", {})
+    monkeypatch.setattr("builtins.print", lambda *args, **_kwargs: printed.append(args))
+
+    cost_tracker.install()
+    wrapped_record = fake_llmcore._record_usage
+    wrapped_print = fake_llmcore.print
+    cost_tracker.install()
+
+    assert fake_llmcore._record_usage is wrapped_record
+    assert fake_llmcore.print is wrapped_print
+    fake_llmcore._record_usage(
+        {"prompt_tokens": 7, "prompt_tokens_details": {"cached_tokens": 2}},
+        "chat_completions",
+    )
+    fake_llmcore.print("[Output] tokens=3")
+    tracker = cost_tracker.get(threading.current_thread().name)
+    assert (tracker.requests, tracker.input, tracker.output, tracker.cache_read) == (1, 5, 3, 2)
+    assert original_calls and printed == [("[Output] tokens=3",)]
+    assert cost_tracker._ledger_path is None
+
+
 def test_append_persists_and_aggregates_per_session(tmp_path):
     cost_tracker.init_ledger(str(tmp_path))
 

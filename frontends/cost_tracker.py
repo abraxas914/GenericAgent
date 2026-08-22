@@ -162,6 +162,11 @@ def init_ledger(root: str) -> None:
 
 def _append_ledger(thread_key: str, inp: int, out: int, cc: int, cr: int) -> None:
     global _ledger_uncompacted_bytes
+    # TUI and conductor processes install the in-memory tracker but never call
+    # init_ledger(). Keep their historical hot path to one lock-free branch:
+    # no clock lookup, JSON encoding, byte counting, or ledger lock acquisition.
+    if _ledger_fd is None:
+        return
     line = json.dumps(
         {"t": time.time(), "k": thread_key, "i": inp, "o": out, "cc": cc, "cr": cr},
         separators=(",", ":"),
