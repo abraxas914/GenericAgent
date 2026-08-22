@@ -276,6 +276,27 @@ class TestImportSessionsFiltersInternalArtifacts:
         assert result["sessionsAdded"] == 1
         assert result["sessionsSkipped"] == 1
 
+    def test_import_rejects_session_ids_that_could_escape_storage(self, manager: AgentManager, tmp_path: Path):
+        source = tmp_path / "source"
+        sessions_dir = source / "temp" / "desktop_sessions"
+        sessions_dir.mkdir(parents=True)
+        (sessions_dir / "malicious.json").write_text(
+            json.dumps({
+                "id": "../../outside",
+                "title": "unsafe",
+                "messages": [],
+                "msg_seq": 0,
+            }),
+            encoding="utf-8",
+        )
+
+        result = manager.import_sessions(str(source))
+
+        assert result["sessionsAdded"] == 0
+        assert result["sessionsSkipped"] == 1
+        assert manager.sessions == {}
+        assert not (manager._sessions_dir.parent.parent / "outside.json").exists()
+
 
 class TestPersistAtomicNoDataLoss:
     """Verify that a failed write does not destroy the existing session file."""

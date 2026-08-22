@@ -254,13 +254,6 @@
   margin-top: 4px;
 }
 
-/* Feature buttons */
-.ga-feature-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 /* ── Data maintenance section ── */
 .ga-data-row {
   display: flex;
@@ -299,33 +292,61 @@
   margin: 8px 0;
 }
 
-/* ── GA Source block ── */
-.ga-source-block {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  column-gap: 12px;
-  row-gap: 6px;
-  padding: 8px 0 4px;
-}
-
-.ga-source-info {
-  min-width: 0;
-}
-
-.ga-source-status {
+.ga-data-confirm-summary {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  margin-top: 6px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.ga-source-status-text {
-  color: var(--semi-color-text-1, #1c1f23);
+.ga-data-confirm-summary > div {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.ga-data-confirm-summary span {
+  color: var(--semi-color-text-2, #646a73);
+}
+
+.ga-data-confirm-summary strong {
+  overflow-wrap: anywhere;
   font-weight: 500;
 }
 
+.ga-data-confirm-summary p,
+.ga-data-source-description {
+  margin: 4px 0 0;
+  color: var(--semi-color-text-2, #646a73);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ga-data-source-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ga-data-export-path {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: var(--semi-color-fill-0, #f5f5f5);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  box-sizing: border-box;
+}
+
+/* ── Connection mode section ── */
 .ga-source-dot {
   width: 6px;
   height: 6px;
@@ -342,15 +363,65 @@
   animation: ga-source-pulse 1.2s ease-in-out infinite;
 }
 
+.ga-source-dot--unavailable {
+  background: var(--semi-color-text-3, #8f959e);
+}
+
 @keyframes ga-source-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.4; transform: scale(0.85); }
 }
 
-.ga-source-path {
+.ga-connection-description {
+  margin: 0 0 12px;
+  color: var(--semi-color-text-2, #646a73);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.ga-connection-mode-grid.semi-radioGroup {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
+  gap: 12px;
+}
+
+.ga-connection-mode-card.semi-radio {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.ga-connection-card-title {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ga-connection-repository-detail {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--semi-color-border, #e8e8e8);
+  border-radius: 8px;
+  background: var(--semi-color-fill-0, #f7f8fa);
+}
+
+.ga-connection-repository-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--semi-color-text-1, #35383e);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.ga-connection-path {
   display: block;
-  grid-column: 1 / -1;
-  grid-row: 2;
+  width: 100%;
+  margin-top: 8px;
   color: var(--semi-color-text-2, #646a73);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;
@@ -358,15 +429,59 @@
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+  box-sizing: border-box;
 }
 
-.ga-source-actions {
+.ga-connection-apply-row {
   display: flex;
-  grid-column: 2;
-  grid-row: 1;
+  align-items: center;
   justify-content: flex-end;
+  margin-top: 12px;
+  gap: 8px;
+}
+
+.ga-connection-apply-note {
+  flex: 1;
+  color: var(--semi-color-warning, #d46b08);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ga-connection-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--semi-color-border, #e8e8e8);
+}
+
+.ga-connection-status-copy {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
+  color: var(--semi-color-text-2, #646a73);
+  font-size: 12px;
+}
+
+.ga-connection-status-copy strong {
+  color: var(--semi-color-text-0, #1c1f23);
+  font-weight: 500;
+}
+
+@media (max-width: 700px) {
+  .ga-connection-mode-grid.semi-radioGroup {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ga-connection-status-row,
+  .ga-connection-repository-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 
 /* Add/Edit Model form */

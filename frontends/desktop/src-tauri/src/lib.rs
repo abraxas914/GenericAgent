@@ -859,11 +859,6 @@ fn copy_dir_replace(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn bundled_project_dir() -> Option<PathBuf> {
-    let app = bundle_root()?.join("app");
-    app.join("agentmain.py").exists().then_some(app)
-}
-
 fn builtin_ga_root(project_dir: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -1899,6 +1894,69 @@ fn pick_directory(title: Option<String>) -> Option<String> {
 }
 
 #[tauri::command]
+fn pick_data_backup_file(title: Option<String>) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new().add_filter("ZIP", &["zip"]);
+    if let Some(value) = title.filter(|value| !value.is_empty()) {
+        dialog = dialog.set_title(&value);
+    }
+    dialog
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn pick_data_export_path(default_name: String, title: Option<String>) -> Option<String> {
+    let safe_default = Path::new(&default_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| name.to_ascii_lowercase().ends_with(".zip"))
+        .unwrap_or("GenericAgent-data-backup.zip");
+    let mut dialog = rfd::FileDialog::new()
+        .add_filter("ZIP", &["zip"])
+        .set_file_name(safe_default);
+    if let Some(value) = title.filter(|value| !value.is_empty()) {
+        dialog = dialog.set_title(&value);
+    }
+    dialog.save_file().map(|mut path| {
+        if path.extension().and_then(|value| value.to_str()) != Some("zip") {
+            path.set_extension("zip");
+        }
+        path.to_string_lossy().into_owned()
+    })
+}
+
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let target = PathBuf::from(path.trim());
+    if !target.is_file() {
+        return Err("the selected file is unavailable".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(&target);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg("/select,").arg(&target);
+        command.creation_flags(0x08000000);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(target.parent().unwrap_or(Path::new(".")));
+        command
+    };
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("cannot reveal the selected file: {error}"))
+}
+
+#[tauri::command]
 fn get_ga_source() -> String {
     valid_ga_source_override().unwrap_or_default()
 }
@@ -1973,6 +2031,17 @@ fn probe_ga_source(dir: &str) -> Result<(), String> {
     ))
 }
 
+fn validated_ga_source(dir: &str) -> Result<String, String> {
+    let source = PathBuf::from(dir.trim());
+    if !source.join("agentmain.py").exists() {
+        return Err("not a GenericAgent source: agentmain.py not found".to_string());
+    }
+    let source = source.canonicalize().unwrap_or(source);
+    let source_text = display_path(&source);
+    probe_ga_source(&source_text)?;
+    Ok(source_text)
+}
+
 async fn restart_for_current_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     let (python_path, project_dir) = get_or_discover_config();
     let expected_ga_root = effective_ga_root(&project_dir);
@@ -2000,106 +2069,16 @@ async fn apply_ga_source_with_rollback(
     }
 }
 
-#[derive(Debug)]
-struct RuntimeMovePlan {
-    previous_override: Option<String>,
-    source: PathBuf,
-    destination: PathBuf,
-    remove_source_after_switch: bool,
-}
-
-fn should_remove_source_after_switch(
-    source: &Path,
-    destination: &Path,
-    bundled: Option<&Path>,
-) -> bool {
-    !same_path(source, destination)
-        && !bundled
-            .map(|bundled| same_path(source, bundled))
-            .unwrap_or(false)
-}
-
-fn prepare_runtime_move(target_parent: &str) -> Result<RuntimeMovePlan, String> {
-    let previous_override = saved_ga_source_override();
-    let external_source = valid_ga_source_override();
-    let (_, project_dir) = get_or_discover_config();
-    let source_text = external_source
-        .clone()
-        .unwrap_or_else(|| effective_ga_root(&project_dir));
-    if source_text.trim().is_empty() {
-        return Err(
-            "current GA workspace is empty; wait for the bridge to become ready and try again"
-                .to_string(),
-        );
-    }
-    if target_parent.trim().is_empty() {
-        return Err("target parent directory is empty".to_string());
-    }
-
-    let source = PathBuf::from(source_text.trim());
-    if !source.is_dir() || !source.join("agentmain.py").exists() {
-        return Err(format!(
-            "current GA workspace is invalid: {}",
-            source.to_string_lossy()
-        ));
-    }
-    let parent = PathBuf::from(target_parent.trim());
-    std::fs::create_dir_all(&parent)
-        .map_err(|error| format!("cannot create target parent dir: {error}"))?;
-    let source = source.canonicalize().unwrap_or(source);
-    let parent = parent.canonicalize().unwrap_or(parent);
-    let source_name = source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("GenericAgent");
-    let folder_name = if source_name == "app" {
-        "GenericAgent"
-    } else {
-        source_name
-    };
-    let destination = parent.join(folder_name);
-    let destination = if destination.exists() {
-        destination.canonicalize().unwrap_or(destination)
-    } else {
-        destination
-    };
-
-    if destination.starts_with(&source) && !same_path(&source, &destination) {
-        return Err("target directory cannot be inside the current GA workspace".to_string());
-    }
-    if !same_path(&source, &destination) {
-        if destination.exists() {
-            return Err(format!(
-                "target GA workspace already exists: {}",
-                display_path(&destination)
-            ));
-        }
-        copy_dir_replace(&source, &destination)?;
-    }
-
-    let bundled = bundled_project_dir();
-    let remove_source_after_switch = external_source.is_some()
-        && should_remove_source_after_switch(&source, &destination, bundled.as_deref());
-    Ok(RuntimeMovePlan {
-        previous_override,
-        source,
-        destination,
-        remove_source_after_switch,
-    })
+#[tauri::command]
+async fn validate_ga_source(dir: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || validated_ga_source(&dir))
+        .await
+        .map_err(|error| format!("compatibility probe task failed: {error}"))?
 }
 
 #[tauri::command]
 async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
-    let source = PathBuf::from(dir.trim());
-    if !source.join("agentmain.py").exists() {
-        return Err("not a GenericAgent source: agentmain.py not found".to_string());
-    }
-    let source = source.canonicalize().unwrap_or(source);
-    let source_text = display_path(&source);
-    let probe_source = source_text.clone();
-    tauri::async_runtime::spawn_blocking(move || probe_ga_source(&probe_source))
-        .await
-        .map_err(|error| format!("compatibility probe task failed: {error}"))??;
+    let source_text = validate_ga_source(dir).await?;
     let previous_override = saved_ga_source_override();
     apply_ga_source_with_rollback(app_handle, Some(source_text), previous_override).await
 }
@@ -2108,32 +2087,6 @@ async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<Stri
 async fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     let previous_override = saved_ga_source_override();
     apply_ga_source_with_rollback(app_handle, None, previous_override).await
-}
-
-#[tauri::command]
-async fn move_ga_runtime(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
-    let plan = tauri::async_runtime::spawn_blocking(move || prepare_runtime_move(&dir))
-        .await
-        .map_err(|error| format!("runtime copy task failed: {error}"))??;
-    let destination_text = display_path(&plan.destination);
-    apply_ga_source_with_rollback(
-        app_handle,
-        Some(destination_text.clone()),
-        plan.previous_override,
-    )
-    .await?;
-
-    if plan.remove_source_after_switch {
-        let source = plan.source;
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Err(error) = std::fs::remove_dir_all(&source) {
-                eprintln!("remove old runtime {:?}: {error}", source);
-            }
-        })
-        .await
-        .map_err(|error| format!("old runtime cleanup task failed: {error}"))?;
-    }
-    Ok(destination_text)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2181,10 +2134,13 @@ pub fn run() {
             get_config,
             export_mykey,
             pick_directory,
+            pick_data_backup_file,
+            pick_data_export_path,
+            reveal_in_file_manager,
             get_ga_source,
+            validate_ga_source,
             set_ga_source,
             clear_ga_source,
-            move_ga_runtime,
             shortcut_should_ask,
             shortcut_decide
         ])
@@ -2482,28 +2438,5 @@ mod tests {
             resolve_settings_path(Some(PathBuf::from("/home/user")), None),
             PathBuf::from("/home/user/.ga_desktop_settings.json")
         );
-    }
-
-    #[test]
-    fn runtime_move_never_deletes_the_bundle_or_an_in_place_source() {
-        let bundled = PathBuf::from("/bundle/runtime/app");
-        let external = PathBuf::from("/data/GenericAgent");
-        let destination = PathBuf::from("/moved/GenericAgent");
-
-        assert!(!should_remove_source_after_switch(
-            &bundled,
-            &destination,
-            Some(&bundled),
-        ));
-        assert!(!should_remove_source_after_switch(
-            &external,
-            &external,
-            Some(&bundled),
-        ));
-        assert!(should_remove_source_after_switch(
-            &external,
-            &destination,
-            Some(&bundled),
-        ));
     }
 }

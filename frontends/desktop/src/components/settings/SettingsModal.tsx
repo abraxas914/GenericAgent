@@ -7,7 +7,7 @@ import { AppearanceSection } from './AppearanceSection';
 import { LanguageSection } from './LanguageSection';
 import { ModelSection } from './ModelSection';
 import { DataSection } from './DataSection';
-import { FeatureSection } from './FeatureSection';
+import { ConnectionModeSection } from './ConnectionModeSection';
 import { HelpFeedbackSection } from './HelpFeedbackSectionView';
 import { AddModelView } from './AddModelView';
 
@@ -77,7 +77,7 @@ export function SettingsModal() {
           <LanguageSection />
           <ModelSection onAdd={handleAddModel} onEdit={handleEditModel} />
           <DataSection />
-          <FeatureSection />
+          <ConnectionModeSection />
           <HelpFeedbackSection />
         </>
       ) : (
@@ -86,4 +86,3 @@ export function SettingsModal() {
     </Modal>
   );
 }
-
