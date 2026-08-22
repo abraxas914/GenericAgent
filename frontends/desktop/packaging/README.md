@@ -76,6 +76,11 @@ GitHub Release API。`publish-release` 显式 `needs` 三个平台，且只在 t
 ## 固定输入与可复现边界
 
 - npm 使用 `npm ci` 和已提交的 `package-lock.json`；Node 固定为 `22.23.2`。
+- 根 `.gitattributes` 把 source `public/THIRD_PARTY_NOTICES.txt` 与可能纳入交付的
+  `dist/THIRD_PARTY_NOTICES.txt` 都固定为 LF。Tauri 的共享 `beforeBuildCommand` 会先生成
+  `dist`，再调用跨平台 bundle contract 校验 notice SHA-256
+  `2acf865e87e59090121369aac0575467067fdd7999923a70d785a46ceae3330f`；Windows、Linux、
+  macOS 任一平台在嵌入前字节不一致都会硬失败。
 - Rust toolchain 固定为 `1.95.0`，crate 图由 `Cargo.lock` 固定。
 - `actions/checkout`、`setup-node`、`setup-python`、artifact upload/download、Rust toolchain
   action 与 Rust cache action 均固定完整 commit SHA，workflow 行尾保留对应版本/来源注释。

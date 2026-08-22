@@ -26,6 +26,10 @@ function sha256(filePath) {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
+function sha256Bytes(contents) {
+  return createHash('sha256').update(contents).digest('hex');
+}
+
 function check(condition, message) {
   if (condition) {
     console.log(`  ✓ ${message}`);
@@ -54,6 +58,7 @@ function compareDependencySets(label, manifestValues = {}, lockValues = {}) {
 console.log('[1] npm manifest and lockfile');
 const packageJson = readJson('package.json');
 const packageLock = readJson('package-lock.json');
+const tauriConfig = readJson('src-tauri/tauri.conf.json');
 const lockRoot = packageLock.packages?.[''];
 check(Boolean(lockRoot), 'package-lock.json has a root package entry');
 if (lockRoot) {
@@ -70,8 +75,10 @@ check(
 
 const requiredScripts = [
   'build',
+  'build:tauri-assets',
   'typecheck',
   'test',
+  'test:bundle',
   'test:ci-contract',
   'test:e2e-isolation',
   'test:e2e-types',
@@ -88,6 +95,55 @@ for (const name of requiredScripts) {
 
 const gitignore = readText('.gitignore');
 check(!/^package-lock\.json\s*$/m.test(gitignore), 'package-lock.json is not ignored');
+
+const noticeAttributeRules = [
+  'frontends/desktop/public/THIRD_PARTY_NOTICES.txt text eol=lf',
+  'frontends/desktop/dist/THIRD_PARTY_NOTICES.txt text eol=lf',
+];
+function noticeAttributesAreExact(attributes) {
+  const lines = attributes.split(/\r?\n/);
+  return noticeAttributeRules.every((rule) => {
+    const noticePath = rule.split(' ', 1)[0];
+    const matchingRules = lines.filter((line) => line.trim().split(/\s+/, 1)[0] === noticePath);
+    return matchingRules.length === 1 && matchingRules[0] === rule;
+  });
+}
+
+const gitAttributes = readText('.gitattributes', repoRoot);
+check(
+  noticeAttributesAreExact(gitAttributes),
+  'source and compiled third-party notices each have one exact LF attribute rule',
+);
+for (const rule of noticeAttributeRules) {
+  check(
+    !noticeAttributesAreExact(gitAttributes.replace(`${rule}\n`, '')),
+    `notice attribute contract rejects deleting: ${rule}`,
+  );
+}
+check(
+  !noticeAttributesAreExact(
+    gitAttributes.replace(
+      noticeAttributeRules[0],
+      noticeAttributeRules[0].replace('eol=lf', 'eol=crlf'),
+    ),
+  ),
+  'notice attribute contract rejects CRLF checkout normalization',
+);
+
+const noticePath = path.join(desktopRoot, 'public', SEMI_UI_NOTICE_CONTRACT.publicAsset);
+const noticeBytes = fs.readFileSync(noticePath);
+const crlfNoticeBytes = Buffer.from(
+  noticeBytes.toString('utf8').replace(/\r?\n/g, '\r\n'),
+  'utf8',
+);
+check(
+  sha256Bytes(noticeBytes) === SEMI_UI_NOTICE_CONTRACT.sha256,
+  'source third-party notice has the required byte-exact SHA-256',
+);
+check(
+  sha256Bytes(crlfNoticeBytes) !== SEMI_UI_NOTICE_CONTRACT.sha256,
+  'notice hash contract rejects CRLF-mutated bytes',
+);
 
 console.log('\n[2] workflow command contract');
 const workflowPaths = [
@@ -116,6 +172,34 @@ function workflowJob(workflow, name) {
   const remainder = workflow.slice(match.index + match[0].length);
   const nextJob = /^  [a-zA-Z0-9_-]+:\s*$/m.exec(remainder);
   return nextJob ? remainder.slice(0, nextJob.index) : remainder;
+}
+
+const noticeGatedTauriCommands = Object.freeze({
+  'build-windows': 'npm run tauri build -- --bundles nsis',
+  'build-linux': 'npm run tauri build -- --bundles appimage',
+  'build-macos': 'npm run tauri build -- --bundles app',
+});
+const distIntegrityScript = readText('scripts/assert-dist-built.mjs');
+
+function noticePreEmbedGateIsExact(
+  scripts = packageJson.scripts,
+  config = tauriConfig,
+  contractScript = distIntegrityScript,
+) {
+  return scripts?.['test:bundle'] === 'node scripts/assert-dist-built.mjs'
+    && scripts?.['build:tauri-assets'] === 'npm run build && npm run test:bundle'
+    && config?.build?.beforeBuildCommand === 'npm run build:tauri-assets'
+    && contractScript.includes('REQUIRED_REACT_PUBLIC_ASSET_SHA256')
+    && contractScript.includes('sha256(builtPath) !== expectedHash')
+    && contractScript.includes('in dist/ does not match its required SHA-256');
+}
+
+function releaseJobUsesNoticeGatedTauriBuild(workflow, job) {
+  const command = noticeGatedTauriCommands[job];
+  const jobWorkflow = workflowJob(workflow, job);
+  return Boolean(command)
+    && noticePreEmbedGateIsExact()
+    && (jobWorkflow.split(`run: ${command}`).length - 1) === 1;
 }
 
 function macosPackagingPythonInputsAreSeparated(workflow) {
@@ -182,7 +266,31 @@ for (const job of buildJobs) {
       && workflow.includes('packaging/python-runtime-requirements.txt'),
     `${job} downloads the exact binary-only runtime requirement set`,
   );
+  check(
+    releaseJobUsesNoticeGatedTauriBuild(releaseWorkflow, job),
+    `${job} validates the generated notice hash immediately before Tauri embeds dist`,
+  );
+  const tauriCommand = noticeGatedTauriCommands[job];
+  check(
+    !releaseJobUsesNoticeGatedTauriBuild(
+      releaseWorkflow.replace(`        run: ${tauriCommand}\n`, '        run: npm run build\n'),
+      job,
+    ),
+    `${job} notice gate contract rejects deleting its Tauri pre-embed check`,
+  );
 }
+
+check(
+  noticePreEmbedGateIsExact(),
+  'Tauri frontend build runs the cross-platform dist hash contract before embedding',
+);
+check(
+  !noticePreEmbedGateIsExact({
+    ...packageJson.scripts,
+    'build:tauri-assets': 'npm run build',
+  }),
+  'Tauri pre-embed contract rejects removing the bundle integrity check',
+);
 
 check(
   /^permissions:\n  contents: read\s*$/m.test(releaseWorkflow),
@@ -447,9 +555,11 @@ for (const relativePath of requiredFiles) {
   check(fs.existsSync(path.join(desktopRoot, relativePath)), `required E2E file exists: ${relativePath}`);
 }
 
-const tauriConfig = readJson('src-tauri/tauri.conf.json');
 check(tauriConfig.build?.frontendDist === '../dist', 'Tauri packages the React dist directory');
-check(tauriConfig.build?.beforeBuildCommand === 'npm run build', 'Tauri runs the frontend build first');
+check(
+  tauriConfig.build?.beforeBuildCommand === 'npm run build:tauri-assets',
+  'Tauri builds and validates renderer assets before embedding',
+);
 check(
   tauriConfig.app?.security?.capabilities?.includes('default'),
   'Tauri explicitly enables the default capability',
