@@ -13,10 +13,12 @@
  *   1 = one or more checks failed
  */
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   REMOVED_LEGACY_REACT_PUBLIC_ASSETS,
+  REQUIRED_REACT_PUBLIC_ASSET_SHA256,
   REQUIRED_REACT_PUBLIC_ASSETS,
 } from './react-public-assets.mjs';
 
@@ -24,6 +26,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_DIST = path.resolve(__dirname, '..', 'dist');
 const MAX_JS_CHUNK_SIZE = 500 * 1000;
+
+function sha256(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
+}
 
 /**
  * @param {string} distDir
@@ -38,6 +44,10 @@ export function checkDistBuilt(distDir) {
     const sourcePath = path.join(DESKTOP_ROOT, 'public', publicAsset);
     if (!fs.existsSync(sourcePath) || fs.statSync(sourcePath).size === 0) {
       return { ok: false, error: `public/${publicAsset} is missing or empty` };
+    }
+    const expectedHash = REQUIRED_REACT_PUBLIC_ASSET_SHA256[publicAsset];
+    if (expectedHash && sha256(sourcePath) !== expectedHash) {
+      return { ok: false, error: `public/${publicAsset} does not match its required SHA-256` };
     }
   }
   for (const publicAsset of REMOVED_LEGACY_REACT_PUBLIC_ASSETS) {
@@ -54,6 +64,10 @@ export function checkDistBuilt(distDir) {
     const builtPath = path.join(distDir, publicAsset);
     if (!fs.existsSync(builtPath) || fs.statSync(builtPath).size === 0) {
       return { ok: false, error: `${publicAsset} was not copied to dist/` };
+    }
+    const expectedHash = REQUIRED_REACT_PUBLIC_ASSET_SHA256[publicAsset];
+    if (expectedHash && sha256(builtPath) !== expectedHash) {
+      return { ok: false, error: `${publicAsset} in dist/ does not match its required SHA-256` };
     }
   }
 
@@ -167,6 +181,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   console.log(`  ✓ dist/index.html present`);
   console.log(`  ✓ dist/loading.html present`);
   console.log(`  ✓ dual-contract loading and recovery assets are present`);
+  console.log(`  ✓ third-party notices are present and hash-locked`);
   console.log(`  ✓ dead legacy React v2 public assets and fonts are absent`);
   console.log(`  ✓ React bundles contain no Desktop v1 gaLegacy dependency`);
   console.log(`  ✓ ${jsFiles.length} JS bundle(s), ${cssFiles.length} CSS file(s)`);
