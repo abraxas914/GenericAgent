@@ -125,9 +125,24 @@ install_deps() {
       --requirement "$locked_requirements" "${pkgs[@]:6}"
   else
     log_warn "No wheel dir supplied; falling back to online pip install"
-    "$py" -m pip install --upgrade pip setuptools wheel
+    "$py" -m pip install --no-compile --upgrade pip setuptools wheel
     "$py" -m pip install --no-compile "${pkgs[@]}"
   fi
+}
+
+clean_portable_runtime_bytecode() {
+  local py="$1"
+  [[ -n "$WHEEL_DIR" && "$NO_VENV" == "1" ]] || return
+  local runtime_root
+  runtime_root="$(cd "$PROJECT_DIR/.." && pwd -P)"
+  [[ -d "$runtime_root/python" && "$py" == "$runtime_root"/python/* ]] \
+    || fail "Refusing to clean an unverified portable runtime: $runtime_root"
+  find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
+  find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+  ! find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q . \
+    || fail "Python bytecode cache directory remains in portable runtime"
+  ! find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q . \
+    || fail "Python bytecode remains in portable runtime"
 }
 
 ensure_mykey() {
@@ -146,11 +161,16 @@ ensure_mykey() {
 write_settings() {
   local py="$1"
   local settings_path="$HOME/.ga_desktop_settings.json"
-  "$py" - "$settings_path" "$py" "$PROJECT_DIR" <<'PY'
-import json, pathlib, sys
-settings_path, python_path, project_dir = sys.argv[1:4]
-pathlib.Path(settings_path).write_text(json.dumps({"python_path": python_path, "project_dir": project_dir}, indent=2), encoding="utf-8")
-PY
+  local bridge="$PROJECT_DIR/frontends/desktop_bridge.py"
+  local helper="$SCRIPT_ROOT/merge_desktop_settings.py"
+  [[ -f "$helper" ]] || helper="$SCRIPT_ROOT/../merge_desktop_settings.py"
+  [[ -f "$bridge" ]] || fail "desktop_bridge.py not found: $bridge"
+  [[ -f "$helper" ]] || fail "Desktop settings merge helper not found: $helper"
+  "$py" "$helper" \
+    --settings "$settings_path" \
+    --python-path "$py" \
+    --project-dir "$PROJECT_DIR" \
+    --bridge-script "$bridge"
   log_ok "Wrote desktop settings: $settings_path"
 }
 
@@ -178,6 +198,7 @@ if [[ "$NO_VENV" == "1" ]]; then RUNTIME_PY="$PYTHON_PATH"; fi
 install_deps "$RUNTIME_PY"
 ensure_mykey
 write_settings "$RUNTIME_PY"
+clean_portable_runtime_bytecode "$RUNTIME_PY"
 progress done
 
 case "$MODE" in

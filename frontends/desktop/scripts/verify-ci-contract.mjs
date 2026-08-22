@@ -72,6 +72,13 @@ check(
   semiUiLock?.version === SEMI_UI_NOTICE_CONTRACT.packageVersion,
   `${SEMI_UI_NOTICE_CONTRACT.packageName} notice version matches package-lock.json`,
 );
+const tauriCliVersion = '2.11.4';
+check(
+  packageJson.devDependencies?.['@tauri-apps/cli'] === tauriCliVersion
+    && lockRoot?.devDependencies?.['@tauri-apps/cli'] === tauriCliVersion
+    && packageLock.packages?.['node_modules/@tauri-apps/cli']?.version === tauriCliVersion,
+  `@tauri-apps/cli is exactly pinned to ${tauriCliVersion} in the manifest and lockfile`,
+);
 
 const requiredScripts = [
   'build',
@@ -223,6 +230,82 @@ function windowsPbsArchiveUsesPosixTempPath(workflow) {
     && !windowsJob.includes('PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"');
 }
 
+function wholeRuntimeBytecodeContract(workflow) {
+  const specs = [
+    ['build-windows', ['purge_runtime_bytecode "$RUNTIME"']],
+    ['build-linux', ['purge_runtime_bytecode "$RUNTIME"']],
+    ['build-macos', [
+      'purge_runtime_bytecode "$RUNTIME_SRC"',
+      'purge_runtime_bytecode "$DMG_RUNTIME"',
+    ]],
+  ];
+  return (workflow.match(/^  PYTHONDONTWRITEBYTECODE: "1"$/gm) ?? []).length === 1
+    && specs.every(([jobName, requiredCalls]) => {
+      const job = workflowJob(workflow, jobName);
+      return job.includes('purge_runtime_bytecode() {')
+        && job.includes('find "$runtime_root" -type d -name \'__pycache__\'')
+        && job.includes('find "$runtime_root" -type f \\( -name \'*.pyc\' -o -name \'*.pyo\' \\) -delete')
+        && requiredCalls.every((call) => job.includes(call))
+        && !/pip[\\/]_vendor/.test(job);
+    });
+}
+
+function settingsMergeContract(storage, helper, installers, workflow) {
+  const fixedUpdates = [
+    '"python_path": python_path',
+    '"project_dir": project_dir',
+    '"bridge_script": bridge_script',
+  ];
+  return fixedUpdates.every((line) => storage.includes(line))
+    && helper.includes('from desktop_settings import merge_package_paths, remove_bundle_paths')
+    && storage.includes('document = read_settings(settings_path, strict=True)')
+    && storage.includes('with settings_lock(settings_path):')
+    && storage.includes('os.replace(temporary, settings_path)')
+    && storage.includes('os.fsync(stream.fileno())')
+    && !storage.includes('document.clear(')
+    && installers.every((script) => script.includes('merge_desktop_settings.py'))
+    && (workflow.match(/cp frontends\/desktop\/packaging\/scripts\/merge_desktop_settings\.py/g) ?? []).length === 3;
+}
+
+function linuxPortabilityContract(workflow) {
+  const linuxJob = workflowJob(workflow, 'build-linux');
+  return linuxJob.includes('runs-on: ubuntu-22.04')
+    && !linuxJob.includes('runs-on: ubuntu-24.04')
+    && linuxJob.includes('"$APPIMAGE_ABS" --appimage-extract')
+    && linuxJob.includes('find "$SMOKE_PACKAGE" "$APPIMAGE_SCAN/squashfs-root" -type f -print0')
+    && linuxJob.includes("file -b \"$candidate\" | grep -q '^ELF'")
+    && linuxJob.includes('readelf --version-info "$candidate"')
+    && linuxJob.includes('maximum allowed is GLIBC_2.35')
+    && linuxJob.includes('"$MAX_GLIBC" \'2.35\'')
+    && linuxJob.includes('APPIMAGE_EXTRACT_AND_RUN=1')
+    && linuxJob.includes('xvfb-run -a "$SMOKE_PACKAGE/GenericAgent.AppImage"')
+    && linuxJob.includes('http://127.0.0.1:14168/services/identity')
+    && linuxJob.includes('actual == expected');
+}
+
+function prunedRuntimeSourceContract(job) {
+  const normalized = job.replaceAll("--exclude='./", "--exclude='");
+  const excluded = [
+    'frontends/tests',
+    'frontends/desktop/src',
+    'frontends/desktop/public',
+    'frontends/desktop/scripts',
+    'frontends/desktop/e2e',
+    'frontends/desktop/tests',
+    'frontends/desktop/testing',
+    'frontends/desktop/spec',
+    'frontends/desktop/DESIGN.md',
+    'frontends/desktop/package.json',
+    'frontends/desktop/package-lock.json',
+    'frontends/desktop/node_modules',
+  ];
+  return excluded.every((entry) => normalized.includes(`--exclude='${entry}'`))
+    && !normalized.includes("--exclude='frontends/desktop/static'")
+    && normalized.includes('frontends/desktop/static/index.html')
+    && normalized.includes('frontends/desktop/package-lock.json"')
+    && normalized.includes('frontends/desktop/node_modules"');
+}
+
 const buildJobs = ['build-windows', 'build-linux', 'build-macos'];
 const releaseJobsSection = releaseWorkflow.slice(releaseWorkflow.search(/^jobs:\s*$/m));
 const releaseJobNames = [...releaseJobsSection.matchAll(/^  ([a-zA-Z0-9_-]+):\s*$/gm)].map((match) => match[1]);
@@ -252,6 +335,14 @@ for (const job of buildJobs) {
     `${job} installs the locked npm graph with npm ci`,
   );
   check(
+    workflow.includes("node -e \"const v=require('./node_modules/@tauri-apps/cli/package.json').version; if(v!=='2.11.4')"),
+    `${job} asserts the exact Tauri CLI version after installation`,
+  );
+  check(
+    prunedRuntimeSourceContract(workflow),
+    `${job} excludes development/frontend source while retaining Desktop v1 static assets`,
+  );
+  check(
     workflow.includes("--exclude='./frontends/desktop/dist'")
       || workflow.includes("--exclude='frontends/desktop/dist'"),
     `${job} excludes the Tauri-embedded React dist from runtime/app`,
@@ -277,6 +368,33 @@ for (const job of buildJobs) {
       job,
     ),
     `${job} notice gate contract rejects deleting its Tauri pre-embed check`,
+  );
+}
+
+check(
+  wholeRuntimeBytecodeContract(releaseWorkflow),
+  'all package builders suppress and purge bytecode across each complete runtime',
+);
+check(linuxPortabilityContract(releaseWorkflow), 'Linux package is built and smoke-tested at the glibc 2.35 floor');
+for (const [label, mutation] of [
+  ['Ubuntu 22.04 builder', releaseWorkflow.replace('runs-on: ubuntu-22.04', 'runs-on: ubuntu-24.04')],
+  ['glibc 2.35 ceiling', releaseWorkflow.replace('maximum allowed is GLIBC_2.35', 'maximum allowed is GLIBC_2.39')],
+  ['all-ELF traversal', releaseWorkflow.replace('"$APPIMAGE_SCAN/squashfs-root" -type f -print0', '-type f -print0')],
+  ['archived package identity smoke', releaseWorkflow.replace('actual == expected', 'actual != expected')],
+]) {
+  check(!linuxPortabilityContract(mutation), `Linux portability contract rejects deleting ${label}`);
+}
+for (const [label, mutation] of [
+  ['the no-bytecode environment', releaseWorkflow.replace('  PYTHONDONTWRITEBYTECODE: "1"\n', '')],
+  ['whole-runtime cleanup', releaseWorkflow.replace(
+    'purge_runtime_bytecode "$RUNTIME"',
+    'purge_runtime_bytecode "$RUNTIME/python/lib/python3.12/site-packages"',
+  )],
+  ['pyo cleanup', releaseWorkflow.replace(" -o -name '*.pyo'", '')],
+]) {
+  check(
+    !wholeRuntimeBytecodeContract(mutation),
+    `runtime bytecode contract rejects deleting ${label}`,
   );
 }
 
@@ -411,6 +529,7 @@ check(
 );
 
 const publisherWorkflow = workflowJob(releaseWorkflow, 'publish-release');
+const publisherRun = publisherWorkflow.slice(publisherWorkflow.indexOf('        run: |'));
 check(Boolean(publisherWorkflow), 'release workflow has one publisher job');
 check(
   publisherWorkflow.includes('needs: [build-windows, build-linux, build-macos]')
@@ -430,6 +549,21 @@ check(
 check(
   !/\b(?:npm|pip|cargo|python3?)\b|actions\/checkout@|frontends\/desktop\/scripts\//.test(publisherWorkflow),
   'publisher does not check out source or run package/build tooling',
+);
+check(
+  publisherWorkflow.includes('TAG_NAME: ${{ github.ref_name }}')
+    && publisherWorkflow.includes('TARGET_SHA: ${{ github.sha }}')
+    && !publisherRun.includes('${{ github.ref_name }}')
+    && !publisherRun.includes('${{ github.sha }}')
+    && publisherRun.includes('^desktop-portable-[A-Za-z0-9._-]+$')
+    && publisherRun.includes('^[0-9a-f]{40}$')
+    && publisherRun.includes('--target "$TARGET_SHA"'),
+  'publisher passes ref data through env and fail-closed tag/SHA validation',
+);
+check(
+  !/^desktop-portable-[A-Za-z0-9._-]+$/.test('desktop-portable-$(touch injected)')
+    && !/^desktop-portable-[A-Za-z0-9._-]+$/.test('desktop-portable-`touch injected`'),
+  'publisher tag validator rejects command-substitution payloads',
 );
 check(
   (publisherWorkflow.match(/actions\/download-artifact@/g) ?? []).length === 3,
@@ -462,6 +596,10 @@ check(
 const macJobWorkflow = buildJobWorkflows['build-macos'];
 const postDmgScript = readText('scripts/post-dmg.sh');
 const macInstallScript = readText('packaging/scripts/macos/install_macos.sh');
+const linuxInstallScript = readText('packaging/scripts/linux/install_linux.sh');
+const windowsInstallScript = readText('packaging/scripts/windows/install_windows.ps1');
+const settingsMergeHelper = readText('packaging/scripts/merge_desktop_settings.py');
+const settingsStorage = readText('../desktop_settings.py');
 check(
   macJobWorkflow.includes('runs-on: macos-15')
     && macJobWorkflow.includes('test "$(uname -m)" = arm64')
@@ -476,8 +614,8 @@ check(
 check(
   macJobWorkflow.includes('pip install --no-compile --no-index --find-links "$RUNTIME_SRC/wheels"')
     && macJobWorkflow.includes('pip uninstall --yes setuptools wheel')
-    && macJobWorkflow.includes("-name '__pycache__' -empty -delete"),
-  'macOS packaging omits installed build tools and bytecode caches',
+    && macJobWorkflow.includes('purge_runtime_bytecode "$RUNTIME_SRC"'),
+  'macOS packaging omits installed build tools and purges the prepared runtime',
 );
 check(
   !macJobWorkflow.includes('fastapi uvicorn websockets pydantic setuptools wheel')
@@ -485,19 +623,43 @@ check(
   'macOS packaging removes build tools from both the recovery wheelhouse and installed runtime',
 );
 check(
-  macJobWorkflow.includes('DMG_SITE_PACKAGES="$DMG_APP/Contents/Resources/runtime/python/lib/python3.12/site-packages"')
-    && macJobWorkflow.includes('PYTHONDONTWRITEBYTECODE=1 "$DMG_APP/Contents/Resources/runtime/python/bin/python3"')
-    && macJobWorkflow.includes('find "$DMG_SITE_PACKAGES" -type d -name \'__pycache__\'')
-    && macJobWorkflow.includes('find "$DMG_SITE_PACKAGES" -type f'),
+  macJobWorkflow.includes('DMG_RUNTIME="$DMG_APP/Contents/Resources/runtime"')
+    && macJobWorkflow.includes('PYTHONDONTWRITEBYTECODE=1 "$DMG_RUNTIME/python/bin/python3"')
+    && macJobWorkflow.includes('purge_runtime_bytecode "$DMG_RUNTIME"'),
   'macOS packaging verifies the final DMG app remains bytecode-cache free',
 );
 check(
   macInstallScript.includes('export PYTHONDONTWRITEBYTECODE=1')
     && macInstallScript.includes('pip install --no-compile --no-index --find-links "$WHEEL_DIR"')
     && macInstallScript.includes('--requirement "$locked_requirements"')
-    && macInstallScript.includes('pip install --upgrade pip setuptools wheel'),
+    && macInstallScript.includes('pip install --no-compile --upgrade pip setuptools wheel'),
   'macOS offline repair consumes the exact lock while online source repair keeps build tools separate',
 );
+check(
+  settingsMergeContract(
+    settingsStorage,
+    settingsMergeHelper,
+    [windowsInstallScript, linuxInstallScript, macInstallScript],
+    releaseWorkflow,
+  ),
+  'all installers use the bundled atomic read-modify-merge settings helper',
+);
+check(
+  !settingsMergeContract(
+    settingsStorage.replace('os.replace(temporary, settings_path)', 'settings_path.write_bytes(payload)'),
+    settingsMergeHelper,
+    [windowsInstallScript, linuxInstallScript, macInstallScript],
+    releaseWorkflow,
+  ),
+  'settings merge contract rejects removing atomic replacement',
+);
+for (const [label, script] of [
+  ['Windows', windowsInstallScript],
+  ['Linux', linuxInstallScript],
+  ['macOS', macInstallScript],
+]) {
+  check(!/pip[\\/]_vendor/.test(script), `${label} runtime cleanup preserves pip vendored sources`);
+}
 check(
   /bash frontends\/desktop\/scripts\/post-dmg\.sh "artifacts\/macos\/out\/GenericAgent-Desktop-macOS-aarch64\.dmg"/.test(macJobWorkflow),
   'macOS packaging applies the curated Finder layout',
@@ -513,6 +675,12 @@ check(
 check(
   publisherWorkflow.includes('neither Developer ID signed nor notarized'),
   'release notes accurately disclose the macOS signing and notarization status',
+);
+check(
+  publisherWorkflow.includes('Windows portable build is not code-signed')
+    && publisherWorkflow.includes('SmartScreen may warn')
+    && publisherWorkflow.includes('SHA256SUMS-windows.txt'),
+  'release notes disclose the unsigned Windows build and checksum guidance',
 );
 check(
   postDmgScript.includes('Only contains .app + Applications symlink + .DS_Store'),

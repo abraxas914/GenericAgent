@@ -31,6 +31,7 @@ env:
   PBS_RELEASE: "20260814"
   PBS_PYTHON_VERSION: "3.12.14"
   MACOS_PACKAGING_PYTHON_VERSION: "3.12.10"
+  PYTHONDONTWRITEBYTECODE: "1"
 
 jobs:
   # ----------------------------------------------------------------------------
@@ -63,7 +64,9 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm ci
+        run: |
+          npm ci
+          node -e "const v=require('./node_modules/@tauri-apps/cli/package.json').version; if(v!=='2.11.4') throw new Error('unexpected Tauri CLI '+v)"
 
       - name: Build Windows desktop exe
         working-directory: frontends/desktop
@@ -73,6 +76,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          purge_runtime_bytecode() {
+            local runtime_root="$1"
+            find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
+            find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+            if find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q .; then
+              echo "Python bytecode cache directory remains in packaged runtime: $runtime_root" >&2
+              return 1
+            fi
+            if find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+              echo "Python bytecode remains in packaged runtime: $runtime_root" >&2
+              return 1
+            fi
+          }
 
           EXE_SRC="$(find frontends/desktop/src-tauri/target/release -maxdepth 1 -type f -name 'ga-desktop.exe' | head -n 1)"
           [[ -n "$EXE_SRC" ]] || { echo "ga-desktop.exe not found" >&2; exit 1; }
@@ -84,6 +101,7 @@ jobs:
           # exe at the top level, named GenericAgent (typical portable form)
           cp "$EXE_SRC" "$PKG/GenericAgent.exe"
           cp frontends/desktop/packaging/scripts/windows/install_windows.ps1 "$RUNTIME/install_windows.ps1"
+          cp frontends/desktop/packaging/scripts/merge_desktop_settings.py "$RUNTIME/merge_desktop_settings.py"
           # Uninstaller: double-click entry at top level, worker script under runtime/.
           cp frontends/desktop/packaging/scripts/windows/uninstall.bat "$PKG/uninstall.bat"
           cp frontends/desktop/packaging/scripts/windows/uninstall_windows.ps1 "$RUNTIME/uninstall_windows.ps1"
@@ -100,7 +118,7 @@ jobs:
           printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | sha256sum --check --strict -
           tar -xzf "$PBS_ARCHIVE" -C "$RUNTIME"   # extracts a 'python/' dir (python.exe at top)
           PY="$RUNTIME/python/python.exe"
-          "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine().lower() in ("amd64", "x86_64"); print(sys.version)'
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine().lower() in ("amd64", "x86_64"); print(sys.version)'
 
           # App-local UCRT: python-build-standalone links the Universal CRT dynamically
           # and does NOT bundle it. Win10/11 ship UCRT in-box, but stripped/older images
@@ -119,16 +137,33 @@ jobs:
           # Offline binary-only wheels. requirements.txt pins direct and transitive versions.
           mkdir -p "$RUNTIME/wheels"
           cp frontends/desktop/packaging/python-runtime-requirements.txt "$RUNTIME/wheels/requirements.txt"
-          "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
             --requirement "$RUNTIME/wheels/requirements.txt"
 
           # Runtime source (project root minus heavy/dev/build dirs)
           mkdir -p "$RUNTIME/app"
           tar \
             --exclude='./.git' --exclude='./.github' \
+            --exclude='./frontends/tests' \
             --exclude='./frontends/desktop/src-tauri' \
+            --exclude='./frontends/desktop/src' \
+            --exclude='./frontends/desktop/public' \
+            --exclude='./frontends/desktop/scripts' \
+            --exclude='./frontends/desktop/e2e' \
+            --exclude='./frontends/desktop/tests' \
+            --exclude='./frontends/desktop/testing' \
+            --exclude='./frontends/desktop/spec' \
             --exclude='./frontends/desktop/node_modules' \
             --exclude='./frontends/desktop/dist' \
+            --exclude='./frontends/desktop/DESIGN.md' \
+            --exclude='./frontends/desktop/package.json' \
+            --exclude='./frontends/desktop/package-lock.json' \
+            --exclude='./frontends/desktop/.npmrc' \
+            --exclude='./frontends/desktop/index.html' \
+            --exclude='./frontends/desktop/loading.html' \
+            --exclude='./frontends/desktop/setup.html' \
+            --exclude='./frontends/desktop/tsconfig*.json' \
+            --exclude='./frontends/desktop/vite.config.ts' \
             --exclude='./frontends/desktop/packaging' --exclude='./docs' \
             --exclude='./assets/demo' --exclude='./assets/images' \
             --exclude='./assets/GenericAgent_Technical_Report.pdf' \
@@ -141,9 +176,14 @@ jobs:
           test -f "$RUNTIME/app/frontends/desktop_bridge.py"
           test -f "$RUNTIME/app/frontends/desktop/static/index.html"
           test ! -e "$RUNTIME/app/frontends/desktop/dist"
+          test ! -e "$RUNTIME/app/frontends/desktop/src"
+          test ! -e "$RUNTIME/app/frontends/desktop/public"
+          test ! -e "$RUNTIME/app/frontends/desktop/package-lock.json"
+          test ! -e "$RUNTIME/app/frontends/desktop/node_modules"
 
           # Drop python debug symbols (.pdb) to slim the package (~80MB)
           find "$RUNTIME/python" -name '*.pdb' -delete 2>/dev/null || true
+          purge_runtime_bytecode "$RUNTIME"
 
           cat > "$PKG/readme.txt" <<'EOF'
           ================ 中文 ================
@@ -158,13 +198,14 @@ jobs:
           使用
           1. 解压到任意目录（路径建议不含特殊字符）。
           2. 双击 GenericAgent.exe。
-          3. 首次启动会自动离线准备运行环境（建虚拟环境、装依赖），界面显示进度，完成后进入主界面。
+          3. 首次启动会离线校验并补齐随包 Python 运行时依赖，界面显示进度，完成后进入主界面。
           4. 之后启动直接秒进。
 
           说明
           - 想真正对话，仍需在程序里配置模型 / API Key。
           - 如果 Windows Defender 防火墙拦截 `127.0.0.1` / `localhost` 回环连接，程序可能无法启动或连接本机服务。请允许 `GenericAgent.exe` 和 `runtime\python\python.exe` 通过防火墙，然后重启桌面端。
-          - 首次准备完成后不要移动本文件夹；若已移动，删除 runtime\app\.venv 后重新启动即可重建。
+          - 本便携版尚未使用 Windows 代码签名证书；SmartScreen 可能显示警告。运行前请用随包发布的 SHA256SUMS-windows.txt 核对 ZIP。
+          - 可整体移动本文件夹；重启后会自动刷新路径。若需强制重新准备，请删除 runtime\.prepared 后重启。
           - runtime\ 是内置运行环境与源码，正常使用无需改动。
 
           ================ English ================
@@ -179,14 +220,16 @@ jobs:
           Usage
           1. Extract anywhere (a path without special characters is recommended).
           2. Double-click GenericAgent.exe.
-          3. The first launch prepares the runtime offline (creates a venv, installs deps) with a
+          3. The first launch verifies and completes the bundled Python runtime offline with a
              progress UI, then opens the main window.
           4. Subsequent launches start instantly.
 
           Notes
           - To actually chat, configure a model / API key inside the app.
           - If Windows Defender Firewall blocks the `127.0.0.1` / `localhost` loopback connection, the app may fail to start or reach its local service. Allow `GenericAgent.exe` and `runtime\python\python.exe` through the firewall, then restart the desktop app.
-          - Do not move this folder after the first setup; if you did, delete runtime\app\.venv and relaunch to rebuild.
+          - This portable build is not Windows code-signed, so SmartScreen may warn. Verify the ZIP against the published SHA256SUMS-windows.txt before running it.
+          - You may move the whole folder; relaunching refreshes its saved paths. To force a new
+            preparation pass, delete runtime\.prepared and relaunch.
           - runtime\ holds the bundled runtime and source; no need to touch it.
           EOF
           sed -i 's/^          //' "$PKG/readme.txt"
@@ -218,7 +261,7 @@ jobs:
   build-linux:
     name: Linux portable
     if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/desktop-portable-')) || (github.event_name == 'workflow_dispatch' && (github.event.inputs.target == 'all' || github.event.inputs.target == 'linux')) }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     steps:
@@ -250,11 +293,16 @@ jobs:
             libgtk-3-dev \
             libayatana-appindicator3-dev \
             librsvg2-dev \
-            patchelf
+            patchelf \
+            binutils \
+            file \
+            xvfb
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm ci
+        run: |
+          npm ci
+          node -e "const v=require('./node_modules/@tauri-apps/cli/package.json').version; if(v!=='2.11.4') throw new Error('unexpected Tauri CLI '+v)"
 
       - name: Build Linux AppImage
         working-directory: frontends/desktop
@@ -264,6 +312,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          purge_runtime_bytecode() {
+            local runtime_root="$1"
+            find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
+            find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+            if find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q .; then
+              echo "Python bytecode cache directory remains in packaged runtime: $runtime_root" >&2
+              return 1
+            fi
+            if find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+              echo "Python bytecode remains in packaged runtime: $runtime_root" >&2
+              return 1
+            fi
+          }
+
           APPIMAGE_SRC="$(find frontends/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
           [[ -n "$APPIMAGE_SRC" ]] || { echo "No AppImage found" >&2; exit 1; }
 
@@ -277,6 +340,7 @@ jobs:
           # Icon for the generated .desktop launcher (Icon= needs a real image file on Linux).
           cp frontends/desktop/src-tauri/icons/icon.png "$PKG/GenericAgent.png"
           cp frontends/desktop/packaging/scripts/linux/install_linux.sh "$RUNTIME/install_linux.sh"
+          cp frontends/desktop/packaging/scripts/merge_desktop_settings.py "$RUNTIME/merge_desktop_settings.py"
           chmod +x "$RUNTIME/install_linux.sh"
           # Uninstaller: top-level entry next to the AppImage.
           cp frontends/desktop/packaging/scripts/linux/uninstall.sh "$PKG/uninstall.sh"
@@ -291,21 +355,38 @@ jobs:
           printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | sha256sum --check --strict -
           tar -xzf "$PBS_ARCHIVE" -C "$RUNTIME"   # extracts a 'python/' dir
           PY="$RUNTIME/python/bin/python3"
-          "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine() == "x86_64"; print(sys.version)'
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine() == "x86_64"; print(sys.version)'
 
           # Offline binary-only wheels. requirements.txt pins direct and transitive versions.
           mkdir -p "$RUNTIME/wheels"
           cp frontends/desktop/packaging/python-runtime-requirements.txt "$RUNTIME/wheels/requirements.txt"
-          "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
             --requirement "$RUNTIME/wheels/requirements.txt"
 
           # Runtime source (project root minus heavy/dev/build dirs)
           mkdir -p "$RUNTIME/app"
           tar \
             --exclude='./.git' --exclude='./.github' \
+            --exclude='./frontends/tests' \
             --exclude='./frontends/desktop/src-tauri' \
+            --exclude='./frontends/desktop/src' \
+            --exclude='./frontends/desktop/public' \
+            --exclude='./frontends/desktop/scripts' \
+            --exclude='./frontends/desktop/e2e' \
+            --exclude='./frontends/desktop/tests' \
+            --exclude='./frontends/desktop/testing' \
+            --exclude='./frontends/desktop/spec' \
             --exclude='./frontends/desktop/node_modules' \
             --exclude='./frontends/desktop/dist' \
+            --exclude='./frontends/desktop/DESIGN.md' \
+            --exclude='./frontends/desktop/package.json' \
+            --exclude='./frontends/desktop/package-lock.json' \
+            --exclude='./frontends/desktop/.npmrc' \
+            --exclude='./frontends/desktop/index.html' \
+            --exclude='./frontends/desktop/loading.html' \
+            --exclude='./frontends/desktop/setup.html' \
+            --exclude='./frontends/desktop/tsconfig*.json' \
+            --exclude='./frontends/desktop/vite.config.ts' \
             --exclude='./frontends/desktop/packaging' --exclude='./docs' \
             --exclude='./assets/demo' --exclude='./assets/images' \
             --exclude='./assets/GenericAgent_Technical_Report.pdf' \
@@ -318,9 +399,12 @@ jobs:
           test -f "$RUNTIME/app/frontends/desktop_bridge.py"
           test -f "$RUNTIME/app/frontends/desktop/static/index.html"
           test ! -e "$RUNTIME/app/frontends/desktop/dist"
+          test ! -e "$RUNTIME/app/frontends/desktop/src"
+          test ! -e "$RUNTIME/app/frontends/desktop/public"
+          test ! -e "$RUNTIME/app/frontends/desktop/package-lock.json"
+          test ! -e "$RUNTIME/app/frontends/desktop/node_modules"
 
-          # Drop python debug/cache bits to slim the package
-          find "$RUNTIME/python" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          purge_runtime_bytecode "$RUNTIME"
 
           cat > "$PKG/readme.txt" <<'EOF'
           ================ 中文 ================
@@ -329,7 +413,7 @@ jobs:
           无需安装 Python、无需联网装依赖、无需源码仓库——全部已内置。
 
           前置条件
-          - Linux x86_64（glibc，常见发行版即可）
+          - Linux x86_64，glibc 2.35 或更高版本（如 Ubuntu 22.04、Debian 12）
           - 桌面环境 + FUSE（运行 AppImage 所需；多数发行版自带）
 
           使用
@@ -337,12 +421,12 @@ jobs:
           2. 给 AppImage 执行权限并运行：
                  chmod +x GenericAgent.AppImage
                  ./GenericAgent.AppImage
-          3. 首次启动会自动离线准备运行环境（建虚拟环境、装依赖），界面显示进度，完成后进入主界面。
+          3. 首次启动会离线校验并补齐随包 Python 运行时依赖，界面显示进度，完成后进入主界面。
           4. 之后启动直接秒进。
 
           说明
           - 想真正对话，仍需在程序里配置模型 / API Key。
-          - 首次准备完成后不要移动本文件夹；若已移动，删除 runtime/app/.venv 后重新启动即可重建。
+          - 可整体移动本文件夹；重启后会自动刷新路径。若需强制重新准备，请删除 runtime/.prepared 后重启。
           - runtime/ 是内置运行环境与源码，正常使用无需改动。
 
           ================ English ================
@@ -351,7 +435,7 @@ jobs:
           No Python install, no internet for dependencies, no source checkout — everything is bundled.
 
           Requirements
-          - Linux x86_64 (glibc; common distributions work)
+          - Linux x86_64 with glibc 2.35 or newer (for example Ubuntu 22.04 or Debian 12)
           - A desktop environment + FUSE (required to run the AppImage; preinstalled on most distros)
 
           Usage
@@ -359,13 +443,14 @@ jobs:
           2. Make the AppImage executable and run it:
                  chmod +x GenericAgent.AppImage
                  ./GenericAgent.AppImage
-          3. The first launch prepares the runtime offline (creates a venv, installs deps) with a
+          3. The first launch verifies and completes the bundled Python runtime offline with a
              progress UI, then opens the main window.
           4. Subsequent launches start instantly.
 
           Notes
           - To actually chat, configure a model / API key inside the app.
-          - Do not move this folder after the first setup; if you did, delete runtime/app/.venv and relaunch to rebuild.
+          - You may move the whole folder; relaunching refreshes its saved paths. To force a new
+            preparation pass, delete runtime/.prepared and relaunch.
           - runtime/ holds the bundled runtime and source; no need to touch it.
           EOF
           sed -i 's/^          //' "$PKG/readme.txt"
@@ -378,6 +463,61 @@ jobs:
           echo "Package contents (first 40 of $(wc -l < /tmp/pkglist.txt) entries):"
           head -40 /tmp/pkglist.txt
           ls -lh artifacts/linux/out
+
+          # Exercise the exact archived candidate on the oldest supported builder.
+          SMOKE_ROOT="${RUNNER_TEMP}/ga-linux-package-smoke"
+          mkdir -p "$SMOKE_ROOT"
+          tar -xzf artifacts/linux/out/GenericAgent-Desktop-Linux-Portable.tar.gz -C "$SMOKE_ROOT"
+          SMOKE_PACKAGE="$SMOKE_ROOT/GenericAgent-Desktop-Linux-Portable"
+          APPIMAGE_ABS="$(realpath "$SMOKE_PACKAGE/GenericAgent.AppImage")"
+          APPIMAGE_SCAN="$SMOKE_ROOT/appimage-scan"
+          mkdir -p "$APPIMAGE_SCAN"
+          (cd "$APPIMAGE_SCAN" && "$APPIMAGE_ABS" --appimage-extract >/dev/null)
+          MAX_GLIBC=""
+          ELF_COUNT=0
+          while IFS= read -r -d '' candidate; do
+            file -b "$candidate" | grep -q '^ELF' || continue
+            ELF_COUNT=$((ELF_COUNT + 1))
+            candidate_max="$(readelf --version-info "$candidate" 2>/dev/null \
+              | sed -n 's/.*Name: GLIBC_\([0-9][0-9.]*\).*/\1/p' \
+              | sort -V | tail -n 1)"
+            [[ -n "$candidate_max" ]] || continue
+            if [[ -z "$MAX_GLIBC" \
+                  || "$(printf '%s\n%s\n' "$MAX_GLIBC" "$candidate_max" | sort -V | tail -n 1)" == "$candidate_max" ]]; then
+              MAX_GLIBC="$candidate_max"
+            fi
+          done < <(find "$SMOKE_PACKAGE" "$APPIMAGE_SCAN/squashfs-root" -type f -print0)
+          [[ "$ELF_COUNT" -gt 0 && -n "$MAX_GLIBC" ]] \
+            || { echo "No GLIBC symbol versions found in final Linux package ELFs" >&2; exit 1; }
+          [[ "$(printf '%s\n%s\n' "$MAX_GLIBC" '2.35' | sort -V | tail -n 1)" == "2.35" ]] \
+            || { echo "Final package requires GLIBC_$MAX_GLIBC; maximum allowed is GLIBC_2.35" >&2; exit 1; }
+          echo "Scanned $ELF_COUNT final package ELFs; maximum symbol is GLIBC_$MAX_GLIBC"
+          APPIMAGE_EXTRACT_AND_RUN=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+            xvfb-run -a "$SMOKE_PACKAGE/GenericAgent.AppImage" >"$SMOKE_ROOT/app.log" 2>&1 &
+          SMOKE_PID=$!
+          cleanup_smoke() {
+            kill "$SMOKE_PID" 2>/dev/null || true
+            wait "$SMOKE_PID" 2>/dev/null || true
+          }
+          trap cleanup_smoke EXIT
+          IDENTITY=""
+          for _ in $(seq 1 120); do
+            IDENTITY="$(curl --fail --silent --max-time 1 http://127.0.0.1:14168/services/identity || true)"
+            [[ -n "$IDENTITY" ]] && break
+            sleep 1
+          done
+          [[ -n "$IDENTITY" ]] || { cat "$SMOKE_ROOT/app.log" >&2; exit 1; }
+          EXPECTED_APP_DIR="$SMOKE_PACKAGE/runtime/app/frontends" \
+            IDENTITY="$IDENTITY" python3 - <<'PY'
+          import json, os, pathlib
+          identity = json.loads(os.environ["IDENTITY"])
+          actual = pathlib.Path(identity["app_dir"]).resolve()
+          expected = pathlib.Path(os.environ["EXPECTED_APP_DIR"]).resolve()
+          assert actual == expected, (actual, expected)
+          PY
+          curl --fail --silent --max-time 3 -X POST http://127.0.0.1:14168/services/bridge/exit >/dev/null
+          cleanup_smoke
+          trap - EXIT
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -418,7 +558,9 @@ jobs:
 
       - name: Install desktop dependencies
         working-directory: frontends/desktop
-        run: npm ci
+        run: |
+          npm ci
+          node -e "const v=require('./node_modules/@tauri-apps/cli/package.json').version; if(v!=='2.11.4') throw new Error('unexpected Tauri CLI '+v)"
 
       - name: Set up Python DMG tooling runtime
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -441,6 +583,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          purge_runtime_bytecode() {
+            local runtime_root="$1"
+            find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
+            find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+            if find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q .; then
+              echo "Python bytecode cache directory remains in packaged runtime: $runtime_root" >&2
+              return 1
+            fi
+            if find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
+              echo "Python bytecode remains in packaged runtime: $runtime_root" >&2
+              return 1
+            fi
+          }
+
           APP_SRC="$(find frontends/desktop/src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -n 1)"
           [[ -n "$APP_SRC" ]] || { echo "No .app found" >&2; exit 1; }
 
@@ -448,6 +605,7 @@ jobs:
           RUNTIME_SRC="artifacts/macos/runtime-src"
           mkdir -p "$RUNTIME_SRC"
           cp frontends/desktop/packaging/scripts/macos/install_macos.sh "$RUNTIME_SRC/install_macos.sh"
+          cp frontends/desktop/packaging/scripts/merge_desktop_settings.py "$RUNTIME_SRC/merge_desktop_settings.py"
           chmod +x "$RUNTIME_SRC/install_macos.sh"
 
           # Fixed python-build-standalone macOS arm64 archive.
@@ -459,7 +617,7 @@ jobs:
           printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | shasum -a 256 --check -
           tar -xzf "$PBS_ARCHIVE" -C "$RUNTIME_SRC"   # extracts a 'python/' dir
           PY="$RUNTIME_SRC/python/bin/python3"
-          "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine() == "arm64"; print(sys.version)'
+          PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import platform, sys; assert sys.version_info[:3] == (3, 12, 14); assert platform.machine() == "arm64"; print(sys.version)'
 
           # Offline binary-only wheels. requirements.txt pins direct and transitive versions.
           mkdir -p "$RUNTIME_SRC/wheels"
@@ -476,23 +634,8 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip uninstall --yes setuptools wheel
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip check
 
-          SITE_PACKAGES="$(PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-          test -d "$SITE_PACKAGES"
-          find "$SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-          find "$SITE_PACKAGES" -depth -type d -name '__pycache__' -empty -delete
-          if find "$SITE_PACKAGES" -type d -name '__pycache__' -print -quit | grep -q .; then
-            echo "Python bytecode cache directory remains in final site-packages" >&2
-            exit 1
-          fi
-          if find "$SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-            echo "Python bytecode cache remains in final site-packages" >&2
-            exit 1
-          fi
           PYTHONDONTWRITEBYTECODE=1 "$PY" -c 'import aiohttp, fastapi, importlib.util, pydantic, uvicorn, websockets; assert all(importlib.util.find_spec(name) is None for name in ("setuptools", "wheel", "pkg_resources"))'
-          if find "$SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-            echo "Import verification recreated Python bytecode in final site-packages" >&2
-            exit 1
-          fi
+          purge_runtime_bytecode "$RUNTIME_SRC"
           printf 'ok\n' > "$RUNTIME_SRC/.prepared"
           test -s "$RUNTIME_SRC/.prepared"
 
@@ -500,9 +643,26 @@ jobs:
           mkdir -p "$RUNTIME_SRC/app"
           tar \
             --exclude='.git' --exclude='.github' \
+            --exclude='frontends/tests' \
             --exclude='frontends/desktop/src-tauri' \
+            --exclude='frontends/desktop/src' \
+            --exclude='frontends/desktop/public' \
+            --exclude='frontends/desktop/scripts' \
+            --exclude='frontends/desktop/e2e' \
+            --exclude='frontends/desktop/tests' \
+            --exclude='frontends/desktop/testing' \
+            --exclude='frontends/desktop/spec' \
             --exclude='frontends/desktop/node_modules' \
             --exclude='frontends/desktop/dist' \
+            --exclude='frontends/desktop/DESIGN.md' \
+            --exclude='frontends/desktop/package.json' \
+            --exclude='frontends/desktop/package-lock.json' \
+            --exclude='frontends/desktop/.npmrc' \
+            --exclude='frontends/desktop/index.html' \
+            --exclude='frontends/desktop/loading.html' \
+            --exclude='frontends/desktop/setup.html' \
+            --exclude='frontends/desktop/tsconfig*.json' \
+            --exclude='frontends/desktop/vite.config.ts' \
             --exclude='frontends/desktop/packaging' --exclude='docs' \
             --exclude='assets/demo' --exclude='assets/images' \
             --exclude='assets/GenericAgent_Technical_Report.pdf' \
@@ -515,6 +675,10 @@ jobs:
           test -f "$RUNTIME_SRC/app/frontends/desktop_bridge.py"
           test -f "$RUNTIME_SRC/app/frontends/desktop/static/index.html"
           test ! -e "$RUNTIME_SRC/app/frontends/desktop/dist"
+          test ! -e "$RUNTIME_SRC/app/frontends/desktop/src"
+          test ! -e "$RUNTIME_SRC/app/frontends/desktop/public"
+          test ! -e "$RUNTIME_SRC/app/frontends/desktop/package-lock.json"
+          test ! -e "$RUNTIME_SRC/app/frontends/desktop/node_modules"
 
           DMG_STAGE="artifacts/macos/dmg-stage"
           DMG_APP="$DMG_STAGE/GenericAgent.app"
@@ -526,18 +690,10 @@ jobs:
           mkdir -p "$DMG_APP/Contents/Resources"
           ditto "$RUNTIME_SRC" "$DMG_APP/Contents/Resources/runtime"
           test -s "$DMG_APP/Contents/Resources/runtime/.prepared"
-          DMG_SITE_PACKAGES="$DMG_APP/Contents/Resources/runtime/python/lib/python3.12/site-packages"
-          test -d "$DMG_SITE_PACKAGES"
-          PYTHONDONTWRITEBYTECODE=1 "$DMG_APP/Contents/Resources/runtime/python/bin/python3" \
+          DMG_RUNTIME="$DMG_APP/Contents/Resources/runtime"
+          PYTHONDONTWRITEBYTECODE=1 "$DMG_RUNTIME/python/bin/python3" \
             -c 'import aiohttp, fastapi, pydantic, uvicorn, websockets'
-          if find "$DMG_SITE_PACKAGES" -type d -name '__pycache__' -print -quit | grep -q .; then
-            echo "Python bytecode cache directory remains in final DMG app" >&2
-            exit 1
-          fi
-          if find "$DMG_SITE_PACKAGES" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-            echo "Python bytecode cache remains in final DMG app" >&2
-            exit 1
-          fi
+          purge_runtime_bytecode "$DMG_RUNTIME"
           # Ad-hoc signing only: this is not Developer ID signing or notarization.
           codesign --force --deep --sign - "$DMG_APP"
           codesign --verify --deep --strict "$DMG_APP"
@@ -603,6 +759,8 @@ jobs:
       - name: Validate six assets and publish prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ github.ref_name }}
+          TARGET_SHA: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -646,7 +804,10 @@ jobs:
           verify_checksum_manifest SHA256SUMS-linux.txt GenericAgent-Desktop-Linux-Portable.tar.gz
           verify_checksum_manifest GenericAgent-Desktop-macOS-aarch64.dmg.sha256 GenericAgent-Desktop-macOS-aarch64.dmg
 
-          TAG_NAME="${{ github.ref_name }}"
+          [[ "$TAG_NAME" =~ ^desktop-portable-[A-Za-z0-9._-]+$ ]] \
+            || { echo "Invalid release tag: $TAG_NAME" >&2; exit 1; }
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] \
+            || { echo "Invalid release target SHA" >&2; exit 1; }
           TITLE="GenericAgent Desktop ${TAG_NAME}"
           NOTES_FILE="${RUNNER_TEMP}/ga-release-notes.md"
           cat > "$NOTES_FILE" <<'EOF'
@@ -663,6 +824,9 @@ jobs:
             macOS Apple silicon (arm64): open `GenericAgent-Desktop-macOS-aarch64.dmg` and drag `GenericAgent.app` to Applications.
 
           ## 签名状态 / Signing status
+          Windows 便携版尚未使用代码签名证书，SmartScreen 可能显示警告；运行前请核对 `SHA256SUMS-windows.txt`。
+          The Windows portable build is not code-signed, so SmartScreen may warn; verify `SHA256SUMS-windows.txt` before running it.
+
           macOS 应用仅使用 ad-hoc 签名，未使用 Apple Developer ID，也未 notarize。首次打开可能需要右键选择“打开”或在“隐私与安全性”中允许。
           The macOS app is ad-hoc signed only. It is neither Developer ID signed nor notarized; first launch may require Open from the context menu or approval in Privacy & Security.
 
@@ -681,7 +845,7 @@ jobs:
           done
           # Keep the release invisible while all assets upload; only the final edit publishes it.
           gh release create "$TAG_NAME" "${ASSETS[@]}" \
-            --target "${{ github.sha }}" \
+            --target "$TARGET_SHA" \
             --title "$TITLE" \
             --notes-file "$NOTES_FILE" \
             --draft \
