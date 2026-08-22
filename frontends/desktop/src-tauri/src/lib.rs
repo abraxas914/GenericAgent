@@ -451,53 +451,86 @@ fn bundle_python() -> Option<PathBuf> {
     }
 }
 
-/// Find python executable:
-/// 1. The embedded bundle python (runtime/python) — deps are installed directly into it
-///    (no venv), and its path is resolved relative to the bundle anchor at runtime, so the
-///    package stays relocatable (moving the folder doesn't break absolute venv paths).
-/// 2. .portable/uv-python/ 下找 python.exe (Windows) 或 python3 (Unix)
-/// 3. Fallback to system PATH
-fn find_python() -> String {
-    if let Some(p) = bundle_python() {
-        return p.to_string_lossy().to_string();
-    }
-    let root = project_root();
-    let portable_python_dir = root.join(".portable").join("uv-python");
-
-    if portable_python_dir.exists() {
-        // uv installs python like: uv-python/cpython-3.12.x-windows-x86_64/python.exe
-        // We need to search for python.exe inside subdirectories
-        if let Ok(entries) = std::fs::read_dir(&portable_python_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    #[cfg(windows)]
-                    {
-                        let py = path.join("python.exe");
-                        if py.exists() {
-                            return py.to_string_lossy().to_string();
-                        }
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        let py = path.join("bin").join("python3");
-                        if py.exists() {
-                            return py.to_string_lossy().to_string();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback: system PATH
+fn platform_python_name() -> &'static str {
     #[cfg(windows)]
     {
-        "python".to_string()
+        "python"
     }
     #[cfg(not(windows))]
     {
-        "python3".to_string()
+        "python3"
+    }
+}
+
+fn project_venv_python(project: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        project.join(".venv").join("Scripts").join("python.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        project.join(".venv").join("bin").join("python")
+    }
+}
+
+fn portable_python(project: &Path) -> Option<PathBuf> {
+    let root = project.join(".portable").join("uv-python");
+    #[cfg(windows)]
+    let direct = root.join("python.exe");
+    #[cfg(not(windows))]
+    let direct = root.join("bin").join("python3");
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let mut children = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    children.sort();
+    children.into_iter().find_map(|path| {
+        #[cfg(windows)]
+        let python = path.join("python.exe");
+        #[cfg(not(windows))]
+        let python = path.join("bin").join("python3");
+        python.is_file().then_some(python)
+    })
+}
+
+fn discover_python_for_project_path(project: &Path, saved_python: Option<&str>) -> String {
+    if let Some(python) = bundle_python() {
+        return display_path(&python);
+    }
+    let venv = project_venv_python(project);
+    if venv.is_file() {
+        return display_path(&venv);
+    }
+    if let Some(python) = portable_python(project) {
+        return display_path(&python);
+    }
+    if let Some(python) = saved_python
+        .map(str::trim)
+        .filter(|python| python_interpreter_resolves(python))
+    {
+        return python.to_string();
+    }
+    let fallback = platform_python_name();
+    if python_interpreter_resolves(fallback) {
+        fallback.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Resolve package, project-local, portable, saved, then PATH Python in that order.
+fn find_python() -> String {
+    let discovered = discover_python_for_project_path(&project_root(), None);
+    if discovered.is_empty() {
+        platform_python_name().to_string()
+    } else {
+        discovered
     }
 }
 
@@ -977,7 +1010,7 @@ pub fn get_or_discover_config() -> (String, String) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if !python.is_empty()
+                if python_interpreter_resolves(&python)
                     && !project.is_empty()
                     && PathBuf::from(&project)
                         .join("frontends")
@@ -991,8 +1024,12 @@ pub fn get_or_discover_config() -> (String, String) {
     }
 
     // Auto-discover
-    let python = find_python();
     let project = find_project_dir().unwrap_or_default();
+    let python = if project.is_empty() {
+        find_python()
+    } else {
+        discover_python_for_project_path(Path::new(&project), None)
+    };
 
     // Save discovered config
     if !python.is_empty() && !project.is_empty() {
@@ -1825,7 +1862,9 @@ fn resolve_requested_bootstrap_config(
         return get_or_discover_config();
     }
     let python = if requested_python.trim().is_empty() {
-        find_python()
+        let settings = read_settings();
+        let saved = settings.get("python_path").and_then(|value| value.as_str());
+        discover_python_for_project_path(Path::new(requested_project.trim()), saved)
     } else {
         requested_python
     };
@@ -1868,6 +1907,11 @@ fn get_config() -> (String, String) {
 }
 
 #[tauri::command]
+fn discover_python_for_project(project_dir: String, current_python: Option<String>) -> String {
+    discover_python_for_project_path(Path::new(project_dir.trim()), current_python.as_deref())
+}
+
+#[tauri::command]
 fn export_mykey(content: String) -> Result<Option<String>, String> {
     let path = rfd::FileDialog::new()
         .set_file_name("mykey.py")
@@ -1891,6 +1935,25 @@ fn pick_directory(title: Option<String>) -> Option<String> {
         }
     }
     dlg.pick_folder().map(|p| p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn pick_python_interpreter(title: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new();
+    #[cfg(windows)]
+    {
+        dialog = dialog.add_filter("Python", &["exe"]);
+    }
+    if let Some(value) = title.filter(|value| !value.is_empty()) {
+        dialog = dialog.set_title(&value);
+    }
+    let Some(path) = dialog.pick_file() else {
+        return Ok(None);
+    };
+    if !path.is_file() {
+        return Err("the selected Python environment is unavailable".to_string());
+    }
+    Ok(Some(display_path(&path)))
 }
 
 #[tauri::command]
@@ -2132,8 +2195,10 @@ pub fn run() {
             retry_bootstrap,
             get_bootstrap_snapshot,
             get_config,
+            discover_python_for_project,
             export_mykey,
             pick_directory,
+            pick_python_interpreter,
             pick_data_backup_file,
             pick_data_export_path,
             reveal_in_file_manager,
@@ -2376,6 +2441,47 @@ mod tests {
         assert!(!python_interpreter_resolves(
             "/definitely/missing/genericagent-python"
         ));
+    }
+
+    #[test]
+    fn project_python_discovery_prefers_venv_then_sorted_portable_then_saved() {
+        let root = std::env::temp_dir().join(format!(
+            "ga-python-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let portable_a = root.join(".portable").join("uv-python").join("a");
+        let portable_z = root.join(".portable").join("uv-python").join("z");
+        #[cfg(windows)]
+        let portable_a_python = portable_a.join("python.exe");
+        #[cfg(not(windows))]
+        let portable_a_python = portable_a.join("bin").join("python3");
+        #[cfg(windows)]
+        let portable_z_python = portable_z.join("python.exe");
+        #[cfg(not(windows))]
+        let portable_z_python = portable_z.join("bin").join("python3");
+        std::fs::create_dir_all(portable_a_python.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(portable_z_python.parent().unwrap()).unwrap();
+        std::fs::write(&portable_a_python, []).unwrap();
+        std::fs::write(&portable_z_python, []).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            discover_python_for_project_path(&root, Some(current_exe.to_str().unwrap())),
+            display_path(&portable_a_python)
+        );
+
+        let venv = project_venv_python(&root);
+        std::fs::create_dir_all(venv.parent().unwrap()).unwrap();
+        std::fs::write(&venv, []).unwrap();
+        assert_eq!(
+            discover_python_for_project_path(&root, Some(current_exe.to_str().unwrap())),
+            display_path(&venv)
+        );
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

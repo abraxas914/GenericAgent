@@ -24,14 +24,24 @@ description = "Read saved bridge spawn configuration."
 commands.allow = ["get_config"]
 
 [[permission]]
+identifier = "allow-discover-python-for-project"
+description = "Discover a usable Python environment for a selected application folder."
+commands.allow = ["discover_python_for_project"]
+
+[[permission]]
 identifier = "allow-export-mykey"
 description = "Save mykey.py via native file dialog."
 commands.allow = ["export_mykey"]
 
 [[permission]]
 identifier = "allow-pick-directory"
-description = "Pick a local data or repository directory via a native folder dialog."
+description = "Pick a local application, data, or repository directory via a native folder dialog."
 commands.allow = ["pick_directory"]
+
+[[permission]]
+identifier = "allow-pick-python-interpreter"
+description = "Pick a Python environment through a native file dialog."
+commands.allow = ["pick_python_interpreter"]
 
 [[permission]]
 identifier = "allow-pick-data-backup-file"

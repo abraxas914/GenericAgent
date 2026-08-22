@@ -1,23 +1,79 @@
-import { IconCopy, IconRefresh } from '@douyinfe/semi-icons';
-import { Banner, Button, Collapse, Form, Typography } from '@douyinfe/semi-ui';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { IconCopy, IconFile, IconFolderOpen } from '@douyinfe/semi-icons';
+import { Banner, Button, Collapse, Typography } from '@douyinfe/semi-ui';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { BootstrapFailureCode, BootstrapSnapshot } from '../loading/types';
 import {
   getSetupTauri,
   isNewerSnapshot,
   legacyFailureSnapshot,
   loadSetupBootstrap,
+  chooseSetupProject,
+  chooseSetupPython,
   retrySetupBootstrap,
   type SetupBootstrapMode,
+  type SetupValues,
 } from './bootstrap';
 import { diagnosticsText, failureMessage, setupCopy, setupLanguage } from './copy';
 
-interface SetupValues {
-  projectDir: string;
-  pythonPath: string;
+const EMPTY_VALUES: SetupValues = { projectDir: '', pythonPath: '' };
+
+interface SetupLocationFieldProps {
+  label: string;
+  hint: string;
+  value: string;
+  emptyText: string;
+  buttonText: string;
+  buttonLabel: string;
+  loading: boolean;
+  disabled: boolean;
+  icon: ReactNode;
+  onChoose: () => void;
 }
 
-const EMPTY_VALUES: SetupValues = { projectDir: '', pythonPath: '' };
+function SetupLocationField({
+  label,
+  hint,
+  value,
+  emptyText,
+  buttonText,
+  buttonLabel,
+  loading,
+  disabled,
+  icon,
+  onChoose,
+}: SetupLocationFieldProps) {
+  return (
+    <section className="ga-setup-location" aria-label={label}>
+      <div className="ga-setup-location-header">
+        <Typography.Text strong>{label}</Typography.Text>
+        <Button
+          size="small"
+          type="tertiary"
+          theme="light"
+          icon={icon}
+          loading={loading}
+          disabled={disabled}
+          aria-label={buttonLabel}
+          onClick={onChoose}
+        >
+          {buttonText}
+        </Button>
+      </div>
+      <div
+        className={`ga-setup-path${value ? '' : ' ga-setup-path--empty'}`}
+        role="textbox"
+        aria-readonly="true"
+        aria-label={label}
+        tabIndex={0}
+      >
+        {value ? <code>{value}</code> : <span>{emptyText}</span>}
+      </div>
+      <Typography.Paragraph type="tertiary" size="small" className="ga-setup-location-hint">
+        {hint}
+      </Typography.Paragraph>
+    </section>
+  );
+}
 
 function syntheticFailure(error: unknown, seq: number): BootstrapSnapshot {
   return {
@@ -42,15 +98,22 @@ function syntheticFailure(error: unknown, seq: number): BootstrapSnapshot {
 export function SetupApp() {
   const language = setupLanguage();
   const copy = setupCopy(language);
-  const formApiRef = useRef<{ setValues: (values: Partial<SetupValues>) => void } | null>(null);
   const valuesRef = useRef<SetupValues>(EMPTY_VALUES);
   const [values, setValues] = useState<SetupValues>(EMPTY_VALUES);
   const [snapshot, setSnapshot] = useState<BootstrapSnapshot | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [selectingProject, setSelectingProject] = useState(false);
+  const [selectingPython, setSelectingPython] = useState(false);
+  const [pickerStatus, setPickerStatus] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
   const latestSeq = useRef(-1);
   const snapshotRef = useRef<BootstrapSnapshot | null>(null);
   const bootstrapMode = useRef<SetupBootstrapMode>('snapshot');
+
+  const commitValues = useCallback((next: SetupValues) => {
+    valuesRef.current = next;
+    setValues(next);
+  }, []);
 
   const renderSnapshot = useCallback((next: BootstrapSnapshot) => {
     const previousSnapshot = snapshotRef.current;
@@ -67,11 +130,9 @@ export function SetupApp() {
       prefill.pythonPath = next.diagnostics.pythonPath;
     }
     if (Object.keys(prefill).length) {
-      valuesRef.current = { ...valuesRef.current, ...prefill };
-      setValues(valuesRef.current);
-      formApiRef.current?.setValues(prefill);
+      commitValues({ ...valuesRef.current, ...prefill });
     }
-  }, []);
+  }, [commitValues]);
 
   useEffect(() => {
     window.__GA_SETUP_MARK_READY__?.();
@@ -106,12 +167,10 @@ export function SetupApp() {
       bootstrapMode.current = loaded.mode;
       const config = loaded.config;
       const configured = { pythonPath: config?.[0] || '', projectDir: config?.[1] || '' };
-      valuesRef.current = {
+      commitValues({
         pythonPath: valuesRef.current.pythonPath || configured.pythonPath,
         projectDir: valuesRef.current.projectDir || configured.projectDir,
-      };
-      setValues(valuesRef.current);
-      formApiRef.current?.setValues(valuesRef.current);
+      });
       renderSnapshot(loaded.snapshot);
     })().catch((error) => {
       if (active) renderSnapshot(syntheticFailure(error, latestSeq.current + 1));
@@ -120,7 +179,7 @@ export function SetupApp() {
       active = false;
       stopListening?.();
     };
-  }, [renderSnapshot]);
+  }, [commitValues, renderSnapshot]);
 
   const failure = useMemo(
     () => failureMessage(snapshot?.failure?.code as BootstrapFailureCode | undefined, language),
@@ -128,11 +187,52 @@ export function SetupApp() {
   );
   const diagnostics = useMemo(() => diagnosticsText(snapshot), [snapshot]);
 
-  const retry = useCallback(async (submitted: SetupValues) => {
-    const projectDir = submitted.projectDir.trim();
-    const pythonPath = submitted.pythonPath.trim();
-    valuesRef.current = { projectDir, pythonPath };
-    setValues(valuesRef.current);
+  const chooseProject = useCallback(async () => {
+    const tauri = getSetupTauri();
+    if (!tauri?.core.invoke) {
+      setPickerStatus(copy.pickerError);
+      return;
+    }
+    setSelectingProject(true);
+    setPickerStatus('');
+    try {
+      const selected = await chooseSetupProject(
+        tauri.core.invoke,
+        valuesRef.current.pythonPath,
+        copy.projectPickerTitle,
+      );
+      if (selected) commitValues(selected);
+    } catch (error) {
+      console.error('[setup] application folder selection failed', error);
+      setPickerStatus(copy.pickerError);
+    } finally {
+      setSelectingProject(false);
+    }
+  }, [commitValues, copy]);
+
+  const choosePython = useCallback(async () => {
+    const tauri = getSetupTauri();
+    if (!tauri?.core.invoke) {
+      setPickerStatus(copy.pickerError);
+      return;
+    }
+    setSelectingPython(true);
+    setPickerStatus('');
+    try {
+      const pythonPath = await chooseSetupPython(tauri.core.invoke, copy.pythonPickerTitle);
+      if (pythonPath) commitValues({ ...valuesRef.current, pythonPath });
+    } catch (error) {
+      console.error('[setup] Python environment selection failed', error);
+      setPickerStatus(copy.pickerError);
+    } finally {
+      setSelectingPython(false);
+    }
+  }, [commitValues, copy]);
+
+  const retry = useCallback(async () => {
+    const projectDir = valuesRef.current.projectDir.trim();
+    const pythonPath = valuesRef.current.pythonPath.trim();
+    commitValues({ projectDir, pythonPath });
     setCopyStatus('');
     if (!projectDir) {
       const current = snapshotRef.current ?? syntheticFailure('', latestSeq.current + 1);
@@ -174,7 +274,7 @@ export function SetupApp() {
       }
       setRetrying(false);
     }
-  }, [renderSnapshot]);
+  }, [commitValues, renderSnapshot]);
 
   const copyDiagnostics = useCallback(async () => {
     try {
@@ -226,47 +326,48 @@ export function SetupApp() {
           />
         )}
 
-        <Form<SetupValues>
-          className="ga-setup-form"
-          initValues={values}
-          getFormApi={(api) => {
-            formApiRef.current = api;
-          }}
-          onValueChange={(next) => {
-            valuesRef.current = next;
-            setValues(next);
-          }}
-          onSubmit={(next) => void retry(next)}
-          disabled={retrying}
-          labelPosition="top"
-        >
-          <Form.Input
-            field="projectDir"
+        <div className="ga-setup-form">
+          <SetupLocationField
             label={copy.projectLabel}
-            extraText={copy.projectHint}
-            rules={[{ required: true, message: failureMessage('config_unresolved', language).description }]}
-            spellCheck={false}
-            autoComplete="off"
+            hint={copy.projectHint}
+            value={values.projectDir}
+            emptyText={copy.projectEmpty}
+            buttonText={values.projectDir ? copy.changeProject : copy.chooseProject}
+            buttonLabel={copy.projectPickerTitle}
+            loading={selectingProject}
+            disabled={retrying || selectingPython}
+            icon={<IconFolderOpen />}
+            onChoose={() => void chooseProject()}
           />
-          <Form.Input
-            field="pythonPath"
+          <SetupLocationField
             label={copy.pythonLabel}
-            extraText={copy.pythonHint}
-            spellCheck={false}
-            autoComplete="off"
+            hint={copy.pythonHint}
+            value={values.pythonPath}
+            emptyText={copy.pythonEmpty}
+            buttonText={values.pythonPath ? copy.changePython : copy.choosePython}
+            buttonLabel={copy.pythonPickerTitle}
+            loading={selectingPython}
+            disabled={retrying || selectingProject}
+            icon={<IconFile />}
+            onChoose={() => void choosePython()}
           />
+          {pickerStatus && (
+            <Typography.Text className="ga-setup-picker-status" type="danger" size="small" role="status">
+              {pickerStatus}
+            </Typography.Text>
+          )}
           <Button
-            htmlType="submit"
             type="primary"
             theme="solid"
             block
             loading={retrying}
-            icon={<IconRefresh />}
+            disabled={selectingProject || selectingPython}
             className="ga-setup-retry"
+            onClick={() => void retry()}
           >
             {retrying ? copy.retrying : copy.retry}
           </Button>
-        </Form>
+        </div>
 
         <Collapse className="ga-setup-diagnostics" accordion>
           <Collapse.Panel itemKey="diagnostics" header={copy.diagnostics}>

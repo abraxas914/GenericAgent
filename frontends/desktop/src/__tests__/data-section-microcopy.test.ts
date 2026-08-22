@@ -27,8 +27,10 @@ describe('DataSection user-facing copy', () => {
   });
 
   it('offers only the two confirmed connection modes', () => {
-    expect([zh['connection.included'], zh['connection.local']]).toEqual(['内置模式', '本地仓库']);
-    expect([en['connection.included'], en['connection.local']]).toEqual(['Included mode', 'Local repository']);
+    expect([zh['connection.included'], zh['connection.local']]).toEqual(['内置运行环境', '本地仓库']);
+    expect([en['connection.included'], en['connection.local']]).toEqual(['Included environment', 'Local repository']);
+    expect(zh['connection.apply']).toBe('应用并连接');
+    expect(en['connection.apply']).toBe('Apply and connect');
   });
 
   it('keeps implementation vocabulary out of both settings flows', () => {

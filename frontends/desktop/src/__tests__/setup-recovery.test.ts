@@ -53,6 +53,9 @@ function createRecoveryWindow(options?: {
   legacy?: boolean;
   prepareError?: string | null;
   startError?: Error;
+  projectChoice?: string | null;
+  discoveredPython?: string;
+  pythonChoice?: string | null;
 }) {
   const recoveryWindow = new Window({ url: 'tauri://localhost/fallback.html' });
   const snapshots = [...(options?.snapshots ?? [failedSnapshot('service_timeout')])];
@@ -66,6 +69,15 @@ function createRecoveryWindow(options?: {
     }
     if (command === 'get_bootstrap_snapshot') return snapshots.shift() ?? failedSnapshot('unknown');
     if (command === 'get_prepare_error') return options?.prepareError ?? null;
+    if (command === 'pick_directory') {
+      return options && 'projectChoice' in options ? options.projectChoice : 'D:\\SelectedApp';
+    }
+    if (command === 'discover_python_for_project') {
+      return options?.discoveredPython ?? 'D:\\SelectedApp\\.venv\\Scripts\\python.exe';
+    }
+    if (command === 'pick_python_interpreter') {
+      return options && 'pythonChoice' in options ? options.pythonChoice : 'D:\\Python\\python.exe';
+    }
     if (command === 'retry_bootstrap' && options?.retryError) throw options.retryError;
     if (command === 'start_bridge_with_config' && options?.startError) throw options.startError;
     return undefined;
@@ -102,7 +114,7 @@ describe('setup bootstrap recovery', () => {
     emitBootstrap(failedSnapshot('service_exited'));
     await flush();
 
-    expect(recoveryWindow.document.getElementById('failure-title')?.textContent).toBe('后台服务意外退出');
+    expect(recoveryWindow.document.getElementById('failure-title')?.textContent).toBe('本地连接意外停止');
     expect(recoveryWindow.document.getElementById('diagnostics')?.textContent).toContain(
       'failure_code: service_exited',
     );
@@ -113,14 +125,14 @@ describe('setup bootstrap recovery', () => {
     await flush();
 
     const document = recoveryWindow.document;
-    expect(byId<{ value: string }>(recoveryWindow, 'project-dir').value).toBe('C:\\SavedGA');
-    expect(byId<{ value: string }>(recoveryWindow, 'python-path').value).toBe('C:\\SavedPython\\python.exe');
-    expect(document.getElementById('failure-title')?.textContent).toBe('后台服务启动超时');
+    expect(document.getElementById('project-dir')?.textContent).toBe('C:\\SavedGA');
+    expect(document.getElementById('python-path')?.textContent).toBe('C:\\SavedPython\\python.exe');
+    expect(document.getElementById('failure-title')?.textContent).toBe('本地连接启动时间过长');
     expect((document.querySelector('details') as unknown as { open: boolean }).open).toBe(false);
     expect(document.getElementById('diagnostics')?.textContent).toContain('failure_code: service_timeout');
   });
 
-  it('retries with the edited paths and refreshes the failure snapshot in place', async () => {
+  it('continues with native-picker paths and refreshes the failure snapshot in place', async () => {
     const retryFailure = failedSnapshot('port_conflict');
     retryFailure.seq = 2;
     const { recoveryWindow, calls } = createRecoveryWindow({
@@ -130,17 +142,31 @@ describe('setup bootstrap recovery', () => {
     await flush();
 
     const document = recoveryWindow.document;
-    byId<{ value: string }>(recoveryWindow, 'project-dir').value = 'D:\\GenericAgent';
-    byId<{ value: string }>(recoveryWindow, 'python-path').value = 'D:\\venv\\python.exe';
+    byId<{ click: () => void }>(recoveryWindow, 'choose-project').click();
+    await flush();
+    byId<{ click: () => void }>(recoveryWindow, 'choose-python').click();
+    await flush();
     byId<{ click: () => void }>(recoveryWindow, 'retry').click();
     await flush();
 
     expect(calls).toContainEqual({
       command: 'retry_bootstrap',
-      args: { pythonPath: 'D:\\venv\\python.exe', projectDir: 'D:\\GenericAgent' },
+      args: { pythonPath: 'D:\\Python\\python.exe', projectDir: 'D:\\SelectedApp' },
     });
     expect(document.getElementById('failure-title')?.textContent).toBe('本地连接被占用');
     expect(byId<{ disabled: boolean }>(recoveryWindow, 'retry').disabled).toBe(false);
+  });
+
+  it('keeps the configured paths when native pickers are cancelled', async () => {
+    const { recoveryWindow } = createRecoveryWindow({ projectChoice: null, pythonChoice: null });
+    await flush();
+
+    byId<{ click: () => void }>(recoveryWindow, 'choose-project').click();
+    byId<{ click: () => void }>(recoveryWindow, 'choose-python').click();
+    await flush();
+
+    expect(recoveryWindow.document.getElementById('project-dir')?.textContent).toBe('C:\\SavedGA');
+    expect(recoveryWindow.document.getElementById('python-path')?.textContent).toBe('C:\\SavedPython\\python.exe');
   });
 
   it('keeps the retry action busy when Rust completes startup successfully', async () => {
@@ -153,7 +179,7 @@ describe('setup bootstrap recovery', () => {
     expect(calls.some(({ command }) => command === 'retry_bootstrap')).toBe(true);
     expect(byId<{ disabled: boolean; textContent: string }>(recoveryWindow, 'retry')).toMatchObject({
       disabled: true,
-      textContent: '正在重试…',
+      textContent: '正在启动…',
     });
   });
 
@@ -164,7 +190,7 @@ describe('setup bootstrap recovery', () => {
     });
     await flush();
 
-    expect(recoveryWindow.document.getElementById('failure-title')?.textContent).toBe('运行环境准备失败');
+    expect(recoveryWindow.document.getElementById('failure-title')?.textContent).toBe('运行环境尚未准备完成');
     expect(recoveryWindow.document.getElementById('diagnostics')?.textContent).toContain(
       'offline dependency installation failed',
     );
@@ -193,7 +219,7 @@ describe('setup bootstrap recovery', () => {
 
     expect(writeText).toHaveBeenCalledWith(expect.stringContaining('GenericAgent Desktop startup diagnostics'));
     expect(recoveryWindow.document.getElementById('copy-status')?.textContent).toBe(
-      '已复制，可粘贴给部署智能体排查。',
+      '已复制，可发送给技术支持。',
     );
   });
 });

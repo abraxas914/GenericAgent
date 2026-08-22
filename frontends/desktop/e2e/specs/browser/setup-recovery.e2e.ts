@@ -39,6 +39,9 @@ async function renderWithTauriMock(path: string, blockSetupModule = false, legac
                 return snapshot;
               }
               if (command === 'get_prepare_error') return 'legacy offline preparation failed';
+              if (command === 'pick_directory') return '/tmp/selected-application';
+              if (command === 'discover_python_for_project') return '/tmp/selected-application/.venv/bin/python';
+              if (command === 'pick_python_interpreter') return '/tmp/custom-python/bin/python';
               if (command === 'retry_bootstrap') return null;
               if (command === 'start_bridge_with_config') return null;
               throw new Error('Unexpected command: ' + command);
@@ -78,12 +81,22 @@ async function renderLegacyLoading() {
 }
 
 describe('bootstrap recovery rescue chain', () => {
-  it('renders the React/Semi setup UI and invokes retry with configured paths', async () => {
+  it('uses native pickers and continues with full selected paths', async () => {
     await renderWithTauriMock('/setup.html');
 
     const title = await $('#ga-setup-title');
     await title.waitForDisplayed();
     assert.equal(await $('.ga-setup-banner').isDisplayed(), true);
+    assert.equal(await $('input').isExisting(), false);
+    const pickerButtons = await $$('.ga-setup-location button');
+    await pickerButtons[0].click();
+    await browser.waitUntil(async () => (
+      await $('.ga-setup-location .ga-setup-path').getText()
+    ) === '/tmp/selected-application');
+    await pickerButtons[1].click();
+    await browser.waitUntil(async () => (
+      await $$('.ga-setup-location .ga-setup-path')[1].getText()
+    ) === '/tmp/custom-python/bin/python');
     await $('.ga-setup-diagnostics .semi-collapse-header').click();
     const diagnostics = await $('#diagnostics');
     await diagnostics.waitForExist();
@@ -93,10 +106,14 @@ describe('bootstrap recovery rescue chain', () => {
     await $('.ga-setup-retry').click();
     await browser.waitUntil(async () => {
       const calls = await browser.execute(() => (
-        (window as typeof window & { __GA_E2E_TAURI__?: { calls: Array<{ command: string }> } })
+        (window as typeof window & {
+          __GA_E2E_TAURI__?: { calls: Array<{ command: string; args?: Record<string, string> }> };
+        })
           .__GA_E2E_TAURI__?.calls ?? []
       ));
-      return calls.some((call) => call.command === 'retry_bootstrap');
+      return calls.some((call) => call.command === 'retry_bootstrap'
+        && call.args?.projectDir === '/tmp/selected-application'
+        && call.args?.pythonPath === '/tmp/custom-python/bin/python');
     });
   });
 

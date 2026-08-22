@@ -52,12 +52,55 @@ body {
   margin-top: 20px;
 }
 
-.ga-setup-form .semi-form-field {
-  padding: 0 0 16px;
+.ga-setup-location {
+  margin-bottom: 18px;
 }
 
-.ga-setup-form .semi-form-field-extra {
+.ga-setup-location-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 7px;
+}
+
+.ga-setup-path {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: var(--semi-border-radius-medium);
+  outline: none;
+  background: var(--semi-color-fill-0);
+  color: var(--semi-color-text-0);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  user-select: text;
+}
+
+.ga-setup-path:focus-visible {
+  border-color: var(--semi-color-primary);
+  box-shadow: 0 0 0 2px var(--semi-color-primary-light-default);
+}
+
+.ga-setup-path code {
+  font: 13px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.ga-setup-path--empty {
+  color: var(--semi-color-text-2);
+  font-size: 13px;
+}
+
+.ga-setup-location-hint.semi-typography {
+  margin: 6px 0 0;
   line-height: 1.45;
+}
+
+.ga-setup-picker-status {
+  display: block;
+  margin: -4px 0 12px;
 }
 
 .ga-setup-retry {

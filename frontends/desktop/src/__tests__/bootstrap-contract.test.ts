@@ -192,7 +192,10 @@ describe('bootstrap snapshot contract', () => {
     expect(publicFallback).toContain("invoke('retry_bootstrap'");
     expect(publicFallback).toContain("invoke('get_prepare_error')");
     expect(publicFallback).toContain("invoke('start_bridge_with_config'");
-    expect(publicFallback).toContain('修复启动问题');
+    expect(publicFallback).toContain('完成启动设置');
+    expect(publicFallback).toContain("invoke('pick_directory'");
+    expect(publicFallback).toContain("invoke('pick_python_interpreter'");
+    expect(publicFallback).toContain("invoke('discover_python_for_project'");
     expect(publicFallback).toContain('诊断信息');
     expect(publicFallback).toContain('复制诊断信息');
 

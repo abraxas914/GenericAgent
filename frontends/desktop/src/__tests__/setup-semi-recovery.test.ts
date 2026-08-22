@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bootstrapFailureCodes, failureMessage } from '../setup/copy';
 import {
+  chooseSetupProject,
+  chooseSetupPython,
   isNewerSnapshot,
   loadSetupBootstrap,
   retrySetupBootstrap,
@@ -47,9 +49,34 @@ describe('setup recovery contracts', () => {
 
   it('falls back to generic recovery copy for future failure codes', () => {
     expect(failureMessage('future_failure', 'en')).toEqual({
-      title: 'GenericAgent could not start',
-      description: 'Retry. If it continues, copy the diagnostics for troubleshooting.',
+      title: 'Startup is not complete',
+      description: 'Check the selected locations. Copy diagnostics if you need support.',
     });
+  });
+
+  it('chooses an application folder and initializes its Python environment', async () => {
+    const invoke = vi.fn(async (command: string) => {
+      if (command === 'pick_directory') return '/Users/example/Application';
+      if (command === 'discover_python_for_project') return '/Users/example/Application/.venv/bin/python';
+      return undefined;
+    });
+
+    await expect(chooseSetupProject(invoke as any, '/usr/bin/python3', 'Choose folder')).resolves.toEqual({
+      projectDir: '/Users/example/Application',
+      pythonPath: '/Users/example/Application/.venv/bin/python',
+    });
+    expect(invoke).toHaveBeenNthCalledWith(1, 'pick_directory', { title: 'Choose folder' });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'discover_python_for_project', {
+      projectDir: '/Users/example/Application',
+      currentPython: '/usr/bin/python3',
+    });
+  });
+
+  it('preserves current values when a native picker is cancelled', async () => {
+    const invoke = vi.fn().mockResolvedValue(null);
+
+    await expect(chooseSetupProject(invoke as any, '/usr/bin/python3', 'Choose folder')).resolves.toBeNull();
+    await expect(chooseSetupPython(invoke as any, 'Choose Python')).resolves.toBeNull();
   });
 
   it('rejects stale bootstrap snapshots', () => {
@@ -118,6 +145,9 @@ describe('setup recovery contracts', () => {
     expect(html).toContain("invoke('retry_bootstrap'");
     expect(html).toContain("invoke('get_prepare_error')");
     expect(html).toContain("invoke('start_bridge_with_config'");
+    expect(html).toContain("invoke('pick_directory'");
+    expect(html).toContain("invoke('discover_python_for_project'");
+    expect(html).toContain("invoke('pick_python_interpreter'");
     expect(html).toContain("listen('bootstrap'");
     expect(html).not.toContain("location.replace('setup.html')");
     expect(html).toContain('RoundSquisheen');
