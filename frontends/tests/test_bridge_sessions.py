@@ -171,6 +171,41 @@ class TestPersistSessionConcurrentMutation:
         assert isinstance(data["llm_history"], list)
 
 
+class TestTransactionalDataImport:
+    def test_import_commits_new_session_file_and_in_memory_object_together(
+        self, manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "import-source"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "imported.md").write_text("new", encoding="utf-8")
+        sessions = source / "temp" / "desktop_sessions"
+        sessions.mkdir(parents=True)
+        sessions.joinpath("sess-imported.json").write_text(
+            json.dumps(
+                {
+                    "id": "sess-imported",
+                    "title": "Imported",
+                    "messages": [],
+                    "msg_seq": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(_mod, "manager", manager)
+
+        result = _mod._import_data_source(str(source))
+
+        assert result["ok"] is True
+        assert result["sessionsAdded"] == 1
+        assert "_preparedSessions" not in result
+        assert manager.sessions["sess-imported"].title == "Imported"
+        persisted = Path(manager.ga_root) / "temp" / "desktop_sessions" / "sess-imported.json"
+        assert json.loads(persisted.read_text(encoding="utf-8"))["id"] == "sess-imported"
+        assert (Path(manager.ga_root) / "memory" / "imported.md").read_text(
+            encoding="utf-8"
+        ) == "new"
+
+
 class TestLoadSessionsCorruptFile:
     """Verify that one corrupt file does not prevent loading others."""
 

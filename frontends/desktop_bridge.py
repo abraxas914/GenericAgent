@@ -2233,7 +2233,7 @@ async def mykey_save_handler(request):
 
 
 def _import_memory_from(source_dir: str, ga_root: str) -> dict:
-    """Compatibility wrapper for add-only data import."""
+    """Compatibility wrapper for the transactional Desktop data import."""
     return merge_data_files(source_dir, ga_root)
 
 
@@ -2251,8 +2251,22 @@ async def memory_import_inspect_handler(request):
 
 def _import_data_source(source_path: str) -> dict:
     with materialize_import_source(source_path) as source_root:
-        result = _import_memory_from(str(source_root), manager.ga_root)
-        result.update(manager.import_sessions(str(source_root)))
+        with manager.lock:
+            existing_session_ids = set(manager.sessions)
+        result = merge_data_files(
+            str(source_root),
+            manager.ga_root,
+            existing_session_ids=existing_session_ids,
+            session_preparer=manager._session_from_item,
+        )
+        prepared_sessions = result.pop("_preparedSessions", [])
+        if prepared_sessions:
+            # Files are already committed atomically by merge_data_files. Adopt the
+            # prevalidated objects without a second persistence pass that could
+            # partially fail or overwrite an existing Desktop session.
+            with manager.lock:
+                for session in prepared_sessions:
+                    manager.sessions.setdefault(session.id, session)
         return result
 
 
@@ -2260,7 +2274,7 @@ async def memory_import_handler(request):
     data = await read_json(request)
     source_path = str(data.get("sourcePath") or data.get("sourceDir") or "").strip()
     if not source_path:
-        return json_ok({"ok": False, "error": "missing_sourcePath"}, status=400)
+        return json_ok({"ok": False, "error": "missing_sourceDir"}, status=400)
     try:
         result = await asyncio.to_thread(_import_data_source, source_path)
     except (BackupFormatError, OSError, ValueError) as error:

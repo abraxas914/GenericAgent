@@ -9,6 +9,7 @@
  */
 
 import katex from 'katex';
+import { trustKatexCommand } from './rendered-content-policy';
 
 // ---------------------------------------------------------------------------
 // LRU Cache
@@ -77,7 +78,12 @@ export function renderMathCached(
 
   // Level 1: strict
   try {
-    html = katex.renderToString(value, { displayMode, throwOnError: true, macros });
+    html = katex.renderToString(value, {
+      displayMode,
+      throwOnError: true,
+      macros,
+      trust: trustKatexCommand,
+    });
     cache.set(key, html);
     return html;
   } catch {
@@ -92,6 +98,7 @@ export function renderMathCached(
       strict: 'ignore',
       errorColor,
       macros,
+      trust: trustKatexCommand,
     });
     cache.set(key, html);
     return html;

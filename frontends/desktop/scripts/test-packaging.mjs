@@ -122,6 +122,48 @@ if (!fs.existsSync(scriptsDir)) {
     }
   }
 
+  const powershellScripts = [];
+  const windowsScriptsDir = path.join(scriptsDir, 'windows');
+  if (fs.existsSync(windowsScriptsDir)) {
+    for (const file of fs.readdirSync(windowsScriptsDir)) {
+      if (file.endsWith('.ps1')) powershellScripts.push(path.join(windowsScriptsDir, file));
+    }
+  }
+  let hasPowerShell = true;
+  try {
+    execFileSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
+      timeout: 5000,
+      stdio: 'ignore',
+    });
+  } catch (e) {
+    if (e.code === 'ENOENT') {
+      hasPowerShell = false;
+      warn('pwsh is unavailable; PowerShell parser checks were skipped');
+    } else {
+      bad(`pwsh probe failed: ${e.message}`);
+    }
+  }
+  if (hasPowerShell) {
+    for (const script of powershellScripts) {
+      const escapedPath = script.replaceAll("'", "''");
+      const command = [
+        '$tokens = $null',
+        '$errors = $null',
+        `[System.Management.Automation.Language.Parser]::ParseFile('${escapedPath}', [ref]$tokens, [ref]$errors) > $null`,
+        'if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }',
+      ].join('; ');
+      try {
+        execFileSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
+          timeout: 5000,
+          stdio: 'pipe',
+        });
+        ok(`syntax OK: ${path.relative(DESKTOP_ROOT, script)}`);
+      } catch (e) {
+        bad(`syntax error: ${path.relative(DESKTOP_ROOT, script)}\n    ${e.stderr?.toString().trim() || e.message}`);
+      }
+    }
+  }
+
   for (const relative of [
     'scripts/post-dmg.sh',
     'e2e/linux/Invoke-LinuxUserJourney.sh',
@@ -137,21 +179,90 @@ if (!fs.existsSync(scriptsDir)) {
   }
 
   for (const relative of [
+    'scripts/gen_ds_store.py',
     'e2e/package/real_package_journey.py',
     'e2e/package/verify_candidate_evidence.py',
   ]) {
     const script = path.join(DESKTOP_ROOT, relative);
     try {
-      execFileSync('python3', [script, '--help'], { timeout: 5000, stdio: 'ignore' });
-      ok(`CLI contract OK: ${relative}`);
+      execFileSync('python3', [
+        '-c',
+        'import ast, pathlib, sys; ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])',
+        script,
+      ], { timeout: 5000, stdio: 'ignore' });
+      ok(`syntax OK: ${relative}`);
     } catch (e) {
-      bad(`CLI contract failed: ${relative}: ${e.message}`);
+      bad(`syntax error: ${relative}: ${e.message}`);
+      continue;
+    }
+    if (relative.startsWith('e2e/')) {
+      try {
+        execFileSync('python3', [script, '--help'], { timeout: 5000, stdio: 'ignore' });
+        ok(`CLI contract OK: ${relative}`);
+      } catch (e) {
+        bad(`CLI contract failed: ${relative}: ${e.message}`);
+      }
     }
   }
 }
 
-// ── 4. Release version consistency ──
-console.log('\n[4] Version consistency');
+// ── 4. Locked package inputs ──
+console.log('\n[4] Locked package inputs');
+
+const runtimeRequirementsPath = path.join(PACKAGING_DIR, 'python-runtime-requirements.txt');
+const dmgRequirementsPath = path.join(PACKAGING_DIR, 'dmg-build-requirements.txt');
+if (!fs.existsSync(runtimeRequirementsPath)) {
+  bad('packaging/python-runtime-requirements.txt is missing');
+} else {
+  const requirements = fs.readFileSync(runtimeRequirementsPath, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  const invalid = requirements.filter((line) => !/^[a-z0-9][a-z0-9._-]*==[^\s]+$/i.test(line));
+  if (requirements.length > 20 && invalid.length === 0) {
+    ok(`${requirements.length} runtime requirements use exact versions`);
+  } else {
+    bad(`runtime requirements must be a complete exact lock; invalid: ${invalid.join(', ') || 'too few entries'}`);
+  }
+  const names = new Set(requirements.map((line) => line.split('==', 1)[0].toLowerCase()));
+  for (const name of ['requests', 'beautifulsoup4', 'bottle', 'simple-websocket-server', 'aiohttp', 'psutil', 'fastapi', 'uvicorn', 'websockets', 'pydantic']) {
+    if (names.has(name)) ok(`runtime lock includes ${name}`);
+    else bad(`runtime lock is missing ${name}`);
+  }
+  if (!names.has('setuptools') && !names.has('wheel')) {
+    ok('binary-only runtime wheelhouse excludes setuptools and wheel');
+  } else {
+    bad('binary-only runtime wheelhouse must exclude setuptools and wheel');
+  }
+}
+
+if (!fs.existsSync(dmgRequirementsPath)) {
+  bad('packaging/dmg-build-requirements.txt is missing');
+} else {
+  const requirements = fs.readFileSync(dmgRequirementsPath, 'utf8');
+  const hashes = requirements.match(/--hash=sha256:[0-9a-f]{64}/g) ?? [];
+  if (requirements.includes('ds-store==1.3.3') && requirements.includes('mac-alias==2.2.3') && hashes.length === 2) {
+    ok('DMG build requirements use exact versions and SHA-256 hashes');
+  } else {
+    bad('DMG build requirements are not fully pinned and hash-locked');
+  }
+}
+
+for (const relative of [
+  'scripts/windows/install_windows.ps1',
+  'scripts/linux/install_linux.sh',
+  'scripts/macos/install_macos.sh',
+]) {
+  const content = fs.readFileSync(path.join(PACKAGING_DIR, relative), 'utf8');
+  if (content.includes('requirements.txt') && content.includes('--requirement')) {
+    ok(`offline installer consumes packaged requirements lock: ${relative}`);
+  } else {
+    bad(`offline installer bypasses packaged requirements lock: ${relative}`);
+  }
+}
+
+// ── 5. Release version consistency ──
+console.log('\n[5] Version consistency');
 
 const cargoPath = path.join(TAURI_DIR, 'Cargo.toml');
 const cargoLockPath = path.join(TAURI_DIR, 'Cargo.lock');

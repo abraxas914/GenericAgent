@@ -4,15 +4,17 @@ Tests pure functions that don't require agent/session infrastructure.
 Run: pytest frontends/tests/test_bridge_utils.py -v
 """
 import ast
+import json
 import os
 import sys
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 # Add project root so we can import bridge helpers
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "frontends"))
-from data_backup import merge_data_files
+from data_backup import materialize_import_source, merge_data_files
 
 # Import the functions under test (module-level helpers)
 import importlib.util
@@ -61,7 +63,7 @@ class TestGaRootBoundary:
 
 
 class TestMemoryImport:
-    def test_current_data_wins_for_memory_and_responses(self, tmp_path):
+    def test_source_memory_wins_while_current_responses_remain_add_only(self, tmp_path):
         source = tmp_path / "source"
         target = tmp_path / "target"
         (source / "memory").mkdir(parents=True)
@@ -77,14 +79,61 @@ class TestMemoryImport:
 
         result = merge_data_files(str(source), str(target))
 
-        assert result["memoryCopied"] == 1
-        assert result["memorySkipped"] == 1
+        assert result["memoryCopied"] == 2
+        assert result["memorySkipped"] == 0
         assert result["responsesCopied"] == 1
         assert result["responsesSkipped"] == 1
-        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "new"
         assert (target / "memory" / "added.md").read_text(encoding="utf-8") == "added"
         assert (target / "temp" / "model_responses" / "same.json").read_text(encoding="utf-8") == "old"
-        assert result["backupDir"] == ""
+        assert (Path(result["backupDir"]) / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+
+    def test_bridge_adopts_only_sessions_committed_by_transaction(self, tmp_path):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "imported.md").write_text("new", encoding="utf-8")
+        source_sessions = source / "temp" / "desktop_sessions"
+        source_sessions.mkdir(parents=True)
+        source_sessions.joinpath("sess-imported.json").write_text(
+            json.dumps({"id": "sess-imported", "title": "Imported", "messages": []}),
+            encoding="utf-8",
+        )
+        target.mkdir()
+
+        class Lock:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        class Manager:
+            ga_root = str(target)
+            lock = Lock()
+            sessions = {}
+
+            @staticmethod
+            def _session_from_item(item):
+                return SimpleNamespace(id=item["id"], title=item.get("title", ""))
+
+        helpers = _load_named_helpers(
+            {"_import_data_source"},
+            {
+                "manager": Manager(),
+                "materialize_import_source": materialize_import_source,
+                "merge_data_files": merge_data_files,
+            },
+        )
+
+        result = helpers["_import_data_source"](str(source))
+
+        manager = helpers["manager"]
+        assert result["sessionsAdded"] == 1
+        assert "_preparedSessions" not in result
+        assert manager.sessions["sess-imported"].title == "Imported"
+        persisted = target / "temp" / "desktop_sessions" / "sess-imported.json"
+        assert json.loads(persisted.read_text(encoding="utf-8"))["id"] == "sess-imported"
 
 
 def _load_empty_turn_helpers():
@@ -292,8 +341,6 @@ class TestNextNativeVar:
 
 
 # === _format_py_dict ===
-
-import json
 
 def _format_py_dict(d):
     lines = [f"    '{k}': {json.dumps(v, ensure_ascii=False)}," if isinstance(v, str) else f"    '{k}': {v}," for k, v in d.items()]
