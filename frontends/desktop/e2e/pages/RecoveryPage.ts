@@ -7,7 +7,7 @@ export class RecoveryPage {
   }
 
   async recoverFromServices(): Promise<void> {
-    const services = await $('nav[aria-label="Main navigation"] button[aria-label="后台服务"], nav[aria-label="Main navigation"] button[aria-label="Services"]');
+    const services = await $('nav[aria-label="Main navigation"] button[aria-label="运行状态"], nav[aria-label="Main navigation"] button[aria-label="Runtime status"]');
     await services.click();
     await this.restartButton.waitForDisplayed({ timeout: 20_000 });
     await this.restartButton.click();
