@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Button, Modal, Toast, Tooltip } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import * as bridge from '../../services/bridge';
@@ -7,6 +7,7 @@ import {
   exportData,
   importData,
   inspectDataImport,
+  supportsDataBackupApi,
   type BackupInspection,
 } from '../../services/dataBackup';
 import { useChatStore } from '../../stores/chat';
@@ -61,6 +62,18 @@ export function DataSection() {
   const [exporting, setExporting] = useState(false);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [dataBackupAvailable, setDataBackupAvailable] = useState(false);
+
+  useEffect(() => {
+    if (!tauriAvailable) return;
+    let active = true;
+    void supportsDataBackupApi().then((available) => {
+      if (active) setDataBackupAvailable(available);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleImportKey = useCallback(() => {
     const input = document.createElement('input');
@@ -225,7 +238,7 @@ export function DataSection() {
         btnText={t('data.exportKeyBtn')}
         onClick={handleExportKey}
       />
-      {tauriAvailable && (
+      {tauriAvailable && dataBackupAvailable && (
         <>
           <OpRow
             label={t('data.importData')}

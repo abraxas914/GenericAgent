@@ -45,6 +45,17 @@ async function postJson<T>(path: string, body: Record<string, unknown>): Promise
   return data as T;
 }
 
+export async function supportsDataBackupApi(): Promise<boolean> {
+  try {
+    // The bridge answers 405 when this POST-only route exists and 404 on older cores.
+    // HEAD is side-effect free and avoids probing with an invalid import request.
+    const response = await fetch(`${BRIDGE_BASE}/memory/import/inspect`, { method: 'HEAD' });
+    return response.status !== 404;
+  } catch {
+    return false;
+  }
+}
+
 export function backupFilename(lang: string, date = new Date()): string {
   const parts = {
     year: date.getFullYear(),

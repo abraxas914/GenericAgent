@@ -157,6 +157,30 @@ describe('ConnectionModeSection', () => {
     });
   });
 
+  it('defers validation to set_ga_source when connected to an older desktop shell', async () => {
+    const fullPath = '/Users/test/workspaces/client/GenericAgent';
+    mocks.tauriInvoke.mockImplementation(async (command: string) => {
+      if (command === 'get_ga_source') return '';
+      if (command === 'pick_directory') return fullPath;
+      if (command === 'validate_ga_source') {
+        throw new Error('Command validate_ga_source not found');
+      }
+      if (command === 'set_ga_source') return fullPath;
+      return undefined;
+    });
+
+    render(<ConnectionModeSection />);
+    await waitFor(() => expect(mocks.tauriInvoke).toHaveBeenCalledWith('get_ga_source', {}));
+
+    fireEvent.click(screen.getByDisplayValue('localRepository'));
+    await screen.findByText(fullPath);
+    fireEvent.click(screen.getByRole('button', { name: 'connection.apply' }));
+
+    await waitFor(() => {
+      expect(mocks.tauriInvoke).toHaveBeenCalledWith('set_ga_source', { dir: fullPath });
+    });
+  });
+
   it('opens the retained detailed operating-status page', async () => {
     mocks.tauriInvoke.mockResolvedValueOnce('');
     render(<ConnectionModeSection />);

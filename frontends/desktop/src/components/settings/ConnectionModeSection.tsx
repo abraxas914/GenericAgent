@@ -3,7 +3,7 @@ import { Button, Radio, RadioGroup, Tag, Toast, Tooltip } from '@douyinfe/semi-u
 import { useI18n } from '../../i18n';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import * as bridge from '../../services/bridge';
-import { tauriErrorText } from '../../services/tauri-compat';
+import { isMissingTauriCommand, tauriErrorText } from '../../services/tauri-compat';
 import { useAppStore } from '../../stores/app';
 import { useChatStore } from '../../stores/chat';
 import { useSettingsStore } from '../../stores/settings';
@@ -66,10 +66,19 @@ export function ConnectionModeSection() {
         title: t('connection.repositoryPickerTitle'),
       }) as string | null;
       if (!picked) return;
-      const validated = await bridge.tauriInvoke('validate_ga_source', { dir: picked }) as string;
+      let validated: string;
+      let deferredValidation = false;
+      try {
+        validated = await bridge.tauriInvoke('validate_ga_source', { dir: picked }) as string;
+      } catch (error) {
+        if (!isMissingTauriCommand(error, 'validate_ga_source')) throw error;
+        // Older desktop shells validate in set_ga_source instead of exposing a preview command.
+        validated = picked;
+        deferredValidation = true;
+      }
       setPendingPath(validated);
       setPendingMode('localRepository');
-      Toast.success({ content: t('connection.repositoryValidated') });
+      if (!deferredValidation) Toast.success({ content: t('connection.repositoryValidated') });
     } catch (error) {
       console.error('[ConnectionMode] validate repository failed:', error);
       const message = tauriErrorText(error);
