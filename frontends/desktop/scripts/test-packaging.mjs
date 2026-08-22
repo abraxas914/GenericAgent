@@ -32,6 +32,31 @@ function ok(msg) { console.log(`  ✓ ${msg}`); pass++; }
 function bad(msg) { console.error(`  ✗ ${msg}`); fail++; }
 function warn(msg) { console.warn(`  ⚠ ${msg}`); warnings.push(msg); }
 
+function collectFilesByExtension(root, extension) {
+  const ignoredDirectories = new Set(['dist', 'node_modules', 'target']);
+  const files = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!ignoredDirectories.has(entry.name)) visit(entryPath);
+      } else if (entry.isFile() && entry.name.toLowerCase().endsWith(extension)) {
+        files.push(entryPath);
+      }
+    }
+  };
+  visit(root);
+  return files.sort();
+}
+
+function processFailureDetails(error) {
+  const output = [error.stderr, error.stdout]
+    .map((value) => value?.toString().trim())
+    .filter(Boolean)
+    .join('\n');
+  return output ? `${error.message}\n${output}` : error.message;
+}
+
 // ── 1. tauri.conf.json validation ──
 console.log('\n[1] tauri.conf.json');
 
@@ -122,44 +147,59 @@ if (!fs.existsSync(scriptsDir)) {
     }
   }
 
-  const powershellScripts = [];
-  const windowsScriptsDir = path.join(scriptsDir, 'windows');
-  if (fs.existsSync(windowsScriptsDir)) {
-    for (const file of fs.readdirSync(windowsScriptsDir)) {
-      if (file.endsWith('.ps1')) powershellScripts.push(path.join(windowsScriptsDir, file));
-    }
-  }
-  let hasPowerShell = true;
-  try {
-    execFileSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], {
-      timeout: 5000,
-      stdio: 'ignore',
-    });
-  } catch (e) {
-    if (e.code === 'ENOENT') {
-      hasPowerShell = false;
-      warn('pwsh is unavailable; PowerShell parser checks were skipped');
-    } else {
-      bad(`pwsh probe failed: ${e.message}`);
-    }
-  }
-  if (hasPowerShell) {
-    for (const script of powershellScripts) {
-      const escapedPath = script.replaceAll("'", "''");
-      const command = [
-        '$tokens = $null',
-        '$errors = $null',
-        `[System.Management.Automation.Language.Parser]::ParseFile('${escapedPath}', [ref]$tokens, [ref]$errors) > $null`,
-        'if ($errors.Count -ne 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }',
-      ].join('; ');
-      try {
-        execFileSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command], {
-          timeout: 5000,
+  const powershellScripts = collectFilesByExtension(DESKTOP_ROOT, '.ps1');
+  const powershellInputs = powershellScripts.map((script) => ({
+    path: script,
+    label: path.relative(DESKTOP_ROOT, script),
+  }));
+  const powershellParserCommand = [
+    "$ErrorActionPreference = 'Stop'",
+    '$scripts = @($env:GA_DESKTOP_PWSH_SCRIPTS | ConvertFrom-Json)',
+    '$failed = $false',
+    'foreach ($script in $scripts) {',
+    '  $scriptPath = [string]$script.path',
+    '  $scriptLabel = [string]$script.label',
+    "  Write-Output ('parsing PowerShell: {0}' -f $scriptLabel)",
+    '  try {',
+    '    $tokens = $null',
+    '    $parseErrors = $null',
+    '    [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) > $null',
+    '    foreach ($parseError in @($parseErrors)) {',
+    '      $failed = $true',
+    "      [Console]::Error.WriteLine(('{0}:{1}:{2}: {3}' -f $scriptLabel, $parseError.Extent.StartLineNumber, $parseError.Extent.StartColumnNumber, $parseError.Message))",
+    '    }',
+    '  } catch {',
+    '    $failed = $true',
+    "    [Console]::Error.WriteLine(('{0}: {1}' -f $scriptLabel, $_.Exception.Message))",
+    '  }',
+    '}',
+    'if ($failed) { exit 1 }',
+  ].join('\n');
+
+  if (powershellScripts.length === 0) {
+    warn('no PowerShell scripts were found for parser checks');
+  } else {
+    try {
+      execFileSync(
+        'pwsh',
+        ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', powershellParserCommand],
+        {
+          timeout: 30_000,
           stdio: 'pipe',
-        });
+          env: {
+            ...process.env,
+            GA_DESKTOP_PWSH_SCRIPTS: JSON.stringify(powershellInputs),
+          },
+        },
+      );
+      for (const script of powershellScripts) {
         ok(`syntax OK: ${path.relative(DESKTOP_ROOT, script)}`);
-      } catch (e) {
-        bad(`syntax error: ${path.relative(DESKTOP_ROOT, script)}\n    ${e.stderr?.toString().trim() || e.message}`);
+      }
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        warn('pwsh is unavailable; PowerShell parser checks were skipped');
+      } else {
+        bad(`PowerShell parser check failed for ${powershellInputs.map(({ label }) => label).join(', ')}\n    ${processFailureDetails(error)}`);
       }
     }
   }

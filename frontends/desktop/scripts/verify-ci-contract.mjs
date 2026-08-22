@@ -1,9 +1,12 @@
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   REMOVED_LEGACY_REACT_PUBLIC_ASSETS,
+  REQUIRED_REACT_PUBLIC_ASSET_SHA256,
   REQUIRED_REACT_PUBLIC_ASSETS,
+  SEMI_UI_NOTICE_CONTRACT,
 } from './react-public-assets.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -17,6 +20,10 @@ function readText(relativePath, base = desktopRoot) {
 
 function readJson(relativePath, base = desktopRoot) {
   return JSON.parse(readText(relativePath, base));
+}
+
+function sha256(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
 }
 
 function check(condition, message) {
@@ -55,6 +62,11 @@ if (lockRoot) {
   compareDependencySets('dependencies', packageJson.dependencies, lockRoot.dependencies);
   compareDependencySets('devDependencies', packageJson.devDependencies, lockRoot.devDependencies);
 }
+const semiUiLock = packageLock.packages?.[`node_modules/${SEMI_UI_NOTICE_CONTRACT.packageName}`];
+check(
+  semiUiLock?.version === SEMI_UI_NOTICE_CONTRACT.packageVersion,
+  `${SEMI_UI_NOTICE_CONTRACT.packageName} notice version matches package-lock.json`,
+);
 
 const requiredScripts = [
   'build',
@@ -387,10 +399,18 @@ check(
 );
 
 console.log('\n[4] bootstrap and window capability contract');
+check(
+  Object.keys(REQUIRED_REACT_PUBLIC_ASSET_SHA256).every((asset) => REQUIRED_REACT_PUBLIC_ASSETS.includes(asset)),
+  'hash-locked React v2 public assets are required bundle inputs',
+);
 for (const publicAsset of REQUIRED_REACT_PUBLIC_ASSETS) {
   const relativePath = `public/${publicAsset}`;
   const absolutePath = path.join(desktopRoot, relativePath);
   check(fs.existsSync(absolutePath) && fs.statSync(absolutePath).size > 0, `${relativePath} is present`);
+  const expectedHash = REQUIRED_REACT_PUBLIC_ASSET_SHA256[publicAsset];
+  if (expectedHash && fs.existsSync(absolutePath)) {
+    check(sha256(absolutePath) === expectedHash, `${relativePath} matches its required SHA-256`);
+  }
 }
 for (const publicAsset of REMOVED_LEGACY_REACT_PUBLIC_ASSETS) {
   const relativePath = `public/${publicAsset}`;
