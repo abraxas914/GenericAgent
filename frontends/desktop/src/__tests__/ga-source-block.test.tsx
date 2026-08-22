@@ -66,4 +66,15 @@ describe('GaSourceBlock source refresh', () => {
     });
     expect(screen.getByText('data.localRepoPick')).toBeTruthy();
   });
+
+  it('shows the complete repository path without character truncation', async () => {
+    const fullPath = '/Users/test/workspaces/clients/example/very-deep/GenericAgent-repository';
+    mockTauriInvoke.mockResolvedValueOnce(fullPath);
+
+    render(<GaSourceBlock />);
+
+    const path = await screen.findByText(fullPath);
+    expect(path.textContent).toBe(fullPath);
+    expect(path.classList.contains('ga-source-path')).toBe(true);
+  });
 });

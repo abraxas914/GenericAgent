@@ -22,10 +22,16 @@ function OpRow({ label, tip, btnText, onClick, disabled }: OpRowProps) {
     <div className="ga-data-row">
       <div className="ga-data-row-info">
         <Tooltip content={tip}>
-          <span className="ga-data-row-label">{label}</span>
+          <span className="ga-data-row-label" tabIndex={0}>{label}</span>
         </Tooltip>
       </div>
-      <Button size="small" type="tertiary" onClick={onClick} disabled={disabled}>
+      <Button
+        className="ga-data-action"
+        size="small"
+        type="tertiary"
+        onClick={onClick}
+        disabled={disabled}
+      >
         {btnText}
       </Button>
     </div>

@@ -279,7 +279,18 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--semi-color-text-0, #1c1f23);
-  cursor: default;
+  cursor: help;
+  border-radius: 2px;
+}
+
+.ga-data-row-label:focus-visible {
+  outline: 2px solid var(--semi-color-primary-light-active, #94bfff);
+  outline-offset: 2px;
+}
+
+.ga-data-action.semi-button {
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .ga-data-divider {
@@ -290,7 +301,16 @@
 
 /* ── GA Source block ── */
 .ga-source-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 12px;
+  row-gap: 6px;
   padding: 8px 0 4px;
+}
+
+.ga-source-info {
+  min-width: 0;
 }
 
 .ga-source-status {
@@ -298,7 +318,7 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  margin: 6px 0 8px;
+  margin-top: 6px;
 }
 
 .ga-source-status-text {
@@ -328,19 +348,25 @@
 }
 
 .ga-source-path {
+  display: block;
+  grid-column: 1 / -1;
+  grid-row: 2;
   color: var(--semi-color-text-2, #646a73);
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
   font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 260px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .ga-source-actions {
   display: flex;
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
 }
 
 /* Add/Edit Model form */

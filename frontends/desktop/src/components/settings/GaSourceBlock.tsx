@@ -6,13 +6,6 @@ import { useChatStore } from '../../stores/chat';
 
 type SourceState = 'idle' | 'connected' | 'switching';
 
-function truncatePath(p: string, max = 40): string {
-  if (p.length <= max) return p;
-  const head = p.slice(0, 12);
-  const tail = p.slice(-(max - 15));
-  return `${head}…${tail}`;
-}
-
 function mapSourceError(msg: string, t: (k: string) => string): string {
   if (msg.includes('agentmain.py')) return t('data.localRepoErrNoAgent');
   if (msg.includes('not compatible') || msg.includes('compatibility probe')) {
@@ -96,28 +89,40 @@ export function GaSourceBlock({ refreshKey = 0 }: { refreshKey?: number }) {
 
   return (
     <div className="ga-source-block">
-      <Tooltip content={t('data.localRepoTip')}>
-        <span className="ga-data-row-label">{t('data.localRepo')}</span>
-      </Tooltip>
-      {state !== 'idle' && (
-        <div className="ga-source-status">
-          <span className={`ga-source-dot ${state === 'connected' ? 'ga-source-dot--on' : 'ga-source-dot--switching'}`} />
-          <span className="ga-source-status-text">
-            {state === 'connected' ? t('data.localRepoConnected') : t('data.localRepoSwitching')}
-          </span>
-          {sourcePath && state === 'connected' && (
-            <Tooltip content={sourcePath}>
-              <span className="ga-source-path">{truncatePath(sourcePath)}</span>
-            </Tooltip>
-          )}
-        </div>
+      <div className="ga-source-info">
+        <Tooltip content={t('data.localRepoTip')}>
+          <span className="ga-data-row-label" tabIndex={0}>{t('data.localRepo')}</span>
+        </Tooltip>
+        {state !== 'idle' && (
+          <div className="ga-source-status">
+            <span className={`ga-source-dot ${state === 'connected' ? 'ga-source-dot--on' : 'ga-source-dot--switching'}`} />
+            <span className="ga-source-status-text">
+              {state === 'connected' ? t('data.localRepoConnected') : t('data.localRepoSwitching')}
+            </span>
+          </div>
+        )}
+      </div>
+      {sourcePath && state === 'connected' && (
+        <code className="ga-source-path">{sourcePath}</code>
       )}
       <div className="ga-source-actions">
-        <Button size="small" type="tertiary" onClick={handlePick} disabled={disabled}>
+        <Button
+          className="ga-data-action"
+          size="small"
+          type="tertiary"
+          onClick={handlePick}
+          disabled={disabled}
+        >
           {state === 'connected' ? t('data.localRepoChange') : t('data.localRepoPick')}
         </Button>
         {state === 'connected' && (
-          <Button size="small" type="tertiary" onClick={handleDisconnect} disabled={disabled}>
+          <Button
+            className="ga-data-action"
+            size="small"
+            type="tertiary"
+            onClick={handleDisconnect}
+            disabled={disabled}
+          >
             {t('data.localRepoDisconnect')}
           </Button>
         )}
