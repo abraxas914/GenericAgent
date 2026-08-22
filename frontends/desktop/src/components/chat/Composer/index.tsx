@@ -10,6 +10,7 @@ import { SkillPanel } from './SkillPanel';
 import { PrimaryCTA, computeCTAState } from './PrimaryCTA';
 import { StatusStack } from './StatusStack';
 import { usePlaceholder } from './usePlaceholder';
+import { uploadFile } from '../../../services/chat';
 import './composer.css';
 
 interface Props {
@@ -68,7 +69,6 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
         reader.onload = async (e) => {
           try {
             const dataUrl = e.target?.result as string;
-            const { uploadFile } = await import('../../../services/chat');
             const serverPath = await uploadFile(file.name, dataUrl);
             setAttachments((prev) =>
               prev.map((a) => a.id === id ? { ...a, path: serverPath, status: 'ready' as const, errorMsg: undefined } : a)

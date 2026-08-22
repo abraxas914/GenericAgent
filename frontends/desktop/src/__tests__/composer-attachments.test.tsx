@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Composer } from '../components/chat/Composer';
 
-const uploadFileMock = vi.fn();
+const { uploadFileMock } = vi.hoisted(() => ({ uploadFileMock: vi.fn() }));
 
 vi.mock('../services/chat', () => ({
   uploadFile: uploadFileMock,

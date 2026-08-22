@@ -1,12 +1,19 @@
-import { memo } from 'react';
+import { lazy, memo, Suspense } from 'react';
 import type { ParsedSegment } from '../../agentProtocol';
-import { MarkdownPart } from './MarkdownPart';
 import { ThinkingPart } from './ThinkingPart';
 import { ToolPart } from './ToolPart';
 import { ResultPart } from './ResultPart';
-import { SummaryPart } from './SummaryPart';
 import { ApprovalPart } from './ApprovalPart';
 import { ResponseLoadingIndicator, StreamStallIndicator } from '../StreamIndicators';
+
+const MarkdownPart = lazy(async () => {
+  const module = await import('./MarkdownPart');
+  return { default: module.MarkdownPart };
+});
+const SummaryPart = lazy(async () => {
+  const module = await import('./SummaryPart');
+  return { default: module.SummaryPart };
+});
 
 interface Props {
   segments: ParsedSegment[];
@@ -39,7 +46,11 @@ export const MessageParts = memo(function MessageParts({ segments, isStreaming, 
         const segKey = `${messageId}-${i}`;
         switch (seg.type) {
           case 'prose':
-            return <MarkdownPart key={i} content={seg.content} isStreaming={isStreaming && i === resolvedSegments.length - 1} />;
+            return (
+              <Suspense key={i} fallback={<span data-slot="aui_markdown-loading" aria-busy="true" />}>
+                <MarkdownPart content={seg.content} isStreaming={isStreaming && i === resolvedSegments.length - 1} />
+              </Suspense>
+            );
           case 'thinking':
             return <ThinkingPart key={i} content={seg.content} isStreaming={!!seg.inFlight || isStreaming} />;
           case 'tool':
@@ -47,7 +58,11 @@ export const MessageParts = memo(function MessageParts({ segments, isStreaming, 
           case 'result':
             return <ResultPart key={i} content={seg.content} inFlight={!!seg.inFlight} segmentKey={segKey} isStreaming={isStreaming} />;
           case 'summary':
-            return <SummaryPart key={i} content={seg.content} />;
+            return (
+              <Suspense key={i} fallback={<span data-slot="aui_summary-loading" aria-busy="true" />}>
+                <SummaryPart content={seg.content} />
+              </Suspense>
+            );
           case 'approval':
             return <ApprovalPart key={i} question={seg.content} candidates={seg.candidates || []} />;
           default:
