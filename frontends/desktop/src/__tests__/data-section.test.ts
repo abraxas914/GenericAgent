@@ -5,6 +5,7 @@ import {
   exportData,
   importData,
   inspectDataImport,
+  supportsDataBackupApi,
 } from '../services/dataBackup';
 
 describe('desktop data backup service', () => {
@@ -23,6 +24,21 @@ describe('desktop data backup service', () => {
     const date = new Date(2026, 7, 22, 9, 4, 7);
     expect(backupFilename('zh', date)).toBe('GenericAgent-数据备份-2026-08-22-090407.zip');
     expect(backupFilename('en', date)).toBe('GenericAgent-data-backup-2026-08-22-090407.zip');
+  });
+
+  it('detects whether the connected core exposes advanced data backup routes', async () => {
+    mockFetch.mockResolvedValueOnce({ status: 405 });
+    await expect(supportsDataBackupApi()).resolves.toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:14168/memory/import/inspect',
+      { method: 'HEAD' },
+    );
+
+    mockFetch.mockResolvedValueOnce({ status: 404 });
+    await expect(supportsDataBackupApi()).resolves.toBe(false);
+
+    mockFetch.mockRejectedValueOnce(new Error('bridge unavailable'));
+    await expect(supportsDataBackupApi()).resolves.toBe(false);
   });
 
   it('inspects a backup before import and sends only its selected path', async () => {
