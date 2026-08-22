@@ -63,6 +63,8 @@
   --ui-chat-surface-background: hsl(0 0% 100%);
   --ui-chat-bubble-background: hsl(0 0% 96%);
   --ui-stroke-secondary: hsl(0 0% 78%);
+  --ui-tooltip-surface: #17181b;
+  --ui-tooltip-text: #fff;
 }
 
 [data-appearance="dark"] {
@@ -105,6 +107,20 @@ body {
   color: var(--foreground);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Keep L2 explanations compact and legible across every Semi Tooltip. */
+.semi-tooltip-wrapper {
+  padding: 5px 8px;
+  background-color: var(--ui-tooltip-surface);
+  color: var(--ui-tooltip-text);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.semi-tooltip-wrapper .semi-tooltip-icon-arrow {
+  color: var(--ui-tooltip-surface);
 }
 
 button, input, select, textarea {

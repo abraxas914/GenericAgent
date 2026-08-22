@@ -22,7 +22,7 @@ fi
 
 # --- Check 2: Bridge mapped to proc.bridge ---
 echo "[2] Bridge mapped to proc.bridge"
-if grep -q "'__bridge__'.*'proc.bridge'" "$SRC/components/services/StatusPanel.tsx"; then
+if grep -A4 -q "'__bridge__':" "$SRC/components/services/StatusPanel.tsx" && grep -A4 "'__bridge__':" "$SRC/components/services/StatusPanel.tsx" | grep -q "'proc.bridge'"; then
   pass "__bridge__ -> proc.bridge"
 else
   fail "Bridge mapping missing"
@@ -30,7 +30,7 @@ fi
 
 # --- Check 3: Conductor mapped ---
 echo "[3] Conductor mapped to proc.conductor"
-if grep -q "'frontends/conductor.py'.*'proc.conductor'" "$SRC/components/services/StatusPanel.tsx"; then
+if grep -A4 -q "'frontends/conductor.py':" "$SRC/components/services/StatusPanel.tsx" && grep -A4 "'frontends/conductor.py':" "$SRC/components/services/StatusPanel.tsx" | grep -q "'proc.conductor'"; then
   pass "conductor -> proc.conductor"
 else
   fail "Conductor mapping missing"
@@ -38,18 +38,18 @@ fi
 
 # --- Check 4: Scheduler mapped ---
 echo "[4] Scheduler mapped to proc.scheduler"
-if grep -q "'reflect/scheduler.py'.*'proc.scheduler'" "$SRC/components/services/StatusPanel.tsx"; then
+if grep -A4 -q "'reflect/scheduler.py':" "$SRC/components/services/StatusPanel.tsx" && grep -A4 "'reflect/scheduler.py':" "$SRC/components/services/StatusPanel.tsx" | grep -q "'proc.scheduler'"; then
   pass "scheduler -> proc.scheduler"
 else
   fail "Scheduler mapping missing"
 fi
 
-# --- Check 5: Tooltip used ---
-echo "[5] Tooltip wraps service name"
-if grep -q "Tooltip" "$SRC/components/services/StatusPanel.tsx" && grep -q "content={record.id}" "$SRC/components/services/StatusPanel.tsx"; then
-  pass "Tooltip with record.id as content"
+# --- Check 5: Product tooltip used without internal service IDs ---
+echo "[5] Product tooltip wraps service name"
+if grep -q "Tooltip" "$SRC/components/services/StatusPanel.tsx" && grep -q "t(meta.tipKey)" "$SRC/components/services/StatusPanel.tsx" && ! grep -q "content={record.id}" "$SRC/components/services/StatusPanel.tsx"; then
+  pass "Tooltip uses product explanation"
 else
-  fail "Tooltip missing or wrong content"
+  fail "Tooltip missing, wrong, or exposes service ID"
 fi
 
 # --- Check 6: i18n zh has proc.bridge ---

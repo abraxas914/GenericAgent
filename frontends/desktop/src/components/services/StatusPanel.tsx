@@ -10,10 +10,28 @@ import { isTauri, invokeStartBridge } from '../../utils/tauri';
 import { isChannelService } from './ChannelList';
 import { ChannelLogModal } from './ChannelLogModal';
 
-const SERVICE_META: Record<string, string> = {
-  '__bridge__': 'proc.bridge',
-  'frontends/conductor.py': 'proc.conductor',
-  'reflect/scheduler.py': 'proc.scheduler',
+interface ServiceMeta {
+  labelKey: string;
+  summaryKey: string;
+  tipKey: string;
+}
+
+const SERVICE_META: Record<string, ServiceMeta> = {
+  '__bridge__': {
+    labelKey: 'proc.bridge',
+    summaryKey: 'proc.bridgeSummary',
+    tipKey: 'proc.bridgeTip',
+  },
+  'frontends/conductor.py': {
+    labelKey: 'proc.conductor',
+    summaryKey: 'proc.conductorSummary',
+    tipKey: 'proc.conductorTip',
+  },
+  'reflect/scheduler.py': {
+    labelKey: 'proc.scheduler',
+    summaryKey: 'proc.schedulerSummary',
+    tipKey: 'proc.schedulerTip',
+  },
 };
 
 export function StatusPanel() {
@@ -23,7 +41,7 @@ export function StatusPanel() {
   const loading = useServicesStore((s) => s.loading);
   const startService = useServicesStore((s) => s.startService);
   const stopService = useServicesStore((s) => s.stopService);
-  const storExitBridge = useServicesStore((s) => s.exitBridge);
+  const exitBridge = useServicesStore((s) => s.exitBridge);
   const restartService = useServicesStore((s) => s.restartService);
 
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
@@ -74,15 +92,15 @@ export function StatusPanel() {
     (svc: ServiceInfo) =>
       withBusy(svc.id, async () => {
         if (!svc.managed) {
-          const ok = await storExitBridge();
-          if (ok) showSuccess(t('sys.bridgeExiting'));
+          const ok = await exitBridge();
+          if (ok) showSuccess(t('sys.bridgeDisconnecting'));
           return ok;
         }
         const ok = await stopService(svc.id);
         if (ok) showSuccess(t('sys.channelStopped'));
         return ok;
       }),
-    [stopService, storExitBridge, t, withBusy],
+    [exitBridge, stopService, t, withBusy],
   );
 
   const handleRestart = useCallback(
@@ -99,8 +117,8 @@ export function StatusPanel() {
     const { status, errorKey, warningKey, lastError, lastWarning } = svc;
     const map: Record<string, { color: string; text: string }> = {
       running: { color: 'green', text: t('st.running') },
-      offline: { color: 'grey', text: t('st.offline') },
-      error: { color: 'red', text: t('st.error') },
+      offline: { color: 'grey', text: t('st.stopped') },
+      error: { color: 'red', text: t('st.abnormal') },
       warning: { color: 'amber', text: t('st.warning') },
     };
     const cfg = map[status] ?? map.offline;
@@ -138,24 +156,29 @@ export function StatusPanel() {
       dataIndex: 'name',
       key: 'name',
       render: (_text: unknown, record: ServiceInfo) => {
-        const labelKey = SERVICE_META[record.id];
-        const display = labelKey ? t(labelKey) : (record.name || record.id);
+        const meta = SERVICE_META[record.id];
+        const display = meta ? t(meta.labelKey) : t('proc.runtimeComponent');
+        const summary = meta ? t(meta.summaryKey) : t('proc.runtimeComponentSummary');
+        const tip = meta ? t(meta.tipKey) : t('proc.runtimeComponentTip');
         return (
-          <Tooltip content={record.id} position="topLeft">
-            <span style={{ fontWeight: 500 }}>{display}</span>
+          <Tooltip content={tip} position="topLeft">
+            <span className="ga-service-identity">
+              <span className="ga-service-identity-name">{display}</span>
+              <span className="ga-service-identity-summary">{summary}</span>
+            </span>
           </Tooltip>
         );
       },
     },
     {
-      title: 'Status',
+      title: t('svc.colStatus'),
       dataIndex: 'status',
       key: 'status',
       width: 220,
       render: (_text: unknown, record: ServiceInfo) => statusTag(record),
     },
     {
-      title: 'PID',
+      title: t('svc.colPid'),
       dataIndex: 'pid',
       key: 'pid',
       width: 80,
@@ -166,7 +189,7 @@ export function StatusPanel() {
       ),
     },
     {
-      title: 'MEM (MB)',
+      title: t('svc.colMemory'),
       dataIndex: 'memMb',
       key: 'memMb',
       width: 100,
@@ -177,7 +200,7 @@ export function StatusPanel() {
       ),
     },
     {
-      title: 'CPU (%)',
+      title: t('svc.colCpu'),
       dataIndex: 'cpuPct',
       key: 'cpuPct',
       width: 90,
@@ -188,7 +211,7 @@ export function StatusPanel() {
       ),
     },
     {
-      title: '',
+      title: t('svc.colActions'),
       key: 'actions',
       width: 200,
       render: (_text: unknown, record: ServiceInfo) => {
@@ -218,7 +241,7 @@ export function StatusPanel() {
                   disabled={isOffline}
                   onClick={() => handleStop(record)}
                 >
-                  {record.managed ? t('act.stop') : t('act.exit')}
+                  {record.managed ? t('act.stop') : t('act.disconnect')}
                 </Button>
               </>
             ) : (
@@ -275,7 +298,7 @@ export function StatusPanel() {
   }
 
   if (!isOffline && services.length === 0) {
-    return <Empty description={t('st.offline')} />;
+    return <Empty description={t('svc.empty')} />;
   }
 
   return (

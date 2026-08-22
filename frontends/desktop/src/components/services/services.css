@@ -79,6 +79,27 @@
   padding: 4px 0 12px;
 }
 
+.ga-service-identity {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0;
+}
+
+.ga-service-identity-name {
+  color: var(--semi-color-text-0);
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.ga-service-identity-summary {
+  color: var(--semi-color-text-2);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: normal;
+}
+
 /* Offline banner — shown when bridge disconnects but stale data is available */
 .ga-offline-banner {
   display: flex;

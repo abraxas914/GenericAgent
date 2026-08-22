@@ -54,9 +54,9 @@ function GridIcon() {
 }
 
 const LOG_TABS = [
-  { id: '__bridge__', label: 'Bridge' },
-  { id: 'frontends/conductor.py', label: 'Conductor' },
-  { id: 'reflect/scheduler.py', label: 'Scheduler' },
+  { id: '__bridge__', labelKey: 'proc.bridge' },
+  { id: 'frontends/conductor.py', labelKey: 'proc.conductor' },
+  { id: 'reflect/scheduler.py', labelKey: 'proc.scheduler' },
 ] as const;
 
 const LOG_PREVIEW_LINES = 12;
@@ -103,7 +103,8 @@ export function BridgeMenuPanel({ onClose }: Props) {
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {
-      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+      const anchor = panelRef.current?.parentElement;
+      if (anchor && !anchor.contains(e.target as Node)) {
         onClose();
       }
     }
@@ -138,7 +139,14 @@ export function BridgeMenuPanel({ onClose }: Props) {
   const truncated = totalLines > LOG_PREVIEW_LINES;
 
   return (
-    <div ref={panelRef} className="ga-bridge-panel" data-slot="bridge-panel">
+    <div
+      ref={panelRef}
+      id="ga-runtime-management-panel"
+      className="ga-bridge-panel"
+      data-slot="bridge-panel"
+      role="dialog"
+      aria-label={t('foot.runtimeManagement')}
+    >
       {/* Header */}
       <div className="ga-bridge-panel-header">
         <div className="ga-bridge-panel-status-rows">
@@ -155,7 +163,7 @@ export function BridgeMenuPanel({ onClose }: Props) {
           <button
             className="ga-bridge-panel-action-btn"
             onClick={() => { onClose(); window.location.reload(); }}
-            title={t('bridge.restart')}
+            title={t('bridge.refresh')}
           >
             <RefreshIcon />
           </button>
@@ -178,7 +186,7 @@ export function BridgeMenuPanel({ onClose }: Props) {
               className={`ga-bridge-panel-tab ${activeTab === tab.id ? 'active' : ''}`}
               onClick={() => setActiveTab(tab.id)}
             >
-              {tab.label}
+              {t(tab.labelKey)}
             </button>
           ))}
         </div>
@@ -194,7 +202,7 @@ export function BridgeMenuPanel({ onClose }: Props) {
         <div className="ga-bridge-panel-section-foot">
           {truncated && (
             <span className="ga-bridge-panel-truncated">
-              {totalLines} lines total
+              {t('bridge.logLineCount', { count: totalLines })}
             </span>
           )}
           <button className="ga-bridge-panel-link-btn" onClick={handleOpenServices}>
