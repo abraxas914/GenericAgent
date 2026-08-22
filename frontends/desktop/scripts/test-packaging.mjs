@@ -262,6 +262,41 @@ const releaseWorkflow = fs.readFileSync(
   path.join(REPO_ROOT, '.github', 'workflows', 'desktop-release-package.yml'),
   'utf8',
 );
+const packageManifest = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf8'));
+const packagingTauriConfig = JSON.parse(fs.readFileSync(confPath, 'utf8'));
+const distIntegrityScript = fs.readFileSync(path.join(DESKTOP_ROOT, 'scripts', 'assert-dist-built.mjs'), 'utf8');
+const gitAttributes = fs.readFileSync(path.join(REPO_ROOT, '.gitattributes'), 'utf8');
+const noticeAttributeRules = [
+  'frontends/desktop/public/THIRD_PARTY_NOTICES.txt text eol=lf',
+  'frontends/desktop/dist/THIRD_PARTY_NOTICES.txt text eol=lf',
+];
+if (noticeAttributeRules.every((rule) => gitAttributes.split(/\r?\n/).filter((line) => line === rule).length === 1)) {
+  ok('source and compiled third-party notices each have one exact LF attribute rule');
+} else {
+  bad('third-party notice LF attribute rules are missing, duplicated, or conflicting');
+}
+if (
+  packageManifest.scripts?.['test:bundle'] === 'node scripts/assert-dist-built.mjs'
+    && packageManifest.scripts?.['build:tauri-assets'] === 'npm run build && npm run test:bundle'
+    && packagingTauriConfig.build?.beforeBuildCommand === 'npm run build:tauri-assets'
+    && distIntegrityScript.includes('sha256(builtPath) !== expectedHash')
+) {
+  ok('Tauri frontend build runs the cross-platform dist hash contract before embedding');
+} else {
+  bad('Tauri frontend build can embed dist without the exact notice hash contract');
+}
+for (const command of [
+  'npm run tauri build -- --bundles nsis',
+  'npm run tauri build -- --bundles appimage',
+  'npm run tauri build -- --bundles app',
+]) {
+  if (releaseWorkflow.includes(`        run: ${command}\n`)) {
+    ok(`release packaging consumes the notice-gated Tauri command: ${command}`);
+  } else {
+    bad(`release packaging is missing the notice-gated Tauri command: ${command}`);
+  }
+}
+
 if (windowsPbsArchiveUsesPosixTempPath(releaseWorkflow)) {
   ok('Windows PBS archive uses an asserted absolute POSIX runner temp path');
 } else {

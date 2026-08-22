@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:tauri-assets": "npm run build && npm run test:bundle",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test:ci-contract": "node scripts/verify-ci-contract.mjs",

@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "identifier": "com.genericagent.app",
   "build": {
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:tauri-assets",
     "beforeDevCommand": "npm run dev",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
