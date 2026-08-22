@@ -118,6 +118,27 @@ function workflowJob(workflow, name) {
   return nextJob ? remainder.slice(0, nextJob.index) : remainder;
 }
 
+function macosPackagingPythonInputsAreSeparated(workflow) {
+  const macJob = workflowJob(workflow, 'build-macos');
+  return (workflow.match(/^  MACOS_PACKAGING_PYTHON_VERSION: "3\.12\.10"$/gm) ?? []).length === 1
+    && (workflow.match(/^  PBS_PYTHON_VERSION: "3\.12\.14"$/gm) ?? []).length === 1
+    && (workflow.match(/\$\{\{ env\.MACOS_PACKAGING_PYTHON_VERSION \}\}/g) ?? []).length === 1
+    && /uses: actions\/setup-python@[0-9a-f]{40}[^\n]*\n        with:\n          python-version: \$\{\{ env\.MACOS_PACKAGING_PYTHON_VERSION \}\}/.test(macJob)
+    && !/python-version: \$\{\{ env\.PBS_PYTHON_VERSION \}\}/.test(macJob)
+    && (workflow.match(/cpython-\$\{PBS_PYTHON_VERSION\}%2B\$\{PBS_RELEASE\}-/g) ?? []).length === 3
+    && macJob.includes('cpython-${PBS_PYTHON_VERSION}%2B${PBS_RELEASE}-aarch64-apple-darwin-install_only.tar.gz')
+    && !macJob.includes('cpython-${MACOS_PACKAGING_PYTHON_VERSION}');
+}
+
+function windowsPbsArchiveUsesPosixTempPath(workflow) {
+  const windowsJob = workflowJob(workflow, 'build-windows');
+  return (windowsJob.match(/command -v cygpath >\/dev\/null 2>&1/g) ?? []).length === 1
+    && (windowsJob.match(/RUNNER_TEMP_POSIX="\$\(cygpath -u "\$RUNNER_TEMP"\)"/g) ?? []).length === 1
+    && (windowsJob.match(/\[\[ "\$RUNNER_TEMP_POSIX" == \/\* \]\]/g) ?? []).length === 1
+    && (windowsJob.match(/PBS_ARCHIVE="\$\{RUNNER_TEMP_POSIX\}\/pbs-windows-x86_64\.tar\.gz"/g) ?? []).length === 1
+    && !windowsJob.includes('PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"');
+}
+
 const buildJobs = ['build-windows', 'build-linux', 'build-macos'];
 const releaseJobsSection = releaseWorkflow.slice(releaseWorkflow.search(/^jobs:\s*$/m));
 const releaseJobNames = [...releaseJobsSection.matchAll(/^  ([a-zA-Z0-9_-]+):\s*$/gm)].map((match) => match[1]);
@@ -194,8 +215,44 @@ check(
     && releaseWorkflow.includes('RUST_TOOLCHAIN: "1.95.0"')
     && releaseWorkflow.includes('PBS_RELEASE: "20260814"')
     && releaseWorkflow.includes('PBS_PYTHON_VERSION: "3.12.14"')
+    && releaseWorkflow.includes('MACOS_PACKAGING_PYTHON_VERSION: "3.12.10"')
     && !releaseWorkflow.includes('/releases/latest'),
-  'Node, Rust, and python-build-standalone versions are exact and do not use releases/latest',
+  'Node, Rust, host packaging Python, and python-build-standalone versions are exact and do not use releases/latest',
+);
+check(
+  macosPackagingPythonInputsAreSeparated(releaseWorkflow),
+  'macOS host packaging Python is exact and separate from the embedded PBS runtime',
+);
+check(
+  !macosPackagingPythonInputsAreSeparated(
+    releaseWorkflow.replace(
+      '${{ env.MACOS_PACKAGING_PYTHON_VERSION }}',
+      '${{ env.PBS_PYTHON_VERSION }}',
+    ),
+  ),
+  'macOS Python contract rejects coupling setup-python to the PBS runtime version',
+);
+check(
+  !macosPackagingPythonInputsAreSeparated(
+    releaseWorkflow.replace(
+      'MACOS_PACKAGING_PYTHON_VERSION: "3.12.10"',
+      'MACOS_PACKAGING_PYTHON_VERSION: "3.12"',
+    ),
+  ),
+  'macOS Python contract rejects a floating host packaging version',
+);
+check(
+  windowsPbsArchiveUsesPosixTempPath(releaseWorkflow),
+  'Windows PBS archive uses an asserted absolute POSIX runner temp path',
+);
+check(
+  !windowsPbsArchiveUsesPosixTempPath(
+    releaseWorkflow.replace(
+      'PBS_ARCHIVE="${RUNNER_TEMP_POSIX}/pbs-windows-x86_64.tar.gz"',
+      'PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"',
+    ),
+  ),
+  'Windows PBS archive contract rejects a raw drive-letter runner temp path',
 );
 for (const digest of [
   '7330282b47cd43a66b702d39078d2e5a88e580cee351d82f95045f21f5ee042a',
