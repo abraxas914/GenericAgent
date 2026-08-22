@@ -45,8 +45,22 @@ describe('DataSection user-facing copy', () => {
     expect(zh['data.importKeyTip']).toContain('替换当前密钥配置');
     expect(zh['data.exportKeyTip']).toContain('敏感信息');
     expect(zh['data.importDataTip']).toContain('密钥配置不受影响');
+    expect(zh['data.importDataTip']).toContain('同名记忆会覆盖');
+    expect(zh['data.importDataTip']).toContain('完整备份');
+    expect(zh['data.importMergeNotice']).toContain('回复记录和会话只添加新项');
     expect(zh['data.exportDataTip']).toContain('不会移动或删除原数据');
+    expect(en['data.importDataTip']).toContain('source memory overwrites');
+    expect(en['data.importDataTip']).toContain('fully backed up');
+    expect(en['data.importMergeNotice']).toContain('response records and sessions are add-only');
     expect(en['data.exportDataTip']).toContain('original data stays in place');
+  });
+
+  it('warns about in-process and external writers without claiming cross-process locking', () => {
+    expect(zh['data.maintenanceBlocked']).toContain('运行中的会话');
+    expect(zh['data.externalProcessWarning']).toContain('桌面应用无法暂停这些外部进程');
+    expect(en['data.maintenanceBlocked']).toContain('running session');
+    expect(en['data.externalProcessWarning']).toContain('cannot pause those external processes');
+    expect(en['data.importRestoreHint']).toContain('restore the memory folder');
   });
 
   it('keeps implementation vocabulary out of both settings flows', () => {

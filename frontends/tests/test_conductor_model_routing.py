@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import importlib.util
+import queue
 import sys
+import threading
 import types
 from pathlib import Path
 
@@ -155,6 +157,220 @@ def test_runtime_model_snapshot_is_broadcast_with_running_state(monkeypatch):
 
     assert instance.model_snapshot() == {**state, "running": True}
     assert payloads == [{"type": "model", "model": {**state, "running": True}}]
+
+
+def test_long_lived_conductor_refreshes_model_between_tasks(monkeypatch):
+    """A saved binding waits for task cleanup, then affects the next task."""
+
+    class EndOfInbox(Exception):
+        pass
+
+    second_boundary_entered = threading.Event()
+
+    class BoundaryInbox:
+        def __init__(self):
+            self.events = [
+                {"type": "user_message", "id": "first"},
+                {"type": "user_message", "id": "second"},
+            ]
+
+        def get(self):
+            if not self.events:
+                raise EndOfInbox
+            if len(self.events) == 1:
+                second_boundary_entered.set()
+            return self.events.pop(0)
+
+        def task_done(self):
+            pass
+
+        def empty(self):
+            # Keep each event as a separate task boundary for this regression.
+            return True
+
+    selected = {"llmNo": 1}
+    timeline: list[tuple[str, int]] = []
+    allow_first_cleanup = threading.Event()
+    first_cleanup_done = threading.Event()
+
+    class TaskAgent(FakeAgent):
+        def __init__(self):
+            super().__init__(["zero", "one", "two"])
+            self.inc_out = False
+            self.task_models: list[int] = []
+            self.task_queue: queue.Queue = queue.Queue()
+            self.cleanup_threads: list[threading.Thread] = []
+
+        def next_llm(self, no: int):
+            super().next_llm(no)
+            timeline.append(("select", self.llm_no))
+
+        def put_task(self, _prompt: str, source: str):
+            assert source == "conductor"
+            self.task_models.append(self.llm_no)
+            timeline.append(("submit", self.llm_no))
+            if len(self.task_models) == 1:
+                # Simulate save_config while task one is already submitted. The
+                # display queue reports done before the agent runner persists its
+                # final state and calls task_done().
+                selected["llmNo"] = 2
+                assert self.llm_no == 1
+                self.task_queue.put("first")
+
+                def finish_first_task():
+                    assert allow_first_cleanup.wait(timeout=2)
+                    assert self.task_queue.get_nowait() == "first"
+                    self.task_queue.task_done()
+                    first_cleanup_done.set()
+
+                cleanup = threading.Thread(target=finish_first_task)
+                cleanup.start()
+                self.cleanup_threads.append(cleanup)
+            else:
+                self.task_queue.put("second")
+                assert self.task_queue.get_nowait() == "second"
+                self.task_queue.task_done()
+            output: queue.Queue = queue.Queue()
+            output.put({"done": True, "turn": len(self.task_models)})
+            return output
+
+    instance = conductor.Conductor()
+    instance.agent = TaskAgent()
+    instance.inbox = BoundaryInbox()
+    payloads: list[dict] = []
+    monkeypatch.setattr(
+        conductor,
+        "_settings_doc",
+        lambda: {"conductor": {"llmNo": selected["llmNo"]}},
+    )
+    monkeypatch.setattr(conductor, "schedule_broadcast", payloads.append)
+    monkeypatch.setattr(conductor, "start_agent_runner", lambda *_args: None)
+    monkeypatch.setattr(conductor.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(instance, "_build_prompt", lambda events: events[0]["id"])
+
+    run_errors: list[BaseException] = []
+
+    def run_loop():
+        try:
+            instance._run()
+        except EndOfInbox:
+            pass
+        except BaseException as error:  # surfaced below in the test thread
+            run_errors.append(error)
+
+    runner = threading.Thread(target=run_loop)
+    runner.start()
+    assert second_boundary_entered.wait(timeout=2)
+
+    # The display `done` marker has already arrived, but queue cleanup is still
+    # blocked.  Model two must not be applied or submitted yet.
+    assert instance.agent.task_models == [1]
+    assert timeline == [("select", 1), ("submit", 1)]
+
+    allow_first_cleanup.set()
+    assert first_cleanup_done.wait(timeout=2)
+    runner.join(timeout=2)
+    for cleanup in instance.agent.cleanup_threads:
+        cleanup.join(timeout=2)
+
+    assert not runner.is_alive()
+    assert run_errors == []
+
+    assert instance.agent.task_models == [1, 2]
+    assert timeline == [
+        ("select", 1),
+        ("submit", 1),
+        ("select", 2),
+        ("submit", 2),
+    ]
+    assert instance.model_snapshot() == {
+        "configured": 2,
+        "effective": 2,
+        "fallbackReason": None,
+        "current": "two",
+        "running": False,
+    }
+    assert [item["model"]["effective"] for item in payloads] == [1, 1, 2, 2]
+    assert [item["model"]["running"] for item in payloads] == [True, False, True, False]
+
+
+def test_conductor_defers_events_without_models_and_recovers(monkeypatch):
+    class EndOfInbox(Exception):
+        pass
+
+    ready = {"value": False}
+
+    class BoundaryInbox:
+        def __init__(self):
+            self.events = [
+                {"type": "user_message", "id": "deferred"},
+                {"type": "user_message", "id": "recovery"},
+            ]
+
+        def get(self):
+            if not self.events:
+                raise EndOfInbox
+            if len(self.events) == 1:
+                ready["value"] = True
+            return self.events.pop(0)
+
+        def task_done(self):
+            pass
+
+        def empty(self):
+            return True
+
+    class RecoveringAgent:
+        def __init__(self):
+            self.inc_out = False
+            self.llmclients: list[Client] = []
+            self.llm_no = 0
+            self.task_queue: queue.Queue = queue.Queue()
+            self.submissions: list[str] = []
+
+        def load_llm_sessions(self):
+            if ready["value"] and not self.llmclients:
+                self.llmclients = [Client("recovered")]
+
+        def next_llm(self, no: int):
+            self.llm_no = no
+            self.llmclient = self.llmclients[no]
+
+        def get_llm_name(self, client=None, model=False):
+            client = client or self.llmclient
+            return client.backend.model if model else client.backend.name
+
+        def put_task(self, prompt: str, source: str):
+            assert source == "conductor"
+            self.submissions.append(prompt)
+            output: queue.Queue = queue.Queue()
+            output.put({"done": True, "turn": 1})
+            return output
+
+    instance = conductor.Conductor()
+    instance.agent = RecoveringAgent()
+    instance.inbox = BoundaryInbox()
+    payloads: list[dict] = []
+    monkeypatch.setattr(conductor, "_settings_doc", lambda: {})
+    monkeypatch.setattr(conductor, "schedule_broadcast", payloads.append)
+    monkeypatch.setattr(conductor, "start_agent_runner", lambda *_args: None)
+    monkeypatch.setattr(conductor.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(instance, "_build_prompt", lambda events: ",".join(e["id"] for e in events))
+
+    with pytest.raises(EndOfInbox):
+        instance._run()
+
+    assert instance.agent.submissions == ["deferred,recovery"]
+    model_payloads = [item["model"] for item in payloads if item["type"] == "model"]
+    assert model_payloads[0]["effective"] is None
+    assert model_payloads[0]["fallbackReason"] == "no_models"
+    assert model_payloads[0]["running"] is False
+    assert [model["running"] for model in model_payloads[1:]] == [True, False]
+    assert any(
+        item["item"]["text"].startswith("Conductor paused: no usable model")
+        for item in payloads
+        if item["type"] == "log"
+    )
 
 
 def test_parallel_worker_model_selection_keeps_agents_isolated():

@@ -23,6 +23,8 @@ export interface DataImportResult {
   responsesSkipped: number;
   sessionsAdded: number;
   sessionsSkipped: number;
+  sessionsFileFound: boolean;
+  backupDir: string;
 }
 
 export interface DataExportResult {
@@ -30,6 +32,24 @@ export interface DataExportResult {
   exportedAt: string;
   sourceMode: BackupSourceMode;
   content: BackupContentCounts;
+}
+
+export class DataBackupError extends Error {
+  readonly code: string | null;
+  readonly runningSessions: string[];
+  readonly runningExtras: string[];
+
+  constructor(message: string, payload: Record<string, unknown>) {
+    super(message);
+    this.name = 'DataBackupError';
+    this.code = typeof payload.code === 'string' ? payload.code : null;
+    this.runningSessions = Array.isArray(payload.runningSessions)
+      ? payload.runningSessions.filter((value): value is string => typeof value === 'string')
+      : [];
+    this.runningExtras = Array.isArray(payload.runningExtras)
+      ? payload.runningExtras.filter((value): value is string => typeof value === 'string')
+      : [];
+  }
 }
 
 async function postJson<T>(path: string, body: Record<string, unknown>): Promise<T> {
@@ -40,7 +60,8 @@ async function postJson<T>(path: string, body: Record<string, unknown>): Promise
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`);
+    const message = typeof data?.error === 'string' ? data.error : `HTTP ${response.status}`;
+    throw new DataBackupError(message, data as Record<string, unknown>);
   }
   return data as T;
 }

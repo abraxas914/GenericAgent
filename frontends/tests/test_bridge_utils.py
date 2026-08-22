@@ -114,6 +114,16 @@ class TestMemoryImport:
             sessions = {}
 
             @staticmethod
+            def begin_maintenance(kind, running_extras_fn):
+                assert kind == "import"
+                assert running_extras_fn() == []
+                return "test-token"
+
+            @staticmethod
+            def end_maintenance(token):
+                assert token == "test-token"
+
+            @staticmethod
             def _session_from_item(item):
                 return SimpleNamespace(id=item["id"], title=item.get("title", ""))
 
@@ -121,6 +131,7 @@ class TestMemoryImport:
             {"_import_data_source"},
             {
                 "manager": Manager(),
+                "services": SimpleNamespace(running_managed_ids=lambda: []),
                 "materialize_import_source": materialize_import_source,
                 "merge_data_files": merge_data_files,
             },
@@ -154,6 +165,18 @@ def _load_empty_turn_helpers():
 
 class TestEmptyTurnFallback:
     def test_uses_english_microcopy(self, tmp_path, monkeypatch):
+        (tmp_path / ".ga_desktop_settings.json").write_text(
+            '{"ui":{"lang":"en"},"lang":"zh"}', encoding="utf-8"
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        helpers = _load_empty_turn_helpers()
+
+        assert helpers["empty_turn_fallback"]() == (
+            '⚠️ This turn ended without a visible response. You can send "continue" to retry.'
+        )
+
+    def test_supports_legacy_top_level_language(self, tmp_path, monkeypatch):
         (tmp_path / ".ga_desktop_settings.json").write_text('{"lang":"en"}', encoding="utf-8")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -173,7 +196,9 @@ class TestEmptyTurnFallback:
         assert helpers["empty_turn_fallback"]() == expected
 
     def test_defaults_to_chinese_for_non_string_language(self, tmp_path, monkeypatch):
-        (tmp_path / ".ga_desktop_settings.json").write_text('{"lang":[]}', encoding="utf-8")
+        (tmp_path / ".ga_desktop_settings.json").write_text(
+            '{"ui":{"lang":[]},"lang":[]}', encoding="utf-8"
+        )
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         helpers = _load_empty_turn_helpers()

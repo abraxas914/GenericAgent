@@ -14,9 +14,10 @@ from unittest.mock import patch
 
 import pytest
 
-# Add project root to path so we can import bridge helpers.
+# Add the frontend and project roots so direct bridge imports resolve sibling helpers.
 BRIDGE_PATH = Path(__file__).resolve().parent.parent / "desktop_bridge.py"
 PROJECT_ROOT = BRIDGE_PATH.parent.parent
+sys.path.insert(0, str(BRIDGE_PATH.parent))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # We need a lightweight extraction of AgentManager without starting the full server.
@@ -56,6 +57,8 @@ except Exception as exc:
 
 Session = _mod.Session
 AgentManager = _mod.AgentManager
+MaintenanceConflict = _mod.MaintenanceConflict
+ServiceManager = _mod.ServiceManager
 
 
 @pytest.fixture
@@ -77,6 +80,9 @@ def manager(tmp_ga_root: Path):
     mgr.ga_root = str(tmp_ga_root)
     mgr.config = {}
     mgr.sessions = {}
+    mgr._retired_sessions = {}
+    mgr._maintenance_token = None
+    mgr._maintenance_kind = None
     mgr.active_session_id = None
     mgr._sessions_dir = tmp_ga_root / "temp" / "desktop_sessions"
     mgr._sessions_file = tmp_ga_root / "temp" / "desktop_sessions.json"
@@ -192,6 +198,7 @@ class TestTransactionalDataImport:
             encoding="utf-8",
         )
         monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod.services, "running_managed_ids", lambda: [])
 
         result = _mod._import_data_source(str(source))
 
@@ -278,6 +285,9 @@ class TestLoadSessionsMissingDir:
         mgr.ga_root = str(tmp_ga_root)
         mgr.config = {}
         mgr.sessions = {}
+        mgr._retired_sessions = {}
+        mgr._maintenance_token = None
+        mgr._maintenance_kind = None
         mgr.active_session_id = None
         mgr._sessions_dir = sessions_dir
         mgr._sessions_file = tmp_ga_root / "temp" / "desktop_sessions.json"
@@ -721,3 +731,363 @@ class TestConductorModelHandlers:
         assert response.status == 400
         assert json.loads(response.text)["error"] == "model_out_of_range"
         assert json.loads(settings.read_text(encoding="utf-8")) == {"ui": {"llmNo": 1}}
+
+
+class TestMaintenanceGate:
+    class FakeQueue:
+        def __init__(self, unfinished: int):
+            self.unfinished_tasks = unfinished
+
+    class FakeAgent:
+        def __init__(self, unfinished: int = 0, *, running: bool = False):
+            self.task_queue = TestMaintenanceGate.FakeQueue(unfinished)
+            self.is_running = running
+            self.abort_calls = 0
+
+        def abort(self):
+            self.abort_calls += 1
+
+    def test_rejects_running_sessions_and_managed_extras(self, manager: AgentManager):
+        active = _make_session("sess-active")
+        active.status = "running"
+        manager.sessions[active.id] = active
+
+        with pytest.raises(MaintenanceConflict) as raised:
+            manager.begin_maintenance("import", lambda: ["reflect/scheduler.py"])
+
+        assert raised.value.running_sessions == ["sess-active"]
+        assert raised.value.running_extras == ["reflect/scheduler.py"]
+        assert manager._maintenance_token is None
+
+    def test_cancelled_but_unfinished_queue_still_blocks(self, manager: AgentManager):
+        queued = _make_session("sess-queued")
+        queued.status = "cancelled"
+        queued.agent = self.FakeAgent(unfinished=1)
+        manager.sessions[queued.id] = queued
+
+        with pytest.raises(MaintenanceConflict) as raised:
+            manager.begin_maintenance("import", lambda: [])
+
+        assert raised.value.running_sessions == ["sess-queued"]
+
+    def test_deleted_running_session_remains_registered_until_done(
+        self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
+    ):
+        queued = _make_session("sess-retired")
+        queued.status = "cancelled"
+        queued.agent = self.FakeAgent(unfinished=1)
+        manager.sessions[queued.id] = queued
+        monkeypatch.setattr(_mod, "_purge_session_uploads", lambda _sid: None)
+
+        manager.delete_session(queued.id)
+        assert queued.cancel_requested is True
+        assert queued.active_turn_id == ""
+        assert queued.status == "cancelled"
+        with pytest.raises(MaintenanceConflict) as raised:
+            manager.begin_maintenance("export", lambda: [])
+        assert raised.value.running_sessions == ["sess-retired"]
+
+        queued.agent.task_queue.unfinished_tasks = 0
+        token = manager.begin_maintenance("export", lambda: [])
+        assert manager._retired_sessions == {}
+        manager.end_maintenance(token)
+
+    def test_gate_rejects_prompt_and_service_start(
+        self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
+    ):
+        session = _make_session("sess-blocked")
+        manager.sessions[session.id] = session
+        monkeypatch.setattr(_mod, "manager", manager)
+        token = manager.begin_maintenance("import", lambda: [])
+        try:
+            with pytest.raises(MaintenanceConflict):
+                manager.submit_prompt(session.id, "blocked")
+            with pytest.raises(MaintenanceConflict):
+                _mod.services.start_service("missing-service")
+        finally:
+            manager.end_maintenance(token)
+
+    def test_gate_rejects_cancel_without_mutating_session_or_disk(
+        self, manager: AgentManager
+    ):
+        session = _make_session("sess-cancel-blocked")
+        session.partial = {"content": "unfinished"}
+        manager.sessions[session.id] = session
+        manager._persist_session(session, strict=True)
+        session_path = manager._session_file(session.id)
+        before_bytes = session_path.read_bytes()
+        before_messages = copy.deepcopy(session.messages)
+        token = manager.begin_maintenance("import", lambda: [])
+        try:
+            with pytest.raises(MaintenanceConflict):
+                manager.cancel(session.id)
+        finally:
+            manager.end_maintenance(token)
+
+        assert session.cancel_requested is False
+        assert session.status == "idle"
+        assert session.partial == {"content": "unfinished"}
+        assert session.messages == before_messages
+        assert session_path.read_bytes() == before_bytes
+
+    def test_import_failure_releases_gate(
+        self, manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "one.md").write_text("one", encoding="utf-8")
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod.services, "running_managed_ids", lambda: [])
+        monkeypatch.setattr(
+            _mod, "merge_data_files", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("merge failed"))
+        )
+
+        with pytest.raises(OSError, match="merge failed"):
+            _mod._import_data_source(str(source))
+
+        assert manager._maintenance_token is None
+        token = manager.begin_maintenance("export", lambda: [])
+        manager.end_maintenance(token)
+
+    def test_export_flush_failure_preserves_existing_destination(
+        self, manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        root = Path(manager.ga_root)
+        (root / "memory").mkdir()
+        (root / "memory" / "one.md").write_text("one", encoding="utf-8")
+        session = _make_session("sess-flush-failure")
+        manager.sessions[session.id] = session
+        destination = tmp_path / "backup.zip"
+        destination.write_bytes(b"old backup")
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod.services, "running_managed_ids", lambda: [])
+        monkeypatch.setattr(
+            manager,
+            "_persist_session",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with pytest.raises(OSError, match="disk full"):
+            _mod._export_data_source(str(destination), "included")
+
+        assert destination.read_bytes() == b"old backup"
+        assert manager._maintenance_token is None
+
+    def test_cancelled_http_task_waits_for_worker_owned_gate(
+        self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
+    ):
+        import asyncio
+
+        started = threading.Event()
+        release = threading.Event()
+        monkeypatch.setattr(_mod, "manager", manager)
+
+        def worker():
+            token = manager.begin_maintenance("import", lambda: [])
+            started.set()
+            try:
+                assert release.wait(timeout=5)
+            finally:
+                manager.end_maintenance(token)
+
+        async def scenario():
+            task = asyncio.create_task(_mod._run_worker_to_completion(worker))
+            assert await asyncio.to_thread(started.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0.02)
+            assert manager._maintenance_token is not None
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert manager._maintenance_token is None
+
+        asyncio.run(scenario())
+
+    def test_service_start_race_cannot_pass_maintenance_admission(
+        self, manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        class FakeProcess:
+            pid = 43210
+            stdout = ()
+            returncode = None
+
+            def poll(self):
+                return None
+
+        service_manager = ServiceManager.__new__(ServiceManager)
+        service_manager.lock = threading.RLock()
+        service_manager.ga_root = tmp_path
+        service_manager.procs = {}
+        service_manager.buffers = {}
+        service_manager._emit = lambda _event: None
+        service_manager._im_catalog = {}
+        service_manager._catalog = {"worker": {"id": "worker", "cmd": ["worker"], "port": None}}
+        service_manager._stopping = set()
+        entered_start = threading.Event()
+        release_start = threading.Event()
+        start_result: list[dict] = []
+        admission_result: list[object] = []
+
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+        monkeypatch.setattr(service_manager, "_is_configured", lambda _sid: True)
+
+        def wait_started(_proc):
+            entered_start.set()
+            assert release_start.wait(timeout=5)
+
+        monkeypatch.setattr(service_manager, "_wait_started", wait_started)
+
+        start_thread = threading.Thread(
+            target=lambda: start_result.append(service_manager.start_service("worker"))
+        )
+
+        def admit():
+            try:
+                admission_result.append(
+                    manager.begin_maintenance("import", service_manager.running_managed_ids)
+                )
+            except Exception as error:
+                admission_result.append(error)
+
+        start_thread.start()
+        assert entered_start.wait(timeout=2)
+        admission_thread = threading.Thread(target=admit)
+        admission_thread.start()
+        time.sleep(0.03)
+        assert admission_result == []
+        release_start.set()
+        start_thread.join(timeout=2)
+        admission_thread.join(timeout=2)
+
+        assert start_result[0]["ok"] is True
+        assert start_result[0]["service"]["managed"] is True
+        assert isinstance(admission_result[0], MaintenanceConflict)
+        assert admission_result[0].running_extras == ["worker"]
+
+    def test_managed_service_state_keeps_ui_maintenance_metadata(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        service_manager = ServiceManager.__new__(ServiceManager)
+        service_manager.lock = threading.RLock()
+        service_manager.ga_root = tmp_path
+        service_manager.procs = {}
+        service_manager.buffers = {}
+        service_manager._im_catalog = {}
+        service_manager._catalog = {
+            "reflect/scheduler.py": {
+                "id": "reflect/scheduler.py",
+                "port": None,
+            }
+        }
+        service_manager._stopping = set()
+        monkeypatch.setattr(_mod, "_port_alive", lambda _port: False)
+
+        state = service_manager.list_panel_state()[1]
+
+        assert state["id"] == "reflect/scheduler.py"
+        assert state["name"] == "reflect/scheduler.py"
+        assert state["managed"] is True
+        assert state["running"] is False
+        assert "memMb" in state
+        assert "cpuPct" in state
+
+
+class TestCanonicalSessionRestart:
+    def test_invalid_imported_records_are_skipped_and_valid_record_reloads(
+        self, manager: AgentManager
+    ):
+        records = {
+            "int-id.json": {"id": 9, "messages": [], "msg_seq": 0},
+            "nan.json": {
+                "id": "sess-nan",
+                "messages": [],
+                "msg_seq": 0,
+                "updated_at": float("nan"),
+            },
+            "bad-list.json": {
+                "id": "sess-bad-list",
+                "messages": ["bad"],
+                "msg_seq": 0,
+            },
+            "valid.json": {
+                "id": "sess-canonical",
+                "title": "Canonical",
+                "messages": [{"role": "user", "content": "hi"}],
+                "msg_seq": 1,
+                "created_at": 10,
+                "updated_at": 11,
+                "unknown": "ignored",
+            },
+        }
+        for name, record in records.items():
+            (manager._sessions_dir / name).write_text(json.dumps(record), encoding="utf-8")
+
+        manager._load_sessions()
+
+        assert set(manager.sessions) == {"sess-canonical"}
+        assert manager.active_session_id == "sess-canonical"
+        assert manager.sessions["sess-canonical"].updated_at == 11
+
+
+class TestBridgeSettingsWrites:
+    class Request:
+        can_read_body = True
+
+        def __init__(self, body: dict):
+            self.body = body
+
+        async def json(self):
+            return self.body
+
+    def test_ui_save_preserves_sibling_keys_with_atomic_update(
+        self, manager: AgentManager, tmp_path: Path
+    ):
+        import asyncio
+
+        settings = tmp_path / "settings.json"
+        settings.write_text(
+            json.dumps({
+                "ga_source_override": "/external/source",
+                "conductor": {"llmNo": 3},
+                "unknown": {"keep": True},
+            }),
+            encoding="utf-8",
+        )
+        with patch.object(_mod, "manager", manager), patch.object(_mod, "_SETTINGS", settings):
+            response = asyncio.run(
+                _mod.save_config_handler(self.Request({"config": {"lang": "en"}}))
+            )
+
+        assert response.status == 200
+        assert json.loads(settings.read_text(encoding="utf-8")) == {
+            "ga_source_override": "/external/source",
+            "conductor": {"llmNo": 3},
+            "unknown": {"keep": True},
+            "ui": {"lang": "en"},
+        }
+
+    def test_ui_save_failure_returns_500_and_does_not_claim_success(
+        self, manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import asyncio
+
+        settings = tmp_path / "settings.json"
+        original = '{"unknown":{"keep":true}}'
+        settings.write_text(original, encoding="utf-8")
+        monkeypatch.setattr(
+            _mod,
+            "_update_settings_doc",
+            lambda _mutate: (_ for _ in ()).throw(
+                _mod.DesktopSettingsError("atomic replace failed")
+            ),
+        )
+        with patch.object(_mod, "manager", manager), patch.object(_mod, "_SETTINGS", settings):
+            response = asyncio.run(
+                _mod.save_config_handler(self.Request({"config": {"lang": "en"}}))
+            )
+
+        assert response.status == 500
+        assert json.loads(response.text)["error"] == "atomic replace failed"
+        assert settings.read_text(encoding="utf-8") == original
+        assert manager.config == {}

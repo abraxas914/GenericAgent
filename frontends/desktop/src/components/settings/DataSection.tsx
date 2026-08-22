@@ -8,9 +8,12 @@ import {
   importData,
   inspectDataImport,
   supportsDataBackupApi,
+  DataBackupError,
   type BackupInspection,
+  type DataImportResult,
 } from '../../services/dataBackup';
 import { useChatStore } from '../../stores/chat';
+import { useServicesStore } from '../../stores/services';
 import { useSettingsStore } from '../../stores/settings';
 import { isTauri } from '../../utils/tauri';
 import { SettingsSectionTitle } from './SettingsSectionTitle';
@@ -62,7 +65,23 @@ export function DataSection() {
   const [exporting, setExporting] = useState(false);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [importResult, setImportResult] = useState<DataImportResult | null>(null);
   const [dataBackupAvailable, setDataBackupAvailable] = useState(false);
+  const runningSessionCount = useChatStore((state) => {
+    const runningIds = new Set(state.runningSessions);
+    state.sessions.forEach((session) => {
+      if (session.status === 'running') runningIds.add(session.id);
+    });
+    if (state.status === 'running') {
+      runningIds.add(state.activeSessionId || '__active_session__');
+    }
+    return runningIds.size;
+  });
+  const serviceStates = useServicesStore((state) => state.services);
+  const runningManagedServices = serviceStates.filter(
+    (service) => service.managed && service.running,
+  );
+  const maintenanceBlocked = runningSessionCount > 0 || runningManagedServices.length > 0;
 
   useEffect(() => {
     if (!tauriAvailable) return;
@@ -70,10 +89,29 @@ export function DataSection() {
     void supportsDataBackupApi().then((available) => {
       if (active) setDataBackupAvailable(available);
     });
+    void useServicesStore.getState().fetchServices();
     return () => {
       active = false;
     };
   }, []);
+
+  const maintenanceMessage = useCallback(() => t('data.maintenanceBlocked', {
+    sessions: runningSessionCount,
+    services: runningManagedServices.length,
+  }), [runningManagedServices.length, runningSessionCount, t]);
+
+  const showDataError = useCallback((error: unknown, fallbackKey: string) => {
+    if (error instanceof DataBackupError && error.code === 'maintenance_conflict') {
+      Toast.error({
+        content: t('data.maintenanceBlockedServer', {
+          sessions: error.runningSessions.length,
+          services: error.runningExtras.length,
+        }),
+      });
+      return;
+    }
+    Toast.error({ content: t(fallbackKey) });
+  }, [t]);
 
   const handleImportKey = useCallback(() => {
     const input = document.createElement('input');
@@ -144,26 +182,31 @@ export function DataSection() {
         setImporting(true);
         try {
           const result = await importData(sourcePath);
-          const copied = (result.memoryCopied || 0)
-            + (result.responsesCopied || 0)
-            + (result.sessionsAdded || 0);
-          const skipped = (result.memorySkipped || 0)
-            + (result.responsesSkipped || 0)
-            + (result.sessionsSkipped || 0);
-          Toast.success({ content: t('data.importDataSuccess', { copied, skipped }) });
+          Toast.success({
+            content: t('data.importDataSuccess', {
+              memory: result.memoryCopied || 0,
+              responses: result.responsesCopied || 0,
+              sessions: result.sessionsAdded || 0,
+            }),
+          });
           await useChatStore.getState().loadSessions();
+          setImportResult(result);
         } catch (error) {
           console.error('[DataSection] import data failed:', error);
-          Toast.error({ content: t('data.importDataError') });
+          showDataError(error, 'data.importDataError');
         } finally {
           setImporting(false);
         }
       },
     });
-  }, [lang, t]);
+  }, [lang, showDataError, t]);
 
   const chooseImportSource = useCallback(async (kind: 'backup' | 'folder') => {
     setSourceModalVisible(false);
+    if (maintenanceBlocked) {
+      Toast.warning({ content: maintenanceMessage() });
+      return;
+    }
     try {
       const sourcePath = kind === 'backup'
         ? await bridge.tauriInvoke('pick_data_backup_file', { title: t('data.importBackupPickerTitle') })
@@ -178,9 +221,13 @@ export function DataSection() {
       console.error('[DataSection] inspect import source failed:', error);
       Toast.error({ content: t('data.importDataInvalid') });
     }
-  }, [confirmImport, t]);
+  }, [confirmImport, maintenanceBlocked, maintenanceMessage, t]);
 
   const handleExportData = useCallback(() => {
+    if (maintenanceBlocked) {
+      Toast.warning({ content: maintenanceMessage() });
+      return;
+    }
     Modal.confirm({
       title: t('data.exportDataConfirmTitle'),
       content: t('data.exportDataConfirmMessage'),
@@ -202,13 +249,13 @@ export function DataSection() {
           window.setTimeout(() => setExportedPath(result.path), 0);
         } catch (error) {
           console.error('[DataSection] export data failed:', error);
-          Toast.error({ content: t('data.exportDataError') });
+          showDataError(error, 'data.exportDataError');
         } finally {
           setExporting(false);
         }
       },
     });
-  }, [lang, t]);
+  }, [lang, maintenanceBlocked, maintenanceMessage, showDataError, t]);
 
   const handleRevealExport = useCallback(async () => {
     if (!exportedPath) return;
@@ -245,15 +292,19 @@ export function DataSection() {
             tip={t('data.importDataTip')}
             btnText={importing ? t('data.importing') : t('data.importDataBtn')}
             onClick={() => setSourceModalVisible(true)}
-            disabled={importing || exporting}
+            disabled={importing || exporting || maintenanceBlocked}
           />
           <OpRow
             label={t('data.exportData')}
             tip={t('data.exportDataTip')}
             btnText={exporting ? t('data.exporting') : t('data.exportDataBtn')}
             onClick={handleExportData}
-            disabled={importing || exporting}
+            disabled={importing || exporting || maintenanceBlocked}
           />
+          {maintenanceBlocked && (
+            <p className="ga-data-maintenance-note" role="status">{maintenanceMessage()}</p>
+          )}
+          <p className="ga-data-maintenance-note">{t('data.externalProcessWarning')}</p>
         </>
       )}
 
@@ -265,12 +316,52 @@ export function DataSection() {
         footer={(
           <div className="ga-data-source-actions">
             <Button onClick={() => setSourceModalVisible(false)}>{t('common.cancel')}</Button>
-            <Button onClick={() => chooseImportSource('folder')}>{t('data.importFolderBtn')}</Button>
-            <Button type="primary" onClick={() => chooseImportSource('backup')}>{t('data.importBackupBtn')}</Button>
+            <Button disabled={maintenanceBlocked} onClick={() => chooseImportSource('folder')}>{t('data.importFolderBtn')}</Button>
+            <Button disabled={maintenanceBlocked} type="primary" onClick={() => chooseImportSource('backup')}>{t('data.importBackupBtn')}</Button>
           </div>
         )}
       >
         <p className="ga-data-source-description">{t('data.importSourceDescription')}</p>
+      </Modal>
+
+      <Modal
+        visible={!!importResult}
+        title={t('data.importResultTitle')}
+        width={620}
+        onCancel={() => setImportResult(null)}
+        footer={<Button type="primary" onClick={() => setImportResult(null)}>{t('common.done')}</Button>}
+      >
+        {importResult && (
+          <div className="ga-data-confirm-summary">
+            <div>
+              <span>{t('data.importResultMemory')}</span>
+              <strong>{t('data.importResultMemoryValue', { count: importResult.memoryCopied || 0 })}</strong>
+            </div>
+            <div>
+              <span>{t('data.importResultResponses')}</span>
+              <strong>{t('data.importResultAddSkipValue', {
+                added: importResult.responsesCopied || 0,
+                skipped: importResult.responsesSkipped || 0,
+              })}</strong>
+            </div>
+            <div>
+              <span>{t('data.importResultSessions')}</span>
+              <strong>{t('data.importResultAddSkipValue', {
+                added: importResult.sessionsAdded || 0,
+                skipped: importResult.sessionsSkipped || 0,
+              })}</strong>
+            </div>
+            <div>
+              <span>{t('data.importResultBackup')}</span>
+              {importResult.backupDir
+                ? <code className="ga-data-export-path ga-data-export-path--inline">{importResult.backupDir}</code>
+                : <strong>{t('data.importResultNoBackup')}</strong>}
+            </div>
+            <p>{importResult.backupDir
+              ? t('data.importRestoreHint')
+              : t('data.importNoRestoreNeeded')}</p>
+          </div>
+        )}
       </Modal>
 
       <Modal

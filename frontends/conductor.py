@@ -463,6 +463,7 @@ class Conductor:
         self.inbox: "queue.Queue[dict]" = queue.Queue()   # 收件箱：唯一对外接口
         self.agent: Optional[GenericAgent] = None
         self.started = False
+        self._runner_thread: Optional[threading.Thread] = None
         self.log: list = []   
         self._model_lock = threading.RLock()
         self._model_state = {
@@ -484,6 +485,33 @@ class Conductor:
         schedule_broadcast({"type": "model", "model": snapshot})
 
     def notify(self, event: dict): self.inbox.put(event)
+
+    def _wait_for_agent_idle(self, timeout: float = 10.0) -> None:
+        """Queue.join semantics with a bounded runner-health escape hatch."""
+        tasks = self.agent.task_queue
+        deadline = time.monotonic() + timeout
+        with tasks.all_tasks_done:
+            while tasks.unfinished_tasks:
+                if self._runner_thread is not None and not self._runner_thread.is_alive():
+                    raise RuntimeError("conductor agent runner stopped before task cleanup")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("conductor agent task cleanup timed out")
+                tasks.all_tasks_done.wait(min(0.25, remaining))
+
+    def _record_unavailable_model(self, events: list) -> None:
+        event_label = ",".join(event.get("type", "") for event in events) or "wake"
+        item = {
+            "id": short_id(),
+            "ts": now_ms(),
+            "event": event_label,
+            "turn": None,
+            "text": "Conductor paused: no usable model profiles are configured; events are deferred.",
+        }
+        self.log.append(item)
+        if len(self.log) > self.LOG_MAX:
+            self.log.pop(0)
+        schedule_broadcast({"type": "log", "item": item})
 
     def _build_prompt(self, events: list) -> str:
         running, stopped = pool.counts()
@@ -540,29 +568,44 @@ API: {base}；requests，GET /readme查用法，GET /chat读未读对话，GET /
 
     def _run(self):
         self.agent.inc_out = True
-        start_agent_runner(self.agent, "conductor-agent")
+        self._runner_thread = start_agent_runner(self.agent, "conductor-agent")
         self.started = True
+        deferred_events: list = []
         while True:
             # Block until first event arrives
             first = self.inbox.get()
             self.inbox.task_done()
             # Short debounce: collect any additional events that arrived meanwhile
             time.sleep(0.3)
-            events = [first]
+            events = [*deferred_events, first]
+            deferred_events = []
             while not self.inbox.empty():
                 try:
                     events.append(self.inbox.get_nowait())
                     self.inbox.task_done()
                 except Exception:
                     break
-            kind = first.get("type")
-            other_events = [event for event in events if event.get("type") != kind]
-            events = [event for event in events if event.get("type") == kind]
-            for event in other_events:
-                self.inbox.put(event)
             try:
+                # GenericAgent publishes the display ``done`` item before its
+                # runner finishes history persistence and task cleanup.  Do not
+                # mutate the live client until that previous task has reached
+                # ``task_done``; the queue join is the authoritative idle barrier.
+                self._wait_for_agent_idle()
+                # Settings can change while this long-lived process remains healthy.
+                # Refresh only at the task boundary so an in-flight task keeps its
+                # client, while the next task observes the newly persisted binding.
+                model_state = _apply_desktop_model(self.agent)
+                if model_state.get("effective") is None:
+                    self._publish_model_state(model_state, running=False)
+                    self._record_unavailable_model(events)
+                    deferred_events = events
+                    continue
+                kind = events[0].get("type")
+                other_events = [event for event in events if event.get("type") != kind]
+                events = [event for event in events if event.get("type") == kind]
+                for event in other_events:
+                    self.inbox.put(event)
                 prompt = self._build_prompt(events)
-                model_state = self.model_snapshot()
                 self._publish_model_state(model_state, running=True)
                 try:
                     dq = self.agent.put_task(prompt, source="conductor")

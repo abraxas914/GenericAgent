@@ -14,6 +14,7 @@
  *   1 = one or more checks failed
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +65,58 @@ function windowsPbsArchiveUsesPosixTempPath(workflow) {
     && (workflow.match(/\[\[ "\$RUNNER_TEMP_POSIX" == \/\* \]\]/g) ?? []).length === 1
     && (workflow.match(/PBS_ARCHIVE="\$\{RUNNER_TEMP_POSIX\}\/pbs-windows-x86_64\.tar\.gz"/g) ?? []).length === 1
     && !workflow.includes('PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"');
+}
+
+function workflowJob(workflow, name) {
+  const header = new RegExp(`^  ${name}:\\s*$`, 'm');
+  const match = header.exec(workflow);
+  if (!match) return '';
+  const remainder = workflow.slice(match.index + match[0].length);
+  const nextJob = /^  [a-zA-Z0-9_-]+:\s*$/m.exec(remainder);
+  return nextJob ? remainder.slice(0, nextJob.index) : remainder;
+}
+
+function packagedRuntimeBytecodeContract(workflow) {
+  const specs = [
+    ['build-windows', ['purge_runtime_bytecode "$RUNTIME"']],
+    ['build-linux', ['purge_runtime_bytecode "$RUNTIME"']],
+    ['build-macos', [
+      'purge_runtime_bytecode "$RUNTIME_SRC"',
+      'purge_runtime_bytecode "$DMG_RUNTIME"',
+    ]],
+  ];
+  return (workflow.match(/^  PYTHONDONTWRITEBYTECODE: "1"$/gm) ?? []).length === 1
+    && specs.every(([jobName, calls]) => {
+      const job = workflowJob(workflow, jobName);
+      return job.includes('purge_runtime_bytecode() {')
+        && job.includes('find "$runtime_root" -type d -name \'__pycache__\'')
+        && job.includes('find "$runtime_root" -type f \\( -name \'*.pyc\' -o -name \'*.pyo\' \\) -delete')
+        && calls.every((call) => job.includes(call))
+        && !/pip[\\/]_vendor/.test(job);
+    });
+}
+
+function prunedRuntimeSourceContract(job) {
+  const normalized = job.replaceAll("--exclude='./", "--exclude='");
+  const excluded = [
+    'frontends/tests',
+    'frontends/desktop/src',
+    'frontends/desktop/public',
+    'frontends/desktop/scripts',
+    'frontends/desktop/e2e',
+    'frontends/desktop/tests',
+    'frontends/desktop/testing',
+    'frontends/desktop/spec',
+    'frontends/desktop/DESIGN.md',
+    'frontends/desktop/package.json',
+    'frontends/desktop/package-lock.json',
+    'frontends/desktop/node_modules',
+  ];
+  return excluded.every((entry) => normalized.includes(`--exclude='${entry}'`))
+    && !normalized.includes("--exclude='frontends/desktop/static'")
+    && normalized.includes('frontends/desktop/static/index.html')
+    && normalized.includes('frontends/desktop/package-lock.json"')
+    && normalized.includes('frontends/desktop/node_modules"');
 }
 
 // ── 1. tauri.conf.json validation ──
@@ -228,6 +281,7 @@ if (!fs.existsSync(scriptsDir)) {
   }
 
   for (const relative of [
+    'packaging/scripts/merge_desktop_settings.py',
     'scripts/gen_ds_store.py',
     'e2e/package/real_package_journey.py',
     'e2e/package/verify_candidate_evidence.py',
@@ -263,9 +317,17 @@ const releaseWorkflow = fs.readFileSync(
   'utf8',
 );
 const packageManifest = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf8'));
+const packageLock = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package-lock.json'), 'utf8'));
 const packagingTauriConfig = JSON.parse(fs.readFileSync(confPath, 'utf8'));
 const distIntegrityScript = fs.readFileSync(path.join(DESKTOP_ROOT, 'scripts', 'assert-dist-built.mjs'), 'utf8');
 const gitAttributes = fs.readFileSync(path.join(REPO_ROOT, '.gitattributes'), 'utf8');
+if (packageManifest.devDependencies?.['@tauri-apps/cli'] === '2.11.4'
+    && packageLock.packages?.['']?.devDependencies?.['@tauri-apps/cli'] === '2.11.4'
+    && packageLock.packages?.['node_modules/@tauri-apps/cli']?.version === '2.11.4') {
+  ok('@tauri-apps/cli is exactly pinned to 2.11.4 in the manifest and lockfile');
+} else {
+  bad('@tauri-apps/cli must be exactly pinned to 2.11.4');
+}
 const noticeAttributeRules = [
   'frontends/desktop/public/THIRD_PARTY_NOTICES.txt text eol=lf',
   'frontends/desktop/dist/THIRD_PARTY_NOTICES.txt text eol=lf',
@@ -294,6 +356,20 @@ for (const command of [
     ok(`release packaging consumes the notice-gated Tauri command: ${command}`);
   } else {
     bad(`release packaging is missing the notice-gated Tauri command: ${command}`);
+  }
+}
+for (const jobName of ['build-windows', 'build-linux', 'build-macos']) {
+  const job = workflowJob(releaseWorkflow, jobName);
+  if (job.includes('npm ci')
+      && job.includes("node -e \"const v=require('./node_modules/@tauri-apps/cli/package.json').version; if(v!=='2.11.4')")) {
+    ok(`${jobName} installs the lockfile and asserts Tauri CLI 2.11.4`);
+  } else {
+    bad(`${jobName} does not assert the exact installed Tauri CLI`);
+  }
+  if (prunedRuntimeSourceContract(job)) {
+    ok(`${jobName} excludes frontend/development source and retains Desktop v1 static`);
+  } else {
+    bad(`${jobName} runtime source pruning is incomplete or excludes Desktop v1 static`);
   }
 }
 
@@ -357,11 +433,257 @@ for (const relative of [
   'scripts/macos/install_macos.sh',
 ]) {
   const content = fs.readFileSync(path.join(PACKAGING_DIR, relative), 'utf8');
-  if (content.includes('requirements.txt') && content.includes('--requirement')) {
-    ok(`offline installer consumes packaged requirements lock: ${relative}`);
+  const hasWholeRuntimeCleanup = relative.endsWith('.ps1')
+    ? content.includes('Get-ChildItem -LiteralPath $runtimeRoot -Directory -Filter "__pycache__" -Recurse')
+      && content.includes("$_.Name -match '\\.py[co]$'")
+    : content.includes('find "$runtime_root" -type d -name \'__pycache__\'')
+      && content.includes('find "$runtime_root" -type f \\( -name \'*.pyc\' -o -name \'*.pyo\' \\) -delete');
+  if (content.includes('requirements.txt')
+      && content.includes('--requirement')
+      && content.includes('PYTHONDONTWRITEBYTECODE')
+      && content.includes('--no-compile')
+      && content.includes('merge_desktop_settings.py')
+      && hasWholeRuntimeCleanup
+      && !/pip[\\/]_vendor/.test(content)) {
+    ok(`offline installer preserves settings and leaves the whole runtime bytecode-free: ${relative}`);
   } else {
-    bad(`offline installer bypasses packaged requirements lock: ${relative}`);
+    bad(`offline installer contract is incomplete: ${relative}`);
   }
+}
+const windowsInstallScript = fs.readFileSync(
+  path.join(PACKAGING_DIR, 'scripts', 'windows', 'install_windows.ps1'),
+  'utf8',
+);
+if (windowsInstallScript.includes('npm install --package-lock=false')) {
+  ok('Windows source installer does not generate a package-lock.json');
+} else {
+  bad('Windows source installer can generate a package-lock.json');
+}
+
+if (releaseWorkflow.includes('Windows portable build is not code-signed')
+    && releaseWorkflow.includes('SmartScreen may warn')
+    && releaseWorkflow.includes('SHA256SUMS-windows.txt')) {
+  ok('Windows package documentation discloses unsigned SmartScreen behavior and checksum verification');
+} else {
+  bad('Windows package documentation overstates signing or omits checksum guidance');
+}
+
+for (const relative of [
+  'scripts/windows/uninstall_windows.ps1',
+  'scripts/linux/uninstall.sh',
+  'scripts/macos/uninstall.command',
+]) {
+  const content = fs.readFileSync(path.join(PACKAGING_DIR, relative), 'utf8');
+  const noSharedDelete = !content.includes('Remove-Item -LiteralPath $settings -Force')
+    && !content.includes('rm -f "$HOME/.ga_desktop_settings.json"');
+  if (content.includes('/services/identity')
+      && content.includes('/services/bridge/exit')
+      && content.includes('merge_desktop_settings.py')
+      && content.includes('--remove-bundle')
+      && noSharedDelete) {
+    ok(`uninstaller checks bridge ownership and preserves shared settings: ${relative}`);
+  } else {
+    bad(`uninstaller can affect another bundle or shared settings: ${relative}`);
+  }
+}
+
+if (packagedRuntimeBytecodeContract(releaseWorkflow)) {
+  ok('all three package builders purge bytecode across each complete runtime');
+} else {
+  bad('package builders do not enforce whole-runtime bytecode cleanup');
+}
+
+for (const marker of [
+  '首次启动会离线校验并补齐随包 Python 运行时依赖',
+  '若需强制重新准备，请删除 runtime\\.prepared 后重启',
+  '若需强制重新准备，请删除 runtime/.prepared 后重启',
+  'The first launch verifies and completes the bundled Python runtime offline',
+  'preparation pass, delete runtime\\.prepared and relaunch',
+  'preparation pass, delete runtime/.prepared and relaunch',
+]) {
+  if (releaseWorkflow.includes(marker)) ok(`portable README includes accurate runtime guidance: ${marker}`);
+  else bad(`portable README is missing accurate runtime guidance: ${marker}`);
+}
+if (!releaseWorkflow.includes('creates a venv')
+    && !releaseWorkflow.includes('runtime\\app\\.venv')
+    && !releaseWorkflow.includes('runtime/app/.venv')) {
+  ok('portable READMEs do not claim the embedded runtime creates an app venv');
+} else {
+  bad('portable READMEs still describe the obsolete app venv flow');
+}
+for (const [label, mutation] of [
+  ['missing no-bytecode environment', releaseWorkflow.replace('  PYTHONDONTWRITEBYTECODE: "1"\n', '')],
+  ['site-packages-only cleanup', releaseWorkflow.replace(
+    'purge_runtime_bytecode "$RUNTIME"',
+    'purge_runtime_bytecode "$RUNTIME/python/lib/python3.12/site-packages"',
+  )],
+  ['pyc-only cleanup', releaseWorkflow.replace(" -o -name '*.pyo'", '')],
+]) {
+  if (!packagedRuntimeBytecodeContract(mutation)) {
+    ok(`runtime cleanup contract rejects ${label}`);
+  } else {
+    bad(`runtime cleanup contract accepted ${label}`);
+  }
+}
+
+const settingsHelper = path.join(PACKAGING_DIR, 'scripts', 'merge_desktop_settings.py');
+const settingsSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ga-desktop-settings-'));
+try {
+  const settingsPath = path.join(settingsSandbox, '.ga_desktop_settings.json');
+  const original = {
+    python_path: '/old/python',
+    project_dir: '/old/project',
+    bridge_script: '/old/bridge.py',
+    ga_source_override: '/external/GenericAgent',
+    conductor_model_index: 3,
+    conductor: { llmNo: 4 },
+    desktop_shortcut: true,
+    unknown: { nested: ['keep-me'] },
+  };
+  fs.writeFileSync(settingsPath, JSON.stringify(original), 'utf8');
+  execFileSync('python3', [
+    settingsHelper,
+    '--settings', settingsPath,
+    '--python-path', '/runtime/python',
+    '--project-dir', REPO_ROOT,
+    '--bridge-script', path.join(REPO_ROOT, 'frontends', 'desktop_bridge.py'),
+  ], {
+    timeout: 5000,
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
+  });
+  const merged = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const expected = {
+    ...original,
+    python_path: '/runtime/python',
+    project_dir: REPO_ROOT,
+    bridge_script: path.join(REPO_ROOT, 'frontends', 'desktop_bridge.py'),
+  };
+  const residue = fs.readdirSync(settingsSandbox).filter((name) => name !== path.basename(settingsPath));
+  if (JSON.stringify(merged) === JSON.stringify(expected) && residue.length === 0) {
+    ok('atomic settings merge updates only the three package path keys');
+  } else {
+    bad('atomic settings merge dropped sibling settings or left a temporary file');
+  }
+
+  const owned = {
+    ...expected,
+    python_path: '/bundle-one/runtime/python/bin/python3',
+    project_dir: '/bundle-one/runtime/app',
+    bridge_script: '/bundle-one/runtime/app/frontends/desktop_bridge.py',
+    ga_source_override: '/bundle-two/external-core',
+  };
+  fs.writeFileSync(settingsPath, JSON.stringify(owned), 'utf8');
+  execFileSync('python3', [
+    settingsHelper,
+    '--settings', settingsPath,
+    '--project-dir', REPO_ROOT,
+    '--remove-bundle', '/bundle-one',
+  ], { timeout: 5000 });
+  const detached = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!('python_path' in detached)
+      && !('project_dir' in detached)
+      && !('bridge_script' in detached)
+      && detached.ga_source_override === owned.ga_source_override
+      && detached.desktop_shortcut === true
+      && JSON.stringify(detached.unknown) === JSON.stringify(owned.unknown)) {
+    ok('uninstall detaches only this bundle paths and preserves shared preferences');
+  } else {
+    bad('uninstall settings merge removed shared preferences or external source selection');
+  }
+
+  const secondBundle = {
+    ...owned,
+    python_path: '/bundle-two/runtime/python/bin/python3',
+    project_dir: '/bundle-two/runtime/app',
+    bridge_script: '/bundle-two/runtime/app/frontends/desktop_bridge.py',
+  };
+  fs.writeFileSync(settingsPath, JSON.stringify(secondBundle), 'utf8');
+  execFileSync('python3', [
+    settingsHelper,
+    '--settings', settingsPath,
+    '--project-dir', REPO_ROOT,
+    '--remove-bundle', '/bundle-one',
+  ], { timeout: 5000 });
+  if (JSON.stringify(JSON.parse(fs.readFileSync(settingsPath, 'utf8'))) === JSON.stringify(secondBundle)) {
+    ok('uninstall leaves a second bundle settings selection untouched');
+  } else {
+    bad('uninstall detached settings owned by a second bundle');
+  }
+
+  const malformed = '{"ga_source_override":';
+  fs.writeFileSync(settingsPath, malformed, 'utf8');
+  let rejected = false;
+  try {
+    execFileSync('python3', [
+      settingsHelper,
+      '--settings', settingsPath,
+      '--python-path', '/runtime/python',
+      '--project-dir', REPO_ROOT,
+      '--bridge-script', path.join(REPO_ROOT, 'frontends', 'desktop_bridge.py'),
+    ], { timeout: 5000, stdio: 'ignore' });
+  } catch {
+    rejected = true;
+  }
+  if (rejected && fs.readFileSync(settingsPath, 'utf8') === malformed) {
+    ok('atomic settings merge rejects malformed input without replacing it');
+  } else {
+    bad('atomic settings merge overwrote malformed input');
+  }
+} finally {
+  fs.rmSync(settingsSandbox, { recursive: true, force: true });
+}
+
+const noHostPythonSandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'ga-no-host-python-'));
+try {
+  const runtimeRoot = path.join(noHostPythonSandbox, 'runtime');
+  const projectRoot = path.join(runtimeRoot, 'app');
+  const runtimePython = path.join(runtimeRoot, 'python', 'bin', 'python3');
+  const wheelDir = path.join(runtimeRoot, 'wheels');
+  const fakePath = path.join(noHostPythonSandbox, 'bin');
+  const fakeHome = path.join(noHostPythonSandbox, 'home');
+  fs.mkdirSync(path.join(projectRoot, 'frontends'), { recursive: true });
+  fs.mkdirSync(path.dirname(runtimePython), { recursive: true });
+  fs.mkdirSync(wheelDir, { recursive: true });
+  fs.mkdirSync(fakePath, { recursive: true });
+  fs.mkdirSync(fakeHome, { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'agentmain.py'), '# test\n');
+  fs.writeFileSync(path.join(projectRoot, 'frontends', 'desktop_bridge.py'), '# test\n');
+  fs.copyFileSync(path.join(REPO_ROOT, 'frontends', 'desktop_settings.py'), path.join(projectRoot, 'frontends', 'desktop_settings.py'));
+  const hostPython = execFileSync(
+    '/bin/sh',
+    ['-c', 'command -v python3.12 || command -v python3.11 || command -v python3.10'],
+    { encoding: 'utf8' },
+  ).trim();
+  fs.copyFileSync(fs.realpathSync(hostPython), runtimePython);
+  fs.chmodSync(runtimePython, 0o755);
+  for (const tool of ['basename', 'cp', 'dirname', 'find', 'grep', 'readlink', 'sed', 'uname']) {
+    const resolved = execFileSync('/bin/sh', ['-c', `command -v ${tool}`], { encoding: 'utf8' }).trim();
+    fs.symlinkSync(resolved, path.join(fakePath, tool));
+  }
+  execFileSync('/bin/bash', [
+    path.join(PACKAGING_DIR, 'scripts', 'linux', 'install_linux.sh'),
+    '--python-path', runtimePython,
+    '--project-dir', projectRoot,
+    '--wheel-dir', wheelDir,
+    '--mode', 'PrepareOnly',
+    '--no-venv',
+    '--skip-pip-install',
+  ], {
+    timeout: 15_000,
+    stdio: 'pipe',
+    env: { HOME: fakeHome, PATH: fakePath },
+  });
+  const written = JSON.parse(fs.readFileSync(path.join(fakeHome, '.ga_desktop_settings.json'), 'utf8'));
+  if (fs.realpathSync(written.python_path) === fs.realpathSync(runtimePython)
+      && fs.realpathSync(written.project_dir) === fs.realpathSync(projectRoot)) {
+    ok('Linux PrepareOnly works with only the explicit embedded Python on PATH');
+  } else {
+    bad('Linux PrepareOnly did not preserve the explicit embedded Python paths');
+  }
+} catch (error) {
+  bad(`Linux PrepareOnly required a host python3: ${processFailureDetails(error)}`);
+} finally {
+  fs.rmSync(noHostPythonSandbox, { recursive: true, force: true });
 }
 
 // ── 5. Release version consistency ──

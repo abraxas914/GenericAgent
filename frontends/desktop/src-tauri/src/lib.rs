@@ -20,6 +20,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 
 static BRIDGE_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 static BRIDGE_LOG_READERS: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
+static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Clone, Debug, PartialEq)]
 struct BridgeEndpoint {
@@ -630,31 +631,247 @@ fn settings_path() -> PathBuf {
     resolve_settings_path(dirs::home_dir(), e2e_override.as_deref())
 }
 
+fn read_settings_from_strict(
+    path: &Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    if !path.exists() {
+        return Ok(serde_json::Map::new());
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read Desktop settings: {error}"))?;
+    match serde_json::from_str(&content) {
+        Ok(serde_json::Value::Object(object)) => Ok(object),
+        Ok(_) => Err("Desktop settings must be a JSON object".to_string()),
+        Err(error) => Err(format!("cannot parse Desktop settings: {error}")),
+    }
+}
+
+fn read_settings_from(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+    read_settings_from_strict(path).unwrap_or_default()
+}
+
 /// Read the settings file as a JSON object (empty object when missing/unparseable).
 fn read_settings() -> serde_json::Map<String, serde_json::Value> {
-    let path = settings_path();
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        if let Ok(serde_json::Value::Object(m)) = serde_json::from_str(&content) {
-            return m;
+    read_settings_from(&settings_path())
+}
+
+#[cfg(windows)]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    #[link(name = "Kernel32")]
+    extern "system" {
+        fn MoveFileExW(
+            existing_file_name: *const u16,
+            new_file_name: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    let source_wide: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+struct SettingsFileLock {
+    path: PathBuf,
+    token: String,
+}
+
+impl SettingsFileLock {
+    fn acquire(settings: &Path) -> Result<Self, String> {
+        const TIMEOUT: Duration = Duration::from_secs(5);
+        const STALE_AFTER: Duration = Duration::from_secs(30);
+        let parent = settings
+            .parent()
+            .ok_or_else(|| "settings path has no parent".to_string())?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("create settings directory: {error}"))?;
+        let name = settings
+            .file_name()
+            .and_then(|part| part.to_str())
+            .unwrap_or("ga_desktop_settings.json");
+        let path = settings.with_file_name(format!("{name}.lock"));
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let token = format!("{}:{nonce}", std::process::id());
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    if let Err(error) = std::fs::write(path.join("owner"), &token) {
+                        let _ = std::fs::remove_dir(&path);
+                        return Err(format!("write settings lock owner: {error}"));
+                    }
+                    return Ok(Self { path, token });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let metadata = std::fs::symlink_metadata(&path)
+                        .map_err(|error| format!("inspect settings lock: {error}"))?;
+                    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                        return Err(format!(
+                            "settings lock is not a directory: {}",
+                            display_path(&path)
+                        ));
+                    }
+                    let stale = metadata
+                        .modified()
+                        .ok()
+                        .and_then(|modified| modified.elapsed().ok())
+                        .map(|age| age > STALE_AFTER)
+                        .unwrap_or(false);
+                    if stale {
+                        let tombstone = path.with_file_name(format!("{name}.lock.stale.{nonce}"));
+                        if std::fs::rename(&path, &tombstone).is_ok() {
+                            let _ = std::fs::remove_dir_all(tombstone);
+                            continue;
+                        }
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(format!(
+                            "timed out waiting for settings lock: {}",
+                            display_path(&path)
+                        ));
+                    }
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => return Err(format!("create settings lock: {error}")),
+            }
         }
     }
-    serde_json::Map::new()
+}
+
+impl Drop for SettingsFileLock {
+    fn drop(&mut self) {
+        let owner = self.path.join("owner");
+        if std::fs::read_to_string(&owner).ok().as_deref() == Some(self.token.as_str()) {
+            let _ = std::fs::remove_file(owner);
+            let _ = std::fs::remove_dir(&self.path);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::rename(source, destination)
+}
+
+fn write_settings_atomically(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
+    let parent = path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "settings path has no parent",
+        )
+    })?;
+    std::fs::create_dir_all(parent)?;
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let name = path
+        .file_name()
+        .and_then(|part| part.to_str())
+        .unwrap_or("ga_desktop_settings.json");
+    let temporary = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), nonce));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(text.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.sync_all()?;
+        atomic_replace(&temporary, path)?;
+        #[cfg(unix)]
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn update_settings_at(
+    path: &Path,
+    mutator: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> Result<(), String> {
+    let _file_lock = SettingsFileLock::acquire(path)?;
+    let mut object = read_settings_from_strict(path)?;
+    mutator(&mut object);
+    write_settings_atomically(path, &serde_json::Value::Object(object))
+        .map_err(|error| format!("cannot write Desktop settings: {error}"))
+}
+
+fn update_settings(
+    mutator: impl FnOnce(&mut serde_json::Map<String, serde_json::Value>),
+) -> Result<(), String> {
+    let _guard = SETTINGS_WRITE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    update_settings_at(&settings_path(), mutator)
 }
 
 /// Merge `updates` into the existing settings file and write it back, preserving any keys
 /// we don't touch. The old code rewrote the file with only python_path/project_dir, which
 /// would silently drop sibling keys like `desktop_shortcut`. Always go through here.
-fn merge_settings(updates: serde_json::Value) {
-    let mut obj = read_settings();
-    if let serde_json::Value::Object(m) = updates {
-        for (k, v) in m {
-            obj.insert(k, v);
-        }
+fn merge_settings(updates: serde_json::Value) -> Result<(), String> {
+    if let serde_json::Value::Object(updates) = updates {
+        return update_settings(move |object| {
+            for (key, value) in updates {
+                object.insert(key, value);
+            }
+        });
     }
-    let val = serde_json::Value::Object(obj);
-    if let Ok(text) = serde_json::to_string_pretty(&val) {
-        let _ = std::fs::write(settings_path(), text);
+    Err("settings update must be a JSON object".to_string())
+}
+
+fn valid_ga_source_override_from(
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    let source = settings
+        .get("ga_source_override")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim();
+    if source.is_empty() {
+        return None;
     }
+    let path = PathBuf::from(source);
+    if path.join("agentmain.py").exists() {
+        Some(display_path(&path))
+    } else {
+        None
+    }
+}
+
+fn effective_ga_root_from(
+    project_dir: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+) -> String {
+    valid_ga_source_override_from(settings)
+        .unwrap_or_else(|| display_path(&builtin_ga_root(project_dir)))
 }
 
 /// Desktop-shortcut preference stored in settings under `desktop_shortcut`.
@@ -666,8 +883,8 @@ fn read_shortcut_pref() -> Option<bool> {
         .and_then(|v| v.as_bool())
 }
 
-fn write_shortcut_pref(enabled: bool) {
-    merge_settings(serde_json::json!({ "desktop_shortcut": enabled }));
+fn write_shortcut_pref(enabled: bool) -> Result<(), String> {
+    merge_settings(serde_json::json!({ "desktop_shortcut": enabled }))
 }
 
 /// Create (or overwrite) a desktop shortcut pointing at the CURRENT exe. Overwriting on every
@@ -813,11 +1030,12 @@ fn shortcut_should_ask() -> bool {
 
 /// Frontend reports the user's choice. Persists it and creates the shortcut when enabled.
 #[tauri::command]
-fn shortcut_decide(create: bool) {
-    write_shortcut_pref(create);
+fn shortcut_decide(create: bool) -> Result<(), String> {
+    write_shortcut_pref(create)?;
     if create {
         ensure_desktop_shortcut();
     }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -834,34 +1052,18 @@ fn running_inside_app_bundle() -> bool {
 /// User-set external GenericAgent core. The desktop bridge and conductor remain package-owned;
 /// this path is only injected as GA_ROOT. A moved or deleted core falls back to the bundled one.
 fn valid_ga_source_override() -> Option<String> {
-    let s = read_settings()
-        .get("ga_source_override")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if s.is_empty() {
-        return None;
-    }
-    let p = PathBuf::from(&s);
-    if p.join("agentmain.py").exists() {
-        Some(p.to_string_lossy().to_string())
-    } else {
-        None
-    }
+    valid_ga_source_override_from(&read_settings())
 }
 
 /// Remove a single key from the settings file (merge_settings can only add/overwrite).
-fn remove_setting(key: &str) {
-    let mut obj = read_settings();
-    obj.remove(key);
-    let val = serde_json::Value::Object(obj);
-    if let Ok(text) = serde_json::to_string_pretty(&val) {
-        let _ = std::fs::write(settings_path(), text);
-    }
+fn remove_setting(key: &str) -> Result<(), String> {
+    let key = key.to_string();
+    update_settings(move |object| {
+        object.remove(&key);
+    })
 }
 
-fn restore_setting(key: &str, value: Option<String>) {
+fn restore_setting(key: &str, value: Option<String>) -> Result<(), String> {
     match value {
         Some(value) => merge_settings(serde_json::json!({ key: value })),
         None => remove_setting(key),
@@ -1010,6 +1212,7 @@ fn unique_runtime_sibling(parent: &Path, label: &str) -> Result<PathBuf, String>
 fn refresh_runtime_copy_with_activation<F>(
     source: &Path,
     destination: &Path,
+    preserved_source: Option<&Path>,
     expected: &RuntimePackageMarker,
     activate: F,
 ) -> Result<RuntimeCopyStatus, String>
@@ -1045,8 +1248,10 @@ where
 
     let prepare_result = (|| {
         copy_dir_replace(source, &staging)?;
-        if destination.is_dir() {
-            copy_preserved_runtime_data(destination, &staging)?;
+        if let Some(existing) =
+            preserved_source.or_else(|| destination.is_dir().then_some(destination))
+        {
+            copy_preserved_runtime_data(existing, &staging)?;
         }
         let marker = serde_json::to_string_pretty(expected)
             .map_err(|error| format!("serialize runtime marker: {error}"))?;
@@ -1108,9 +1313,84 @@ fn refresh_runtime_copy(
     destination: &Path,
     expected: &RuntimePackageMarker,
 ) -> Result<RuntimeCopyStatus, String> {
-    refresh_runtime_copy_with_activation(source, destination, expected, |staging, active| {
+    refresh_runtime_copy_with_activation(source, destination, None, expected, |staging, active| {
         std::fs::rename(staging, active)
     })
+}
+
+fn trusted_legacy_runtime(runtime_parent: &Path) -> Result<Option<PathBuf>, String> {
+    if !runtime_parent.is_dir() {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(runtime_parent)
+        .map_err(|error| format!("read legacy runtime parent: {error}"))?
+    {
+        let entry = entry.map_err(|error| format!("read legacy runtime entry: {error}"))?;
+        let version_dir = entry.path();
+        if entry.file_name() == "app"
+            || entry
+                .file_type()
+                .map_err(|error| error.to_string())?
+                .is_symlink()
+        {
+            continue;
+        }
+        let version_name = entry.file_name().to_string_lossy().to_string();
+        let version_key = version_name
+            .split('-')
+            .next()
+            .unwrap_or("")
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(version_key) = version_key else {
+            continue;
+        };
+        if version_key.is_empty() {
+            continue;
+        }
+        let app = version_dir.join("app");
+        if app.is_symlink()
+            || !app.is_dir()
+            || !app.join("agentmain.py").is_file()
+            || !app.join("frontends").join("desktop_bridge.py").is_file()
+        {
+            continue;
+        }
+        let Some(marker) = read_runtime_marker(&app) else {
+            continue;
+        };
+        if marker.schema != RUNTIME_MARKER_SCHEMA
+            || marker.package != env!("CARGO_PKG_NAME")
+            || marker.package_version != version_name
+        {
+            continue;
+        }
+        candidates.push((version_key, app));
+    }
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(candidates.pop().map(|(_, path)| path))
+}
+
+fn refresh_runtime_copy_from_legacy(
+    source: &Path,
+    legacy: &Path,
+    destination: &Path,
+    expected: &RuntimePackageMarker,
+) -> Result<RuntimeCopyStatus, String> {
+    let result = refresh_runtime_copy_with_activation(
+        source,
+        destination,
+        Some(legacy),
+        expected,
+        |staging, active| std::fs::rename(staging, active),
+    )?;
+    let _ = remove_fs_path(legacy);
+    if let Some(parent) = legacy.parent() {
+        let _ = std::fs::remove_dir(parent);
+    }
+    Ok(result)
 }
 
 fn builtin_ga_root(project_dir: &str) -> PathBuf {
@@ -1118,11 +1398,7 @@ fn builtin_ga_root(project_dir: &str) -> PathBuf {
     {
         if running_inside_app_bundle() {
             if let Some(data_dir) = dirs::data_dir() {
-                return data_dir
-                    .join("GenericAgent")
-                    .join("runtime")
-                    .join(env!("CARGO_PKG_VERSION"))
-                    .join("app");
+                return data_dir.join("GenericAgent").join("runtime").join("app");
             }
         }
     }
@@ -1138,7 +1414,16 @@ fn ensure_builtin_ga_root(project_dir: &str) -> Result<(), String> {
     if same_path(&source, &destination) {
         return Ok(());
     }
-    refresh_runtime_copy(&source, &destination, &expected_runtime_marker()).map(|_| ())
+    let expected = expected_runtime_marker();
+    if !destination.exists() {
+        if let Some(parent) = destination.parent() {
+            if let Some(legacy) = trusted_legacy_runtime(parent)? {
+                return refresh_runtime_copy_from_legacy(&source, &legacy, &destination, &expected)
+                    .map(|_| ());
+            }
+        }
+    }
+    refresh_runtime_copy(&source, &destination, &expected).map(|_| ())
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -1177,7 +1462,7 @@ pub fn get_or_discover_config() -> (String, String) {
         let python = find_python();
         let project = find_project_dir().unwrap_or_default();
         if !python.is_empty() && !project.is_empty() {
-            merge_settings(serde_json::json!({
+            let _ = merge_settings(serde_json::json!({
                 "python_path": python,
                 "project_dir": project
             }));
@@ -1227,7 +1512,7 @@ pub fn get_or_discover_config() -> (String, String) {
 
     // Save discovered config
     if !python.is_empty() && !project.is_empty() {
-        merge_settings(serde_json::json!({
+        let _ = merge_settings(serde_json::json!({
             "python_path": python,
             "project_dir": project
         }));
@@ -1484,7 +1769,7 @@ fn norm_path(p: &str) -> String {
 }
 
 fn effective_ga_root(project_dir: &str) -> String {
-    valid_ga_source_override().unwrap_or_else(|| display_path(&builtin_ga_root(project_dir)))
+    effective_ga_root_from(project_dir, &read_settings())
 }
 
 fn bootstrap_failure(code: BootstrapFailureCode, detail: impl AsRef<str>) -> BootstrapFailure {
@@ -2051,9 +2336,9 @@ async fn execute_bootstrap_async(
 fn resolve_requested_bootstrap_config(
     requested_python: String,
     requested_project: String,
-) -> (String, String) {
+) -> Result<(String, String), String> {
     if bundle_root().is_some() {
-        return get_or_discover_config();
+        return Ok(get_or_discover_config());
     }
     let python = if requested_python.trim().is_empty() {
         let settings = read_settings();
@@ -2065,8 +2350,8 @@ fn resolve_requested_bootstrap_config(
     merge_settings(serde_json::json!({
         "python_path": python,
         "project_dir": requested_project
-    }));
-    (python, requested_project)
+    }))?;
+    Ok((python, requested_project))
 }
 
 #[tauri::command]
@@ -2075,7 +2360,7 @@ async fn retry_bootstrap(
     python_path: String,
     project_dir: String,
 ) -> Result<(), String> {
-    let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir);
+    let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir)?;
     execute_bootstrap_async(app_handle, python_path, project_dir, false).await
 }
 
@@ -2085,7 +2370,7 @@ async fn start_bridge_with_config(
     python_path: String,
     project_dir: String,
 ) -> Result<(), String> {
-    let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir);
+    let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir)?;
     execute_bootstrap_async(app_handle, python_path, project_dir, false).await
 }
 
@@ -2311,11 +2596,15 @@ async fn apply_ga_source_with_rollback(
     next_override: Option<String>,
     previous_override: Option<String>,
 ) -> Result<String, String> {
-    restore_setting("ga_source_override", next_override);
+    restore_setting("ga_source_override", next_override)?;
     match restart_for_current_source(app_handle.clone()).await {
         Ok(root) => Ok(root),
         Err(error) => {
-            restore_setting("ga_source_override", previous_override);
+            restore_setting("ga_source_override", previous_override).map_err(|rollback_error| {
+                format!(
+                    "{error}; restoring the previous workspace setting failed: {rollback_error}"
+                )
+            })?;
             match restart_for_current_source(app_handle).await {
                 Ok(_) => Err(error),
                 Err(rollback_error) => Err(format!(
@@ -2753,6 +3042,123 @@ mod tests {
         root
     }
 
+    #[test]
+    fn settings_update_rejects_malformed_json_without_overwriting_it() {
+        let root = runtime_test_root("settings-malformed");
+        let settings = root.join(".ga_desktop_settings.json");
+        let malformed = b"{\"ga_source_override\":";
+        std::fs::write(&settings, malformed).unwrap();
+
+        let error = update_settings_at(&settings, |document| {
+            document.insert("desktop_shortcut".to_string(), serde_json::json!(true));
+        })
+        .unwrap_err();
+
+        assert!(error.contains("cannot parse Desktop settings"));
+        assert_eq!(std::fs::read(&settings).unwrap(), malformed);
+        assert!(!settings
+            .with_file_name(".ga_desktop_settings.json.lock")
+            .exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn settings_lock_serializes_read_modify_replace_and_preserves_union() {
+        use std::sync::mpsc;
+
+        let root = runtime_test_root("settings-union");
+        let settings = root.join(".ga_desktop_settings.json");
+        std::fs::write(&settings, "{}\n").unwrap();
+        let (locked_sender, locked_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let first_path = settings.clone();
+        let first = thread::spawn(move || {
+            let _lock = SettingsFileLock::acquire(&first_path).unwrap();
+            let mut document = read_settings_from_strict(&first_path).unwrap();
+            locked_sender.send(()).unwrap();
+            release_receiver.recv().unwrap();
+            document.insert("ui".to_string(), serde_json::json!({"lang": "en"}));
+            write_settings_atomically(&first_path, &serde_json::Value::Object(document)).unwrap();
+        });
+        locked_receiver.recv().unwrap();
+        let second_path = settings.clone();
+        let second = thread::spawn(move || {
+            update_settings_at(&second_path, |document| {
+                document.insert("conductor".to_string(), serde_json::json!({"llmNo": 2}));
+            })
+            .unwrap();
+        });
+        thread::sleep(Duration::from_millis(100));
+        assert!(!second.is_finished());
+        release_sender.send(()).unwrap();
+        first.join().unwrap();
+        second.join().unwrap();
+
+        let document = read_settings_from_strict(&settings).unwrap();
+        assert_eq!(document.get("ui"), Some(&serde_json::json!({"lang": "en"})));
+        assert_eq!(
+            document.get("conductor"),
+            Some(&serde_json::json!({"llmNo": 2}))
+        );
+        assert!(!settings
+            .with_file_name(".ga_desktop_settings.json.lock")
+            .exists());
+        let residue = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(residue, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preserved_external_override_drives_spawn_and_listener_identity() {
+        let root = runtime_test_root("external-identity");
+        let package = root.join("bundle").join("app");
+        let external = root.join("external-core");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::write(external.join("agentmain.py"), "# external").unwrap();
+        let mut settings = serde_json::Map::new();
+        settings.insert(
+            "ga_source_override".to_string(),
+            serde_json::json!(display_path(&external)),
+        );
+        settings.insert("conductor".to_string(), serde_json::json!({"llmNo": 3}));
+        settings.insert("desktop_shortcut".to_string(), serde_json::json!(true));
+        settings.insert("unknown".to_string(), serde_json::json!({"keep": true}));
+        settings.insert(
+            "python_path".to_string(),
+            serde_json::json!("/bundle/python"),
+        );
+        settings.insert(
+            "project_dir".to_string(),
+            serde_json::json!(display_path(&package)),
+        );
+        settings.insert(
+            "bridge_script".to_string(),
+            serde_json::json!(display_path(&package.join("frontends/desktop_bridge.py"))),
+        );
+
+        let expected_root = effective_ga_root_from(&display_path(&package), &settings);
+        let identity = serde_json::json!({
+            "ga_root": expected_root,
+            "build_id": env!("GA_BUILD_ID"),
+            "pid": 42
+        });
+
+        assert_eq!(expected_root, display_path(&external));
+        assert_eq!(
+            classify_listener_identity(Some(&identity), &expected_root),
+            ListenerIdentity::Owned
+        );
+        assert_eq!(settings["conductor"], serde_json::json!({"llmNo": 3}));
+        assert_eq!(settings["desktop_shortcut"], serde_json::json!(true));
+        assert_eq!(settings["unknown"], serde_json::json!({"keep": true}));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn seed_package_runtime(root: &Path, agent_text: &str, bridge_text: &str) {
         std::fs::create_dir_all(root.join("frontends")).unwrap();
         std::fs::create_dir_all(root.join("memory")).unwrap();
@@ -2945,6 +3351,7 @@ mod tests {
         let error = refresh_runtime_copy_with_activation(
             &package,
             &runtime,
+            None,
             &expected,
             |_staging, _destination| {
                 Err(std::io::Error::new(
@@ -2980,6 +3387,117 @@ mod tests {
             "new agent"
         );
         assert!(!runtime_marker_path(&package).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn legacy_versioned_runtime_migrates_into_stable_root_with_all_user_data() {
+        let root = runtime_test_root("legacy-migration");
+        let package = root.join("signed-package-app");
+        let runtime_parent = root.join("application-support").join("runtime");
+        let legacy = runtime_parent.join("0.2.0").join("app");
+        let stable = runtime_parent.join("app");
+        seed_package_runtime(&package, "new agent", "new bridge");
+        seed_package_runtime(&legacy, "old agent", "old bridge");
+        std::fs::write(legacy.join("mykey.py"), "user key").unwrap();
+        std::fs::write(legacy.join("mykey.json"), "user json key").unwrap();
+        std::fs::write(legacy.join("memory").join("user.md"), "memory").unwrap();
+        std::fs::create_dir_all(legacy.join("temp").join("desktop_sessions")).unwrap();
+        std::fs::write(
+            legacy
+                .join("temp")
+                .join("desktop_sessions")
+                .join("sess.json"),
+            "session",
+        )
+        .unwrap();
+        std::fs::write(legacy.join("temp").join("token_ledger.jsonl"), "ledger").unwrap();
+        let mut legacy_marker = expected_runtime_marker();
+        legacy_marker.package_version = "0.2.0".to_string();
+        legacy_marker.build_id = "old-build".to_string();
+        write_runtime_marker(&legacy, &legacy_marker);
+        let mut expected = expected_runtime_marker();
+        expected.package_version = "0.2.1".to_string();
+        expected.build_id = "new-build".to_string();
+
+        assert_eq!(
+            trusted_legacy_runtime(&runtime_parent).unwrap(),
+            Some(legacy.clone())
+        );
+        let result =
+            refresh_runtime_copy_from_legacy(&package, &legacy, &stable, &expected).unwrap();
+
+        assert_eq!(result, RuntimeCopyStatus::Installed);
+        assert_eq!(
+            std::fs::read_to_string(stable.join("agentmain.py")).unwrap(),
+            "new agent"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stable.join("mykey.py")).unwrap(),
+            "user key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stable.join("mykey.json")).unwrap(),
+            "user json key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stable.join("memory").join("user.md")).unwrap(),
+            "memory"
+        );
+        assert_eq!(
+            std::fs::read_to_string(
+                stable
+                    .join("temp")
+                    .join("desktop_sessions")
+                    .join("sess.json")
+            )
+            .unwrap(),
+            "session"
+        );
+        assert_eq!(
+            std::fs::read_to_string(stable.join("temp").join("token_ledger.jsonl")).unwrap(),
+            "ledger"
+        );
+        assert_eq!(read_runtime_marker(&stable), Some(expected));
+        assert!(!legacy.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_legacy_runtime_activation_leaves_legacy_data_and_no_stable_root() {
+        let root = runtime_test_root("legacy-rollback");
+        let package = root.join("signed-package-app");
+        let legacy = root.join("runtime").join("0.2.0").join("app");
+        let stable = root.join("runtime").join("app");
+        seed_package_runtime(&package, "new agent", "new bridge");
+        seed_package_runtime(&legacy, "old agent", "old bridge");
+        std::fs::write(legacy.join("mykey.py"), "user key").unwrap();
+        let expected = expected_runtime_marker();
+
+        let error = refresh_runtime_copy_with_activation(
+            &package,
+            &stable,
+            Some(&legacy),
+            &expected,
+            |_staging, _active| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated migration activation failure",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("simulated migration activation failure"));
+        assert!(!stable.exists());
+        assert_eq!(
+            std::fs::read_to_string(legacy.join("agentmain.py")).unwrap(),
+            "old agent"
+        );
+        assert_eq!(
+            std::fs::read_to_string(legacy.join("mykey.py")).unwrap(),
+            "user key"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

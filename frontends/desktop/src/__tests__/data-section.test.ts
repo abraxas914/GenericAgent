@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   backupFilename,
+  DataBackupError,
   exportData,
   importData,
   inspectDataImport,
@@ -65,7 +66,7 @@ describe('desktop data backup service', () => {
     );
   });
 
-  it('imports through the add-only backup endpoint', async () => {
+  it('imports through the source-wins memory and add-only history endpoint', async () => {
     const result = {
       memoryCopied: 3,
       memorySkipped: 2,
@@ -73,6 +74,8 @@ describe('desktop data backup service', () => {
       responsesSkipped: 1,
       sessionsAdded: 5,
       sessionsSkipped: 2,
+      sessionsFileFound: true,
+      backupDir: '/Users/test/temp/memory_import_backup_20260823_120000',
     };
     mockFetch.mockResolvedValue({
       ok: true,
@@ -121,5 +124,26 @@ describe('desktop data backup service', () => {
 
     await expect(inspectDataImport('/Users/test/bad.zip'))
       .rejects.toThrow('backup format is not supported');
+  });
+
+  it('preserves maintenance conflict details for the UI', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: () => Promise.resolve({
+        error: 'stop running sessions and managed services before data maintenance',
+        code: 'maintenance_conflict',
+        runningSessions: ['sess-running'],
+        runningExtras: ['reflect/scheduler.py'],
+      }),
+    });
+
+    const error = await importData('/Users/test/data.zip').catch((value) => value);
+    expect(error).toBeInstanceOf(DataBackupError);
+    expect(error).toMatchObject({
+      code: 'maintenance_conflict',
+      runningSessions: ['sess-running'],
+      runningExtras: ['reflect/scheduler.py'],
+    });
   });
 });
