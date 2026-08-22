@@ -15,6 +15,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  REMOVED_LEGACY_REACT_PUBLIC_ASSETS,
+  REQUIRED_REACT_PUBLIC_ASSETS,
+} from './react-public-assets.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = path.resolve(__dirname, '..');
@@ -30,16 +34,27 @@ export function checkDistBuilt(distDir) {
 
   // React v2 public assets are an independent packaging boundary. The upstream static v1 tree is
   // deliberately not read here; its zero-diff invariant is enforced against the PR base in CI.
-  for (const publicAsset of ['fallback.html', 'i18n.js', 'styles.css']) {
+  for (const publicAsset of REQUIRED_REACT_PUBLIC_ASSETS) {
     const sourcePath = path.join(DESKTOP_ROOT, 'public', publicAsset);
     if (!fs.existsSync(sourcePath) || fs.statSync(sourcePath).size === 0) {
       return { ok: false, error: `public/${publicAsset} is missing or empty` };
+    }
+  }
+  for (const publicAsset of REMOVED_LEGACY_REACT_PUBLIC_ASSETS) {
+    if (fs.existsSync(path.join(DESKTOP_ROOT, 'public', publicAsset))) {
+      return { ok: false, error: `dead React v2 public asset was restored: public/${publicAsset}` };
     }
   }
 
   // 1. dist/ exists
   if (!fs.existsSync(distDir)) {
     return { ok: false, error: `no dist directory at ${distDir}` };
+  }
+  for (const publicAsset of REQUIRED_REACT_PUBLIC_ASSETS) {
+    const builtPath = path.join(distDir, publicAsset);
+    if (!fs.existsSync(builtPath) || fs.statSync(builtPath).size === 0) {
+      return { ok: false, error: `${publicAsset} was not copied to dist/` };
+    }
   }
 
   // 2. index.html exists and non-empty
@@ -75,6 +90,11 @@ export function checkDistBuilt(distDir) {
   ]) {
     if (!fallbackContent.includes(command)) {
       return { ok: false, error: `fallback.html is missing the ${command} recovery contract` };
+    }
+  }
+  for (const publicAsset of REMOVED_LEGACY_REACT_PUBLIC_ASSETS) {
+    if (fs.existsSync(path.join(distDir, publicAsset))) {
+      return { ok: false, error: `dead React v2 public asset was copied to dist: ${publicAsset}` };
     }
   }
 
@@ -147,6 +167,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   console.log(`  ✓ dist/index.html present`);
   console.log(`  ✓ dist/loading.html present`);
   console.log(`  ✓ dual-contract loading and recovery assets are present`);
+  console.log(`  ✓ dead legacy React v2 public assets and fonts are absent`);
   console.log(`  ✓ React bundles contain no Desktop v1 gaLegacy dependency`);
   console.log(`  ✓ ${jsFiles.length} JS bundle(s), ${cssFiles.length} CSS file(s)`);
   console.log(`  ✓ Total assets size: ${(totalSize / 1024).toFixed(0)} KB`);

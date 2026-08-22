@@ -9,8 +9,13 @@ import { CodeBlock } from './CodeBlock';
 import { DiffLines } from './DiffLines';
 import { SafeMathBlock } from './SafeMath';
 import { HugeTextFallback } from './HugeTextFallback';
+import { SAFE_MARKDOWN_COMPONENTS } from './SafeMarkdownComponents';
 import { useSmoothReveal } from '../../../../hooks/useSmoothReveal';
 import { preprocessMarkdown } from '../../../../lib/markdown-preprocess';
+import {
+  SAFE_KATEX_OPTIONS,
+  renderedContentUrlTransform,
+} from '../../../../lib/rendered-content-policy';
 
 const KATEX_OPTIONS = {
   macros: {
@@ -23,8 +28,7 @@ const KATEX_OPTIONS = {
     '\\norm': '\\left\\lVert #1 \\right\\rVert',
     '\\abs': '\\left\\lvert #1 \\right\\rvert',
   },
-  strict: 'ignore' as const,
-  trust: true,
+  ...SAFE_KATEX_OPTIONS,
   errorColor: 'var(--semi-color-text-2)',
 };
 
@@ -38,6 +42,7 @@ interface Props {
 
 function makeComponents(isStreaming: boolean): Components {
   return {
+    ...SAFE_MARKDOWN_COMPONENTS,
     pre({ children }) {
       return <>{children}</>;
     },
@@ -92,6 +97,7 @@ export const MarkdownPart = memo(function MarkdownPart({ content, isStreaming = 
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, KATEX_OPTIONS]]}
         components={components}
+        urlTransform={renderedContentUrlTransform}
       >
         {preprocessMarkdown(deferredText)}
       </ReactMarkdown>

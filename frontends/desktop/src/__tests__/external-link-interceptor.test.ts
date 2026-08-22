@@ -1,38 +1,28 @@
 // @vitest-environment happy-dom
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { handleRenderedContentLinkClick } from '../lib/rendered-content-policy';
 
 /**
  * Verifies that the global click delegate in main.tsx intercepts
  * external links and routes them to tauri-plugin-opener.
  */
 describe('external link interceptor', () => {
-  let openUrl: ReturnType<typeof vi.fn>;
+  let openUrl: Mock<(url: string) => void>;
   let cleanup: () => void;
 
   function installInterceptor() {
-    const handler = (e: MouseEvent) => {
-      const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
-      if (!anchor) return;
-      const href = anchor.href;
-      if (!href || href.startsWith('javascript:')) return;
-      const url = new URL(href, location.href);
-      if (url.origin === location.origin) return;
-      e.preventDefault();
-      (window as any).__TAURI__.opener.openUrl(href);
-    };
+    const handler = (event: MouseEvent) => handleRenderedContentLinkClick(event, (url) => openUrl(url));
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
   }
 
   beforeEach(() => {
-    openUrl = vi.fn();
-    (window as any).__TAURI__ = { opener: { openUrl } };
+    openUrl = vi.fn<(url: string) => void>();
     cleanup = installInterceptor();
   });
 
   afterEach(() => {
     cleanup();
-    delete (window as any).__TAURI__;
   });
 
   it('intercepts external http links and calls opener.openUrl', () => {
@@ -63,7 +53,7 @@ describe('external link interceptor', () => {
     document.body.removeChild(a);
   });
 
-  it('does not intercept javascript: links', () => {
+  it('prevents javascript: links without invoking the opener', () => {
     const a = document.createElement('a');
     a.href = 'javascript:void(0)';
     a.textContent = 'Noop';
@@ -72,6 +62,26 @@ describe('external link interceptor', () => {
     const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
     a.dispatchEvent(ev);
 
+    expect(ev.defaultPrevented).toBe(true);
+    expect(openUrl).not.toHaveBeenCalled();
+    document.body.removeChild(a);
+  });
+
+  it.each([
+    'file:///etc/passwd',
+    'data:text/html,<script>alert(1)</script>',
+    'blob:https://example.com/id',
+    '//example.com/protocol-relative',
+    '/relative/path',
+  ])('prevents non-web or non-explicit link %s', (href) => {
+    const a = document.createElement('a');
+    a.setAttribute('href', href);
+    document.body.appendChild(a);
+
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    a.dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(true);
     expect(openUrl).not.toHaveBeenCalled();
     document.body.removeChild(a);
   });
@@ -92,6 +102,19 @@ describe('external link interceptor', () => {
     expect(ev.defaultPrevented).toBe(true);
     expect(openUrl).toHaveBeenCalledWith('https://github.com/some/repo');
     document.body.removeChild(a);
+  });
+
+  it('intercepts KaTeX-style MathML href nodes', () => {
+    const mathLink = document.createElement('mrow');
+    mathLink.setAttribute('href', 'https://example.com/formula');
+    document.body.appendChild(mathLink);
+
+    const ev = new MouseEvent('click', { bubbles: true, cancelable: true });
+    mathLink.dispatchEvent(ev);
+
+    expect(ev.defaultPrevented).toBe(true);
+    expect(openUrl).toHaveBeenCalledWith('https://example.com/formula');
+    document.body.removeChild(mathLink);
   });
 
   it('ignores clicks on non-anchor elements', () => {

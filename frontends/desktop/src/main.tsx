@@ -2,23 +2,19 @@ import './platform';
 import '@semi-css';
 import './global.css';
 import './stores/bridgeActivity';
+import { handleRenderedContentLinkClick } from './lib/rendered-content-policy';
 
 if (document.documentElement.dataset.appearance === 'dark') {
   document.body.setAttribute('theme-mode', 'dark');
 }
 
-if ((window as any).__TAURI__) {
-  document.addEventListener('click', (e) => {
-    const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null;
-    if (!anchor) return;
-    const href = anchor.href;
-    if (!href || href.startsWith('javascript:')) return;
-    const url = new URL(href, location.href);
-    if (url.origin === location.origin) return;
-    e.preventDefault();
-    (window as any).__TAURI__.opener.openUrl(href);
-  });
-}
+document.addEventListener('click', (event) => {
+  const opener = (window as any).__TAURI__?.opener;
+  handleRenderedContentLinkClick(
+    event,
+    typeof opener?.openUrl === 'function' ? (url) => opener.openUrl(url) : undefined,
+  );
+});
 
 setTimeout(() => {
   document.body.classList.remove('no-transition');

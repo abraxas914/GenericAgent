@@ -1,6 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  REMOVED_LEGACY_REACT_PUBLIC_ASSETS,
+  REQUIRED_REACT_PUBLIC_ASSETS,
+} from './react-public-assets.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const desktopRoot = path.resolve(scriptDir, '..');
@@ -182,9 +186,14 @@ check(
 );
 
 console.log('\n[4] bootstrap and window capability contract');
-for (const relativePath of ['public/fallback.html', 'public/i18n.js', 'public/styles.css']) {
+for (const publicAsset of REQUIRED_REACT_PUBLIC_ASSETS) {
+  const relativePath = `public/${publicAsset}`;
   const absolutePath = path.join(desktopRoot, relativePath);
   check(fs.existsSync(absolutePath) && fs.statSync(absolutePath).size > 0, `${relativePath} is present`);
+}
+for (const publicAsset of REMOVED_LEGACY_REACT_PUBLIC_ASSETS) {
+  const relativePath = `public/${publicAsset}`;
+  check(!fs.existsSync(path.join(desktopRoot, relativePath)), `${relativePath} stays removed from React v2`);
 }
 
 const capability = readJson('src-tauri/capabilities/default.json');
