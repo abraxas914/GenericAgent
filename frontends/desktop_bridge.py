@@ -28,6 +28,9 @@ HTTP API:
   POST   /services/stop-extras   stop conductor + scheduler (127.0.0.1 only)
   POST   /services/start-extras  start conductor + scheduler (127.0.0.1 only)
   POST   /services/bridge/exit    stop managed services, then exit bridge (127.0.0.1 only)
+  POST   /memory/import/inspect   validate a data backup or legacy folder
+  POST   /memory/import           safely merge memory and sessions
+  POST   /memory/export           write a point-in-time data backup ZIP
 
 WS API (state sync):
   GET /ws -> on connect sends services.snapshot; service.changed on updates
@@ -43,6 +46,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 from aiohttp import web, WSMsgType
+from data_backup import (
+    BackupFormatError,
+    export_data_backup,
+    inspect_import_source,
+    materialize_import_source,
+    merge_data_files,
+)
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -217,7 +227,11 @@ class Session:
 
 def _is_desktop_session_id(session_id: Any) -> bool:
     """Keep internal TUI/Conductor worker artifacts out of Desktop sessions."""
-    return bool(session_id) and not str(session_id).startswith("tui_")
+    value = str(session_id or "")
+    return (
+        not value.startswith("tui_")
+        and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value) is not None
+    )
 
 
 def _load_plan_baseline(item: dict, msgs: list) -> int:
@@ -2219,83 +2233,57 @@ async def mykey_save_handler(request):
 
 
 def _import_memory_from(source_dir: str, ga_root: str) -> dict:
-    """把 source_dir 的 memory/ 与 temp/model_responses/ 导入到 ga_root。
+    """Compatibility wrapper for add-only data import."""
+    return merge_data_files(source_dir, ga_root)
 
-    memory/: 先整体备份现有 ga_root/memory 到 temp/memory_import_backup_<ts>/,再覆盖同名文件、补齐新文件。
-    temp/model_responses/: 文件名带 pid/logid 天然唯一,只拷目标端不存在的,已存在的跳过。
-    """
-    src = Path(source_dir).expanduser().resolve()
-    dst_root = Path(ga_root).resolve()
-    if not src.is_dir():
-        raise ValueError(f"source is not a directory: {src}")
-    if src == dst_root:
-        raise ValueError("source is the same as current GA root")
 
-    src_mem = src / "memory"
-    src_resp = src / "temp" / "model_responses"
-    if not src_mem.is_dir() and not src_resp.is_dir():
-        raise ValueError("not a GA directory (no memory/ or temp/model_responses/)")
+async def memory_import_inspect_handler(request):
+    data = await read_json(request)
+    source_path = str(data.get("sourcePath") or data.get("sourceDir") or "").strip()
+    if not source_path:
+        return json_ok({"ok": False, "error": "missing_sourcePath"}, status=400)
+    try:
+        result = await asyncio.to_thread(inspect_import_source, source_path)
+    except (BackupFormatError, OSError, ValueError) as error:
+        return json_ok({"ok": False, "error": str(error)}, status=400)
+    return json_ok(result)
 
-    memory_copied = 0
-    responses_copied = 0
-    responses_skipped = 0
-    backup_dir = ""
 
-    # --- memory/: 备份后覆盖 ---
-    if src_mem.is_dir():
-        dst_mem = dst_root / "memory"
-        if dst_mem.is_dir() and any(dst_mem.iterdir()):
-            ts = time.strftime("%Y%m%d_%H%M%S")
-            backup_root = dst_root / "temp" / f"memory_import_backup_{ts}"
-            backup_root.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(dst_mem, backup_root / "memory")
-            backup_dir = str(backup_root)
-        dst_mem.mkdir(parents=True, exist_ok=True)
-        for item in src_mem.rglob("*"):
-            rel = item.relative_to(src_mem)
-            target = dst_mem / rel
-            if item.is_dir():
-                target.mkdir(parents=True, exist_ok=True)
-            else:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item, target)
-                memory_copied += 1
-
-    # --- temp/model_responses/: 补齐缺失 ---
-    if src_resp.is_dir():
-        dst_resp = dst_root / "temp" / "model_responses"
-        dst_resp.mkdir(parents=True, exist_ok=True)
-        for item in src_resp.rglob("*"):
-            if item.is_dir():
-                continue
-            rel = item.relative_to(src_resp)
-            target = dst_resp / rel
-            if target.exists():
-                responses_skipped += 1
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, target)
-            responses_copied += 1
-
-    return {
-        "ok": True,
-        "memoryCopied": memory_copied,
-        "responsesCopied": responses_copied,
-        "responsesSkipped": responses_skipped,
-        "backupDir": backup_dir,
-    }
+def _import_data_source(source_path: str) -> dict:
+    with materialize_import_source(source_path) as source_root:
+        result = _import_memory_from(str(source_root), manager.ga_root)
+        result.update(manager.import_sessions(str(source_root)))
+        return result
 
 
 async def memory_import_handler(request):
     data = await read_json(request)
-    source_dir = (data.get("sourceDir") or "").strip()
-    if not source_dir:
-        return json_ok({"ok": False, "error": "missing_sourceDir"}, status=400)
+    source_path = str(data.get("sourcePath") or data.get("sourceDir") or "").strip()
+    if not source_path:
+        return json_ok({"ok": False, "error": "missing_sourcePath"}, status=400)
     try:
-        result = _import_memory_from(source_dir, manager.ga_root)
-        result.update(manager.import_sessions(source_dir))
-    except Exception as e:
-        return json_ok({"ok": False, "error": str(e)}, status=400)
+        result = await asyncio.to_thread(_import_data_source, source_path)
+    except (BackupFormatError, OSError, ValueError) as error:
+        return json_ok({"ok": False, "error": str(error)}, status=400)
+    return json_ok(result)
+
+
+async def memory_export_handler(request):
+    data = await read_json(request)
+    destination_path = str(data.get("destinationPath") or "").strip()
+    source_mode = str(data.get("sourceMode") or "").strip()
+    if not destination_path:
+        return json_ok({"ok": False, "error": "missing_destinationPath"}, status=400)
+    try:
+        await asyncio.to_thread(manager._persist)
+        result = await asyncio.to_thread(
+            export_data_backup,
+            manager.ga_root,
+            destination_path,
+            source_mode,
+        )
+    except (BackupFormatError, OSError, ValueError) as error:
+        return json_ok({"ok": False, "error": str(error)}, status=400)
     return json_ok(result)
 
 
@@ -2505,7 +2493,9 @@ def create_app():
     app.router.add_get("/services/panel", service_panel_handler)
     app.router.add_get("/services/mykey", mykey_get_handler)
     app.router.add_post("/services/mykey", mykey_save_handler)
+    app.router.add_post("/memory/import/inspect", memory_import_inspect_handler)
     app.router.add_post("/memory/import", memory_import_handler)
+    app.router.add_post("/memory/export", memory_export_handler)
     app.router.add_get("/services/conductor/model", conductor_model_get_handler)
     app.router.add_post("/services/conductor/model", conductor_model_save_handler)
     app.router.add_post("/services/stop-extras", stop_extras_handler)

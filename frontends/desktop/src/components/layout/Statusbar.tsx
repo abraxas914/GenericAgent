@@ -138,7 +138,6 @@ export function Statusbar() {
             detail={<LiveDuration since={turnStartedAt} />}
           />
         )}
-        <StatusItem label="v0.1.0" />
       </div>
     </footer>
   );

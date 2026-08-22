@@ -451,53 +451,86 @@ fn bundle_python() -> Option<PathBuf> {
     }
 }
 
-/// Find python executable:
-/// 1. The embedded bundle python (runtime/python) — deps are installed directly into it
-///    (no venv), and its path is resolved relative to the bundle anchor at runtime, so the
-///    package stays relocatable (moving the folder doesn't break absolute venv paths).
-/// 2. .portable/uv-python/ 下找 python.exe (Windows) 或 python3 (Unix)
-/// 3. Fallback to system PATH
-fn find_python() -> String {
-    if let Some(p) = bundle_python() {
-        return p.to_string_lossy().to_string();
-    }
-    let root = project_root();
-    let portable_python_dir = root.join(".portable").join("uv-python");
-
-    if portable_python_dir.exists() {
-        // uv installs python like: uv-python/cpython-3.12.x-windows-x86_64/python.exe
-        // We need to search for python.exe inside subdirectories
-        if let Ok(entries) = std::fs::read_dir(&portable_python_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_dir() {
-                    #[cfg(windows)]
-                    {
-                        let py = path.join("python.exe");
-                        if py.exists() {
-                            return py.to_string_lossy().to_string();
-                        }
-                    }
-                    #[cfg(not(windows))]
-                    {
-                        let py = path.join("bin").join("python3");
-                        if py.exists() {
-                            return py.to_string_lossy().to_string();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback: system PATH
+fn platform_python_name() -> &'static str {
     #[cfg(windows)]
     {
-        "python".to_string()
+        "python"
     }
     #[cfg(not(windows))]
     {
-        "python3".to_string()
+        "python3"
+    }
+}
+
+fn project_venv_python(project: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        project.join(".venv").join("Scripts").join("python.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        project.join(".venv").join("bin").join("python")
+    }
+}
+
+fn portable_python(project: &Path) -> Option<PathBuf> {
+    let root = project.join(".portable").join("uv-python");
+    #[cfg(windows)]
+    let direct = root.join("python.exe");
+    #[cfg(not(windows))]
+    let direct = root.join("bin").join("python3");
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let mut children = std::fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    children.sort();
+    children.into_iter().find_map(|path| {
+        #[cfg(windows)]
+        let python = path.join("python.exe");
+        #[cfg(not(windows))]
+        let python = path.join("bin").join("python3");
+        python.is_file().then_some(python)
+    })
+}
+
+fn discover_python_for_project_path(project: &Path, saved_python: Option<&str>) -> String {
+    if let Some(python) = bundle_python() {
+        return display_path(&python);
+    }
+    let venv = project_venv_python(project);
+    if venv.is_file() {
+        return display_path(&venv);
+    }
+    if let Some(python) = portable_python(project) {
+        return display_path(&python);
+    }
+    if let Some(python) = saved_python
+        .map(str::trim)
+        .filter(|python| python_interpreter_resolves(python))
+    {
+        return python.to_string();
+    }
+    let fallback = platform_python_name();
+    if python_interpreter_resolves(fallback) {
+        fallback.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// Resolve package, project-local, portable, saved, then PATH Python in that order.
+fn find_python() -> String {
+    let discovered = discover_python_for_project_path(&project_root(), None);
+    if discovered.is_empty() {
+        platform_python_name().to_string()
+    } else {
+        discovered
     }
 }
 
@@ -859,11 +892,6 @@ fn copy_dir_replace(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn bundled_project_dir() -> Option<PathBuf> {
-    let app = bundle_root()?.join("app");
-    app.join("agentmain.py").exists().then_some(app)
-}
-
 fn builtin_ga_root(project_dir: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -982,7 +1010,7 @@ pub fn get_or_discover_config() -> (String, String) {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                if !python.is_empty()
+                if python_interpreter_resolves(&python)
                     && !project.is_empty()
                     && PathBuf::from(&project)
                         .join("frontends")
@@ -996,8 +1024,12 @@ pub fn get_or_discover_config() -> (String, String) {
     }
 
     // Auto-discover
-    let python = find_python();
     let project = find_project_dir().unwrap_or_default();
+    let python = if project.is_empty() {
+        find_python()
+    } else {
+        discover_python_for_project_path(Path::new(&project), None)
+    };
 
     // Save discovered config
     if !python.is_empty() && !project.is_empty() {
@@ -1830,7 +1862,9 @@ fn resolve_requested_bootstrap_config(
         return get_or_discover_config();
     }
     let python = if requested_python.trim().is_empty() {
-        find_python()
+        let settings = read_settings();
+        let saved = settings.get("python_path").and_then(|value| value.as_str());
+        discover_python_for_project_path(Path::new(requested_project.trim()), saved)
     } else {
         requested_python
     };
@@ -1873,6 +1907,11 @@ fn get_config() -> (String, String) {
 }
 
 #[tauri::command]
+fn discover_python_for_project(project_dir: String, current_python: Option<String>) -> String {
+    discover_python_for_project_path(Path::new(project_dir.trim()), current_python.as_deref())
+}
+
+#[tauri::command]
 fn export_mykey(content: String) -> Result<Option<String>, String> {
     let path = rfd::FileDialog::new()
         .set_file_name("mykey.py")
@@ -1896,6 +1935,88 @@ fn pick_directory(title: Option<String>) -> Option<String> {
         }
     }
     dlg.pick_folder().map(|p| p.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn pick_python_interpreter(title: Option<String>) -> Result<Option<String>, String> {
+    let mut dialog = rfd::FileDialog::new();
+    #[cfg(windows)]
+    {
+        dialog = dialog.add_filter("Python", &["exe"]);
+    }
+    if let Some(value) = title.filter(|value| !value.is_empty()) {
+        dialog = dialog.set_title(&value);
+    }
+    let Some(path) = dialog.pick_file() else {
+        return Ok(None);
+    };
+    if !path.is_file() {
+        return Err("the selected Python environment is unavailable".to_string());
+    }
+    Ok(Some(display_path(&path)))
+}
+
+#[tauri::command]
+fn pick_data_backup_file(title: Option<String>) -> Option<String> {
+    let mut dialog = rfd::FileDialog::new().add_filter("ZIP", &["zip"]);
+    if let Some(value) = title.filter(|value| !value.is_empty()) {
+        dialog = dialog.set_title(&value);
+    }
+    dialog
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn pick_data_export_path(default_name: String, title: Option<String>) -> Option<String> {
+    let safe_default = Path::new(&default_name)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| name.to_ascii_lowercase().ends_with(".zip"))
+        .unwrap_or("GenericAgent-data-backup.zip");
+    let mut dialog = rfd::FileDialog::new()
+        .add_filter("ZIP", &["zip"])
+        .set_file_name(safe_default);
+    if let Some(value) = title.filter(|value| !value.is_empty()) {
+        dialog = dialog.set_title(&value);
+    }
+    dialog.save_file().map(|mut path| {
+        if path.extension().and_then(|value| value.to_str()) != Some("zip") {
+            path.set_extension("zip");
+        }
+        path.to_string_lossy().into_owned()
+    })
+}
+
+#[tauri::command]
+fn reveal_in_file_manager(path: String) -> Result<(), String> {
+    let target = PathBuf::from(path.trim());
+    if !target.is_file() {
+        return Err("the selected file is unavailable".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg("-R").arg(&target);
+        command
+    };
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg("/select,").arg(&target);
+        command.creation_flags(0x08000000);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(target.parent().unwrap_or(Path::new(".")));
+        command
+    };
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("cannot reveal the selected file: {error}"))
 }
 
 #[tauri::command]
@@ -1973,6 +2094,17 @@ fn probe_ga_source(dir: &str) -> Result<(), String> {
     ))
 }
 
+fn validated_ga_source(dir: &str) -> Result<String, String> {
+    let source = PathBuf::from(dir.trim());
+    if !source.join("agentmain.py").exists() {
+        return Err("not a GenericAgent source: agentmain.py not found".to_string());
+    }
+    let source = source.canonicalize().unwrap_or(source);
+    let source_text = display_path(&source);
+    probe_ga_source(&source_text)?;
+    Ok(source_text)
+}
+
 async fn restart_for_current_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     let (python_path, project_dir) = get_or_discover_config();
     let expected_ga_root = effective_ga_root(&project_dir);
@@ -2000,106 +2132,16 @@ async fn apply_ga_source_with_rollback(
     }
 }
 
-#[derive(Debug)]
-struct RuntimeMovePlan {
-    previous_override: Option<String>,
-    source: PathBuf,
-    destination: PathBuf,
-    remove_source_after_switch: bool,
-}
-
-fn should_remove_source_after_switch(
-    source: &Path,
-    destination: &Path,
-    bundled: Option<&Path>,
-) -> bool {
-    !same_path(source, destination)
-        && !bundled
-            .map(|bundled| same_path(source, bundled))
-            .unwrap_or(false)
-}
-
-fn prepare_runtime_move(target_parent: &str) -> Result<RuntimeMovePlan, String> {
-    let previous_override = saved_ga_source_override();
-    let external_source = valid_ga_source_override();
-    let (_, project_dir) = get_or_discover_config();
-    let source_text = external_source
-        .clone()
-        .unwrap_or_else(|| effective_ga_root(&project_dir));
-    if source_text.trim().is_empty() {
-        return Err(
-            "current GA workspace is empty; wait for the bridge to become ready and try again"
-                .to_string(),
-        );
-    }
-    if target_parent.trim().is_empty() {
-        return Err("target parent directory is empty".to_string());
-    }
-
-    let source = PathBuf::from(source_text.trim());
-    if !source.is_dir() || !source.join("agentmain.py").exists() {
-        return Err(format!(
-            "current GA workspace is invalid: {}",
-            source.to_string_lossy()
-        ));
-    }
-    let parent = PathBuf::from(target_parent.trim());
-    std::fs::create_dir_all(&parent)
-        .map_err(|error| format!("cannot create target parent dir: {error}"))?;
-    let source = source.canonicalize().unwrap_or(source);
-    let parent = parent.canonicalize().unwrap_or(parent);
-    let source_name = source
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("GenericAgent");
-    let folder_name = if source_name == "app" {
-        "GenericAgent"
-    } else {
-        source_name
-    };
-    let destination = parent.join(folder_name);
-    let destination = if destination.exists() {
-        destination.canonicalize().unwrap_or(destination)
-    } else {
-        destination
-    };
-
-    if destination.starts_with(&source) && !same_path(&source, &destination) {
-        return Err("target directory cannot be inside the current GA workspace".to_string());
-    }
-    if !same_path(&source, &destination) {
-        if destination.exists() {
-            return Err(format!(
-                "target GA workspace already exists: {}",
-                display_path(&destination)
-            ));
-        }
-        copy_dir_replace(&source, &destination)?;
-    }
-
-    let bundled = bundled_project_dir();
-    let remove_source_after_switch = external_source.is_some()
-        && should_remove_source_after_switch(&source, &destination, bundled.as_deref());
-    Ok(RuntimeMovePlan {
-        previous_override,
-        source,
-        destination,
-        remove_source_after_switch,
-    })
+#[tauri::command]
+async fn validate_ga_source(dir: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || validated_ga_source(&dir))
+        .await
+        .map_err(|error| format!("compatibility probe task failed: {error}"))?
 }
 
 #[tauri::command]
 async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
-    let source = PathBuf::from(dir.trim());
-    if !source.join("agentmain.py").exists() {
-        return Err("not a GenericAgent source: agentmain.py not found".to_string());
-    }
-    let source = source.canonicalize().unwrap_or(source);
-    let source_text = display_path(&source);
-    let probe_source = source_text.clone();
-    tauri::async_runtime::spawn_blocking(move || probe_ga_source(&probe_source))
-        .await
-        .map_err(|error| format!("compatibility probe task failed: {error}"))??;
+    let source_text = validate_ga_source(dir).await?;
     let previous_override = saved_ga_source_override();
     apply_ga_source_with_rollback(app_handle, Some(source_text), previous_override).await
 }
@@ -2108,32 +2150,6 @@ async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<Stri
 async fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     let previous_override = saved_ga_source_override();
     apply_ga_source_with_rollback(app_handle, None, previous_override).await
-}
-
-#[tauri::command]
-async fn move_ga_runtime(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
-    let plan = tauri::async_runtime::spawn_blocking(move || prepare_runtime_move(&dir))
-        .await
-        .map_err(|error| format!("runtime copy task failed: {error}"))??;
-    let destination_text = display_path(&plan.destination);
-    apply_ga_source_with_rollback(
-        app_handle,
-        Some(destination_text.clone()),
-        plan.previous_override,
-    )
-    .await?;
-
-    if plan.remove_source_after_switch {
-        let source = plan.source;
-        tauri::async_runtime::spawn_blocking(move || {
-            if let Err(error) = std::fs::remove_dir_all(&source) {
-                eprintln!("remove old runtime {:?}: {error}", source);
-            }
-        })
-        .await
-        .map_err(|error| format!("old runtime cleanup task failed: {error}"))?;
-    }
-    Ok(destination_text)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2179,12 +2195,17 @@ pub fn run() {
             retry_bootstrap,
             get_bootstrap_snapshot,
             get_config,
+            discover_python_for_project,
             export_mykey,
             pick_directory,
+            pick_python_interpreter,
+            pick_data_backup_file,
+            pick_data_export_path,
+            reveal_in_file_manager,
             get_ga_source,
+            validate_ga_source,
             set_ga_source,
             clear_ga_source,
-            move_ga_runtime,
             shortcut_should_ask,
             shortcut_decide
         ])
@@ -2423,6 +2444,47 @@ mod tests {
     }
 
     #[test]
+    fn project_python_discovery_prefers_venv_then_sorted_portable_then_saved() {
+        let root = std::env::temp_dir().join(format!(
+            "ga-python-discovery-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let portable_a = root.join(".portable").join("uv-python").join("a");
+        let portable_z = root.join(".portable").join("uv-python").join("z");
+        #[cfg(windows)]
+        let portable_a_python = portable_a.join("python.exe");
+        #[cfg(not(windows))]
+        let portable_a_python = portable_a.join("bin").join("python3");
+        #[cfg(windows)]
+        let portable_z_python = portable_z.join("python.exe");
+        #[cfg(not(windows))]
+        let portable_z_python = portable_z.join("bin").join("python3");
+        std::fs::create_dir_all(portable_a_python.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(portable_z_python.parent().unwrap()).unwrap();
+        std::fs::write(&portable_a_python, []).unwrap();
+        std::fs::write(&portable_z_python, []).unwrap();
+
+        let current_exe = std::env::current_exe().unwrap();
+        assert_eq!(
+            discover_python_for_project_path(&root, Some(current_exe.to_str().unwrap())),
+            display_path(&portable_a_python)
+        );
+
+        let venv = project_venv_python(&root);
+        std::fs::create_dir_all(venv.parent().unwrap()).unwrap();
+        std::fs::write(&venv, []).unwrap();
+        assert_eq!(
+            discover_python_for_project_path(&root, Some(current_exe.to_str().unwrap())),
+            display_path(&venv)
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn bridge_endpoint_uses_defaults_and_validates_overrides() {
         let default = bridge_endpoint_from_values(None, None).unwrap();
         assert_eq!(default.host, "127.0.0.1");
@@ -2482,28 +2544,5 @@ mod tests {
             resolve_settings_path(Some(PathBuf::from("/home/user")), None),
             PathBuf::from("/home/user/.ga_desktop_settings.json")
         );
-    }
-
-    #[test]
-    fn runtime_move_never_deletes_the_bundle_or_an_in_place_source() {
-        let bundled = PathBuf::from("/bundle/runtime/app");
-        let external = PathBuf::from("/data/GenericAgent");
-        let destination = PathBuf::from("/moved/GenericAgent");
-
-        assert!(!should_remove_source_after_switch(
-            &bundled,
-            &destination,
-            Some(&bundled),
-        ));
-        assert!(!should_remove_source_after_switch(
-            &external,
-            &external,
-            Some(&bundled),
-        ));
-        assert!(should_remove_source_after_switch(
-            &external,
-            &destination,
-            Some(&bundled),
-        ));
     }
 }

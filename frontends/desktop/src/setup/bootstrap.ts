@@ -20,6 +20,11 @@ export interface SetupBootstrapState {
   snapshot: BootstrapSnapshot;
 }
 
+export interface SetupValues {
+  projectDir: string;
+  pythonPath: string;
+}
+
 export function getSetupTauri(): SetupTauriApi | undefined {
   return (window as Window & { __TAURI__?: SetupTauriApi }).__TAURI__;
 }
@@ -95,4 +100,25 @@ export async function retrySetupBootstrap(
   } catch (error) {
     return { mode: 'legacy', error };
   }
+}
+
+export async function chooseSetupProject(
+  invoke: Invoke,
+  currentPython: string,
+  title: string,
+): Promise<SetupValues | null> {
+  const projectDir = await invoke<string | null>('pick_directory', { title });
+  if (!projectDir) return null;
+  const pythonPath = await invoke<string>('discover_python_for_project', {
+    projectDir,
+    currentPython: currentPython || null,
+  }).catch(() => currentPython);
+  return { projectDir, pythonPath: pythonPath || '' };
+}
+
+export async function chooseSetupPython(
+  invoke: Invoke,
+  title: string,
+): Promise<string | null> {
+  return invoke<string | null>('pick_python_interpreter', { title });
 }

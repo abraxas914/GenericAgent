@@ -5,15 +5,14 @@ Run: pytest frontends/tests/test_bridge_utils.py -v
 """
 import ast
 import os
-import shutil
 import sys
 import re
-import time
 from pathlib import Path
 
 # Add project root so we can import bridge helpers
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "frontends"))
+from data_backup import merge_data_files
 
 # Import the functions under test (module-level helpers)
 import importlib.util
@@ -62,7 +61,7 @@ class TestGaRootBoundary:
 
 
 class TestMemoryImport:
-    def test_backup_overwrite_and_response_add_only(self, tmp_path):
+    def test_current_data_wins_for_memory_and_responses(self, tmp_path):
         source = tmp_path / "source"
         target = tmp_path / "target"
         (source / "memory").mkdir(parents=True)
@@ -76,19 +75,16 @@ class TestMemoryImport:
         (target / "temp" / "model_responses").mkdir(parents=True)
         (target / "temp" / "model_responses" / "same.json").write_text("old", encoding="utf-8")
 
-        helpers = _load_named_helpers(
-            {"_import_memory_from"},
-            {"Path": Path, "shutil": shutil, "time": time},
-        )
-        result = helpers["_import_memory_from"](str(source), str(target))
+        result = merge_data_files(str(source), str(target))
 
-        assert result["memoryCopied"] == 2
+        assert result["memoryCopied"] == 1
+        assert result["memorySkipped"] == 1
         assert result["responsesCopied"] == 1
         assert result["responsesSkipped"] == 1
-        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "new"
+        assert (target / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+        assert (target / "memory" / "added.md").read_text(encoding="utf-8") == "added"
         assert (target / "temp" / "model_responses" / "same.json").read_text(encoding="utf-8") == "old"
-        backup = Path(result["backupDir"])
-        assert (backup / "memory" / "same.md").read_text(encoding="utf-8") == "old"
+        assert result["backupDir"] == ""
 
 
 def _load_empty_turn_helpers():

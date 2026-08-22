@@ -1,37 +1,16 @@
 // @vitest-environment node
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  backupFilename,
+  exportData,
+  importData,
+  inspectDataImport,
+} from '../services/dataBackup';
 
-const BRIDGE_BASE = 'http://127.0.0.1:14168';
-
-const mockSaveMykeyContent = vi.fn();
-const mockGetMykeyContent = vi.fn();
-const mockTauriInvoke = vi.fn();
-const mockLoadFromBridge = vi.fn().mockResolvedValue(undefined);
-const mockLoadSessions = vi.fn();
-
-vi.mock('../../services/bridge', () => ({
-  saveMykeyContent: (...args: any[]) => mockSaveMykeyContent(...args),
-  getMykeyContent: (...args: any[]) => mockGetMykeyContent(...args),
-  tauriInvoke: (...args: any[]) => mockTauriInvoke(...args),
-}));
-
-vi.mock('../../stores/settings', () => ({
-  useSettingsStore: {
-    getState: () => ({ loadFromBridge: mockLoadFromBridge }),
-  },
-}));
-
-vi.mock('../../stores/chat', () => ({
-  useChatStore: {
-    getState: () => ({ loadSessions: mockLoadSessions }),
-  },
-}));
-
-describe('DataSection logic', () => {
-  let mockFetch: ReturnType<typeof vi.fn>;
+describe('desktop data backup service', () => {
+  const mockFetch = vi.fn();
 
   beforeEach(() => {
-    mockFetch = vi.fn();
     vi.stubGlobal('fetch', mockFetch);
   });
 
@@ -40,263 +19,91 @@ describe('DataSection logic', () => {
     vi.clearAllMocks();
   });
 
-  describe('import key config', () => {
-    it('saves content and refreshes profiles on success', async () => {
-      mockSaveMykeyContent.mockResolvedValue(undefined);
-
-      const content = 'native_oai_config = {"apikey": "sk-test", "model": "gpt-4"}';
-      await mockSaveMykeyContent(content);
-      await mockLoadFromBridge();
-
-      expect(mockSaveMykeyContent).toHaveBeenCalledWith(content);
-      expect(mockLoadFromBridge).toHaveBeenCalled();
-    });
-
-    it('throws on bridge error', async () => {
-      mockSaveMykeyContent.mockRejectedValue(new Error('500 Internal Server Error'));
-
-      await expect(mockSaveMykeyContent('bad')).rejects.toThrow('500');
-    });
+  it('builds locale-aware, second-precision backup filenames', () => {
+    const date = new Date(2026, 7, 22, 9, 4, 7);
+    expect(backupFilename('zh', date)).toBe('GenericAgent-数据备份-2026-08-22-090407.zip');
+    expect(backupFilename('en', date)).toBe('GenericAgent-data-backup-2026-08-22-090407.zip');
   });
 
-  describe('export key config', () => {
-    it('reads mykey content from bridge', async () => {
-      const content = 'native_oai_config = {"apikey": "sk-x"}';
-      mockGetMykeyContent.mockResolvedValue(content);
-
-      const result = await mockGetMykeyContent();
-      expect(result).toBe(content);
+  it('inspects a backup before import and sends only its selected path', async () => {
+    const inspection = {
+      sourceType: 'backupZip',
+      formatVersion: 1,
+      exportedAt: '2026-08-22T01:04:07Z',
+      sourceMode: 'included',
+      content: { memory: 2, responses: 3, sessions: 4 },
+    };
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(inspection),
     });
 
-    it('returns empty when no mykey exists', async () => {
-      mockGetMykeyContent.mockResolvedValue('');
-
-      const result = await mockGetMykeyContent();
-      expect(result).toBe('');
-    });
-  });
-
-  describe('move GA workspace', () => {
-    async function pickAndMove(): Promise<string | null> {
-      const picked = await mockTauriInvoke('pick_directory', {
-        title: 'Choose the new GA workspace location',
-      });
-      if (!picked) return null;
-      const movedPath = await mockTauriInvoke('move_ga_runtime', { dir: picked });
-      await Promise.all([mockLoadSessions(), mockLoadFromBridge()]);
-      return movedPath;
-    }
-
-    it('picks a parent directory and passes it to move_ga_runtime', async () => {
-      mockTauriInvoke
-        .mockResolvedValueOnce('/Users/test/Data')
-        .mockResolvedValueOnce('/Users/test/Data/GenericAgent');
-
-      const result = await pickAndMove();
-
-      expect(mockTauriInvoke).toHaveBeenNthCalledWith(1, 'pick_directory', {
-        title: 'Choose the new GA workspace location',
-      });
-      expect(mockTauriInvoke).toHaveBeenNthCalledWith(2, 'move_ga_runtime', {
-        dir: '/Users/test/Data',
-      });
-      expect(mockLoadSessions).toHaveBeenCalledOnce();
-      expect(mockLoadFromBridge).toHaveBeenCalledOnce();
-      expect(result).toBe('/Users/test/Data/GenericAgent');
-    });
-
-    it('does not move when directory selection is cancelled', async () => {
-      mockTauriInvoke.mockResolvedValueOnce(null);
-
-      await expect(pickAndMove()).resolves.toBeNull();
-      expect(mockTauriInvoke).toHaveBeenCalledTimes(1);
-      expect(mockTauriInvoke).not.toHaveBeenCalledWith('move_ga_runtime', expect.anything());
-    });
-
-    it('rejects when move_ga_runtime fails', async () => {
-      mockTauriInvoke
-        .mockResolvedValueOnce('/Users/test/Data')
-        .mockRejectedValueOnce(new Error('failed to restart bridge'));
-
-      await expect(pickAndMove()).rejects.toThrow('failed to restart bridge');
-      expect(mockTauriInvoke).toHaveBeenLastCalledWith('move_ga_runtime', {
-        dir: '/Users/test/Data',
-      });
-      expect(mockLoadSessions).not.toHaveBeenCalled();
-      expect(mockLoadFromBridge).not.toHaveBeenCalled();
-    });
-
-    it('refreshes the persisted source after moving', async () => {
-      mockTauriInvoke.mockResolvedValueOnce('/Users/test/Data/GenericAgent');
-
-      const source = await mockTauriInvoke('get_ga_source', {});
-
-      expect(source).toBe('/Users/test/Data/GenericAgent');
-      expect(mockTauriInvoke).toHaveBeenCalledWith('get_ga_source', {});
-    });
-  });
-
-  describe('import memory & sessions', () => {
-    it('posts sourceDir to /memory/import and returns counts', async () => {
-      mockFetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-        json: () => Promise.resolve({
-          memoryCopied: 3,
-          responsesCopied: 5,
-          responsesSkipped: 2,
-          sessionsAdded: 4,
-        }),
-      });
-
-      const res = await fetch(`${BRIDGE_BASE}/memory/import`, {
+    await expect(inspectDataImport('/Users/test/data.zip')).resolves.toEqual(inspection);
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:14168/memory/import/inspect',
+      expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceDir: '/path/to/repo' }),
-      });
-      const data = await res.json();
+        body: JSON.stringify({ sourcePath: '/Users/test/data.zip' }),
+      }),
+    );
+  });
 
-      expect(mockFetch).toHaveBeenCalledWith(
-        `${BRIDGE_BASE}/memory/import`,
-        expect.objectContaining({ method: 'POST' }),
-      );
-      expect(data.memoryCopied).toBe(3);
-      expect(data.sessionsAdded).toBe(4);
+  it('imports through the add-only backup endpoint', async () => {
+    const result = {
+      memoryCopied: 3,
+      memorySkipped: 2,
+      responsesCopied: 4,
+      responsesSkipped: 1,
+      sessionsAdded: 5,
+      sessionsSkipped: 2,
+    };
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(result),
     });
 
-    it('handles error response from bridge', async () => {
-      mockFetch.mockResolvedValue({
-        ok: false,
-        status: 400,
-        json: () => Promise.resolve({ error: 'No memory data found' }),
-      });
+    await expect(importData('/Users/test/data.zip')).resolves.toEqual(result);
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:14168/memory/import',
+      expect.objectContaining({ body: JSON.stringify({ sourcePath: '/Users/test/data.zip' }) }),
+    );
+  });
 
-      const res = await fetch(`${BRIDGE_BASE}/memory/import`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceDir: '/empty/dir' }),
-      });
-      const data = await res.json();
-
-      expect(res.ok).toBe(false);
-      expect(data.error).toContain('No memory');
+  it('exports the selected connection mode without exposing its repository path', async () => {
+    const result = {
+      path: '/Users/test/GenericAgent-data-backup.zip',
+      exportedAt: '2026-08-22T01:04:07Z',
+      sourceMode: 'localRepository',
+      content: { memory: 1, responses: 2, sessions: 3 },
+    };
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve(result),
     });
 
-    it('handles network failure gracefully', async () => {
-      mockFetch.mockRejectedValue(new TypeError('Failed to fetch'));
-
-      await expect(
-        fetch(`${BRIDGE_BASE}/memory/import`, {
-          method: 'POST',
-          body: JSON.stringify({ sourceDir: '/path' }),
+    await expect(exportData(result.path, 'localRepository')).resolves.toEqual(result);
+    expect(mockFetch).toHaveBeenCalledWith(
+      'http://127.0.0.1:14168/memory/export',
+      expect.objectContaining({
+        body: JSON.stringify({
+          destinationPath: result.path,
+          sourceMode: 'localRepository',
         }),
-      ).rejects.toThrow('Failed to fetch');
-    });
-  });
-});
-
-describe('GaSourceBlock logic', () => {
-  afterEach(() => {
-    vi.clearAllMocks();
+      }),
+    );
   });
 
-  describe('connect local repo', () => {
-    it('validates and connects on valid repo', async () => {
-      mockTauriInvoke
-        .mockResolvedValueOnce('/Users/test/GenericAgent')
-        .mockResolvedValueOnce('/Users/test/GenericAgent');
-
-      const picked = await mockTauriInvoke('pick_directory', {});
-      expect(picked).toBe('/Users/test/GenericAgent');
-
-      const result = await mockTauriInvoke('set_ga_source', { dir: picked });
-      expect(result).toBe('/Users/test/GenericAgent');
+  it('surfaces bridge errors to the localized UI boundary', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 400,
+      json: () => Promise.resolve({ error: 'backup format is not supported' }),
     });
 
-    it('rejects repo without agentmain.py', async () => {
-      mockTauriInvoke
-        .mockResolvedValueOnce('/Users/test/not-ga')
-        .mockRejectedValueOnce(new Error('not a GenericAgent source: agentmain.py not found'));
-
-      const picked = await mockTauriInvoke('pick_directory', {});
-      await expect(
-        mockTauriInvoke('set_ga_source', { dir: picked }),
-      ).rejects.toThrow('agentmain.py');
-    });
-
-    it('rejects a core that fails the package compatibility probe', async () => {
-      mockTauriInvoke
-        .mockResolvedValueOnce('/Users/test/partial-ga')
-        .mockRejectedValueOnce(new Error('this GenericAgent core is not compatible: missing sessions'));
-
-      const picked = await mockTauriInvoke('pick_directory', {});
-      await expect(
-        mockTauriInvoke('set_ga_source', { dir: picked }),
-      ).rejects.toThrow('not compatible');
-    });
-
-    it('handles bridge startup timeout', async () => {
-      mockTauriInvoke
-        .mockResolvedValueOnce('/Users/test/GenericAgent')
-        .mockRejectedValueOnce(new Error('bridge did not become ready within 20s'));
-
-      const picked = await mockTauriInvoke('pick_directory', {});
-      await expect(
-        mockTauriInvoke('set_ga_source', { dir: picked }),
-      ).rejects.toThrow('20s');
-    });
-
-    it('returns null when user cancels directory picker', async () => {
-      mockTauriInvoke.mockResolvedValueOnce(null);
-
-      const picked = await mockTauriInvoke('pick_directory', {});
-      expect(picked).toBeNull();
-    });
-  });
-
-  describe('disconnect', () => {
-    it('clears ga_source and switches back to bundle', async () => {
-      mockTauriInvoke.mockResolvedValueOnce('/bundle/path');
-
-      const result = await mockTauriInvoke('clear_ga_source', {});
-      expect(result).toBe('/bundle/path');
-    });
-  });
-
-  describe('mapSourceError', () => {
-    function mapSourceError(msg: string): string {
-      if (msg.includes('agentmain.py')) return 'data.localRepoErrNoAgent';
-      if (msg.includes('not compatible') || msg.includes('compatibility probe')) {
-        return 'data.localRepoErrIncompatible';
-      }
-      if (msg.includes('20s') || msg.includes('ready')) return 'data.localRepoErrTimeout';
-      if (msg.includes('no GenericAgent source')) return 'data.localRepoErrNoResolve';
-      return 'data.localRepoSwitchFailed';
-    }
-
-    it('maps agentmain error correctly', () => {
-      expect(mapSourceError('not a GenericAgent source: agentmain.py not found'))
-        .toBe('data.localRepoErrNoAgent');
-    });
-
-    it('maps compatibility probe errors correctly', () => {
-      expect(mapSourceError('this GenericAgent core is not compatible: missing sessions'))
-        .toBe('data.localRepoErrIncompatible');
-    });
-
-    it('maps timeout error correctly', () => {
-      expect(mapSourceError('bridge did not become ready within 20s'))
-        .toBe('data.localRepoErrTimeout');
-    });
-
-    it('maps resolve error correctly', () => {
-      expect(mapSourceError('no GenericAgent source resolved'))
-        .toBe('data.localRepoErrNoResolve');
-    });
-
-    it('falls back to generic error', () => {
-      expect(mapSourceError('some unexpected error'))
-        .toBe('data.localRepoSwitchFailed');
-    });
+    await expect(inspectDataImport('/Users/test/bad.zip'))
+      .rejects.toThrow('backup format is not supported');
   });
 });

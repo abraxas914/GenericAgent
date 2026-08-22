@@ -11,6 +11,7 @@ const GLYPH_MAP: Record<string, string> = {
   'arrow-left': '',
   'chevron-right': '',
   'settings-gear': '',
+  'server-process': '\uEBA2',
   'link': '',
   'layout-sidebar-left': '',
   'layout-sidebar-left-off': '',

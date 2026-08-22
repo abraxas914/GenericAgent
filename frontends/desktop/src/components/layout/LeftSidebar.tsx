@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Input } from '@douyinfe/semi-ui';
+import { useCallback, useState } from 'react';
+import { Input, Tooltip } from '@douyinfe/semi-ui';
 import { IconSearchStroked } from '@douyinfe/semi-icons';
 import { Codicon } from '../../lib/icons';
 import { useAppStore, type PageId } from '../../stores/app';
@@ -8,6 +8,7 @@ import { useChatStore } from '../../stores/chat';
 import { useI18n } from '../../i18n';
 import { SessionSectionHeader } from './SessionSectionHeader';
 import { SessionRow } from './SessionRow';
+import { BridgeMenuPanel } from './BridgeMenuPanel';
 
 const NAV_ITEMS: { key: PageId; icon: string; textKey: string }[] = [
   { key: 'services', icon: 'symbol-misc', textKey: 'nav.services' },
@@ -26,6 +27,20 @@ export function LeftSidebar() {
   const { t } = useI18n();
   const [sessionsOpen, setSessionsOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [runtimePanelOpen, setRuntimePanelOpen] = useState(false);
+  const [runtimeTooltipVisible, setRuntimeTooltipVisible] = useState(false);
+
+  const closeRuntimePanel = useCallback(() => setRuntimePanelOpen(false), []);
+
+  const handleOpenSettings = useCallback(() => {
+    closeRuntimePanel();
+    openSettings();
+  }, [closeRuntimePanel, openSettings]);
+
+  const handleToggleRuntimePanel = useCallback(() => {
+    setRuntimeTooltipVisible(false);
+    setRuntimePanelOpen((open) => !open);
+  }, []);
 
   const sorted = [...sessions].sort((a, b) => {
     if (a.pinned && !b.pinned) return -1;
@@ -122,14 +137,37 @@ export function LeftSidebar() {
       </div>
 
       <div className="ga-sidebar-footer">
-        <button
-          type="button"
-          className="ga-settings-btn"
-          onClick={openSettings}
-          aria-label={t('foot.settings')}
-        >
-          <Codicon name="settings-gear" size="1rem" />
-        </button>
+        <Tooltip content={t('foot.settings')} position="top" clickToHide>
+          <button
+            type="button"
+            className="ga-sidebar-footer-btn"
+            onClick={handleOpenSettings}
+            aria-label={t('foot.settings')}
+          >
+            <Codicon name="settings-gear" size="1rem" />
+          </button>
+        </Tooltip>
+        <div className="ga-sidebar-footer-anchor">
+          <Tooltip
+            content={t('foot.runtimeManagement')}
+            position="top"
+            visible={runtimeTooltipVisible && !runtimePanelOpen}
+            onVisibleChange={setRuntimeTooltipVisible}
+          >
+            <button
+              type="button"
+              className="ga-sidebar-footer-btn"
+              onClick={handleToggleRuntimePanel}
+              aria-label={t('foot.runtimeManagement')}
+              aria-expanded={runtimePanelOpen}
+              aria-haspopup="dialog"
+              aria-controls="ga-runtime-management-panel"
+            >
+              <Codicon name="server-process" size="1rem" />
+            </button>
+          </Tooltip>
+          {runtimePanelOpen && <BridgeMenuPanel onClose={closeRuntimePanel} />}
+        </div>
       </div>
     </div>
   );

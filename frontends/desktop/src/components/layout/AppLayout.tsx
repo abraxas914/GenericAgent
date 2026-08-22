@@ -2,7 +2,6 @@ import { useCallback } from 'react';
 import { ResizeGroup, ResizeItem, ResizeHandler } from '@douyinfe/semi-ui';
 import { LeftSidebar } from './LeftSidebar';
 import { MainArea } from './MainArea';
-import { Statusbar } from './Statusbar';
 import { TitlebarControls } from './TitlebarControls';
 import { WindowsTitlebar } from './WindowsTitlebar';
 import { ShortcutPrompt } from './ShortcutPrompt';
@@ -57,7 +56,6 @@ export function AppLayout() {
           </ResizeGroup>
         )}
       </div>
-      <Statusbar />
       <ShortcutPrompt />
     </div>
   );
