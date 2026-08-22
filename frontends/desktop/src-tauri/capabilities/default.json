@@ -1,30 +1,19 @@
 {
   "identifier": "default",
-  "description": "Default capabilities for all windows",
-  "windows": ["main", "setup"],
-  "remote": {
-    "urls": ["http://127.0.0.1:14168", "http://localhost:14168"]
-  },
+  "description": "Least-privilege capabilities for the main application window",
+  "windows": ["main"],
   "permissions": [
-    "core:default",
-    "core:window:default",
-    "core:window:allow-show",
-    "core:window:allow-hide",
-    "core:window:allow-set-focus",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
-    "core:window:allow-get-all-windows",
-    "core:webview:default",
+    "core:window:allow-start-dragging",
     "allow-start-bridge",
-    "allow-start-bridge-with-config",
     "allow-retry-bootstrap",
     "allow-get-bootstrap-snapshot",
-    "allow-get-config",
-    "allow-discover-python-for-project",
     "allow-export-mykey",
     "allow-pick-directory",
-    "allow-pick-python-interpreter",
     "allow-pick-data-backup-file",
     "allow-pick-data-export-path",
     "allow-reveal-in-file-manager",
@@ -34,7 +23,7 @@
     "allow-clear-ga-source",
     "allow-shortcut-should-ask",
     "allow-shortcut-decide",
-    "core:window:allow-start-dragging",
-    "opener:default"
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ]
 }

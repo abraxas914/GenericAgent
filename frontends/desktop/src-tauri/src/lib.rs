@@ -868,28 +868,249 @@ fn restore_setting(key: &str, value: Option<String>) {
     }
 }
 
+const RUNTIME_MARKER_FILENAME: &str = ".ga-package-runtime.json";
+const RUNTIME_MARKER_SCHEMA: u32 = 1;
+const PRESERVED_RUNTIME_PATHS: [&str; 4] = ["mykey.py", "mykey.json", "memory", "temp"];
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RuntimePackageMarker {
+    schema: u32,
+    package: String,
+    package_version: String,
+    build_id: String,
+    source_revision: String,
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum RuntimeCopyStatus {
+    Current,
+    Installed,
+    Refreshed,
+}
+
+fn expected_runtime_marker() -> RuntimePackageMarker {
+    RuntimePackageMarker {
+        schema: RUNTIME_MARKER_SCHEMA,
+        package: env!("CARGO_PKG_NAME").to_string(),
+        package_version: env!("CARGO_PKG_VERSION").to_string(),
+        build_id: env!("GA_BUILD_ID").to_string(),
+        source_revision: env!("GA_SOURCE_REVISION").to_string(),
+    }
+}
+
+fn runtime_marker_path(runtime: &Path) -> PathBuf {
+    runtime.join(RUNTIME_MARKER_FILENAME)
+}
+
+fn read_runtime_marker(runtime: &Path) -> Option<RuntimePackageMarker> {
+    let text = std::fs::read_to_string(runtime_marker_path(runtime)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn runtime_copy_is_current(runtime: &Path, expected: &RuntimePackageMarker) -> bool {
+    runtime.join("agentmain.py").is_file()
+        && runtime
+            .join("frontends")
+            .join("desktop_bridge.py")
+            .is_file()
+        && read_runtime_marker(runtime).as_ref() == Some(expected)
+}
+
+fn remove_fs_path(path: &Path) -> Result<(), String> {
+    if path.is_symlink() || path.is_file() {
+        std::fs::remove_file(path).map_err(|error| format!("remove {:?}: {error}", path))
+    } else if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|error| format!("remove {:?}: {error}", path))
+    } else {
+        Ok(())
+    }
+}
+
 fn copy_dir_replace(src: &Path, dst: &Path) -> Result<(), String> {
+    if src.is_symlink() || !src.is_dir() {
+        return Err(format!("refusing to copy unsafe directory {:?}", src));
+    }
     std::fs::create_dir_all(dst).map_err(|error| format!("create {:?}: {error}", dst))?;
     for entry in std::fs::read_dir(src).map_err(|error| format!("read {:?}: {error}", src))? {
         let entry = entry.map_err(|error| error.to_string())?;
         let source = entry.path();
         let destination = dst.join(entry.file_name());
         let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_symlink() {
+            return Err(format!("refusing to copy symbolic link {:?}", source));
+        }
         if file_type.is_dir() {
             if destination.exists() && !destination.is_dir() {
-                std::fs::remove_file(&destination)
-                    .map_err(|error| format!("remove {:?}: {error}", destination))?;
+                remove_fs_path(&destination)?;
             }
             copy_dir_replace(&source, &destination)?;
         } else if file_type.is_file() {
+            if destination.exists() && !destination.is_file() {
+                remove_fs_path(&destination)?;
+            }
             if let Some(parent) = destination.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
             }
             std::fs::copy(&source, &destination)
                 .map_err(|error| format!("copy {:?} -> {:?}: {error}", source, destination))?;
+        } else {
+            return Err(format!("refusing to copy special file {:?}", source));
         }
     }
     Ok(())
+}
+
+fn copy_preserved_runtime_data(existing: &Path, staging: &Path) -> Result<(), String> {
+    for relative in PRESERVED_RUNTIME_PATHS {
+        let source = existing.join(relative);
+        if !source.exists() && !source.is_symlink() {
+            continue;
+        }
+        if source.is_symlink() {
+            return Err(format!(
+                "refusing to preserve symbolic-link user data {:?}",
+                source
+            ));
+        }
+        let destination = staging.join(relative);
+        remove_fs_path(&destination)?;
+        if source.is_dir() {
+            copy_dir_replace(&source, &destination)?;
+        } else if source.is_file() {
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+            }
+            std::fs::copy(&source, &destination)
+                .map_err(|error| format!("preserve {:?} -> {:?}: {error}", source, destination))?;
+        } else {
+            return Err(format!("refusing to preserve special file {:?}", source));
+        }
+    }
+    Ok(())
+}
+
+fn unique_runtime_sibling(parent: &Path, label: &str) -> Result<PathBuf, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    for suffix in 0..1000_u32 {
+        let candidate = parent.join(format!(
+            ".app-{label}-{}-{nanos}-{suffix}",
+            std::process::id()
+        ));
+        if !candidate.exists() && !candidate.is_symlink() {
+            return Ok(candidate);
+        }
+    }
+    Err(format!("cannot allocate runtime {label} path"))
+}
+
+fn refresh_runtime_copy_with_activation<F>(
+    source: &Path,
+    destination: &Path,
+    expected: &RuntimePackageMarker,
+    activate: F,
+) -> Result<RuntimeCopyStatus, String>
+where
+    F: FnOnce(&Path, &Path) -> std::io::Result<()>,
+{
+    if runtime_copy_is_current(destination, expected) {
+        return Ok(RuntimeCopyStatus::Current);
+    }
+    if source.is_symlink()
+        || !source.join("agentmain.py").is_file()
+        || !source.join("frontends").join("desktop_bridge.py").is_file()
+    {
+        return Err(format!(
+            "bundled core is incomplete at {}",
+            display_path(source)
+        ));
+    }
+    if destination.is_symlink() || (destination.exists() && !destination.is_dir()) {
+        return Err(format!(
+            "writable runtime is not a safe directory at {}",
+            display_path(destination)
+        ));
+    }
+    let parent = destination
+        .parent()
+        .ok_or_else(|| "writable runtime has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("create writable runtime parent: {error}"))?;
+    let staging = unique_runtime_sibling(parent, "staging")?;
+    std::fs::create_dir(&staging)
+        .map_err(|error| format!("create writable runtime staging dir: {error}"))?;
+
+    let prepare_result = (|| {
+        copy_dir_replace(source, &staging)?;
+        if destination.is_dir() {
+            copy_preserved_runtime_data(destination, &staging)?;
+        }
+        let marker = serde_json::to_string_pretty(expected)
+            .map_err(|error| format!("serialize runtime marker: {error}"))?;
+        std::fs::write(runtime_marker_path(&staging), marker + "\n")
+            .map_err(|error| format!("write runtime marker: {error}"))?;
+        if !runtime_copy_is_current(&staging, expected) {
+            return Err("staged writable runtime failed validation".to_string());
+        }
+        Ok(())
+    })();
+    if let Err(error) = prepare_result {
+        let _ = remove_fs_path(&staging);
+        return Err(error);
+    }
+
+    let existed = destination.is_dir();
+    let rollback = match unique_runtime_sibling(parent, "rollback") {
+        Ok(path) => path,
+        Err(error) => {
+            let _ = remove_fs_path(&staging);
+            return Err(error);
+        }
+    };
+    if existed {
+        if let Err(error) = std::fs::rename(destination, &rollback) {
+            let _ = remove_fs_path(&staging);
+            return Err(format!("backup previous writable runtime: {error}"));
+        }
+    }
+
+    if let Err(error) = activate(&staging, destination) {
+        let _ = remove_fs_path(&staging);
+        if existed {
+            if destination.exists() || destination.is_symlink() {
+                let _ = remove_fs_path(destination);
+            }
+            if let Err(rollback_error) = std::fs::rename(&rollback, destination) {
+                return Err(format!(
+                    "activate writable runtime: {error}; restore previous runtime from {}: {rollback_error}",
+                    display_path(&rollback)
+                ));
+            }
+        }
+        return Err(format!("activate writable runtime: {error}"));
+    }
+
+    if existed {
+        // The activated tree already contains copied user data. This old tree is
+        // retained until activation succeeds, then removed on a best-effort basis.
+        let _ = remove_fs_path(&rollback);
+        Ok(RuntimeCopyStatus::Refreshed)
+    } else {
+        Ok(RuntimeCopyStatus::Installed)
+    }
+}
+
+fn refresh_runtime_copy(
+    source: &Path,
+    destination: &Path,
+    expected: &RuntimePackageMarker,
+) -> Result<RuntimeCopyStatus, String> {
+    refresh_runtime_copy_with_activation(source, destination, expected, |staging, active| {
+        std::fs::rename(staging, active)
+    })
 }
 
 fn builtin_ga_root(project_dir: &str) -> PathBuf {
@@ -914,37 +1135,10 @@ fn ensure_builtin_ga_root(project_dir: &str) -> Result<(), String> {
     }
     let source = PathBuf::from(project_dir);
     let destination = builtin_ga_root(project_dir);
-    if same_path(&source, &destination) || destination.join("agentmain.py").exists() {
+    if same_path(&source, &destination) {
         return Ok(());
     }
-    if !source.join("agentmain.py").exists() {
-        return Err(format!(
-            "bundled core is missing at {}",
-            display_path(&source)
-        ));
-    }
-    let parent = destination
-        .parent()
-        .ok_or_else(|| "writable runtime has no parent directory".to_string())?;
-    std::fs::create_dir_all(parent)
-        .map_err(|error| format!("create writable runtime parent: {error}"))?;
-    let staging = parent.join(format!(".app-staging-{}", std::process::id()));
-    if staging.exists() {
-        std::fs::remove_dir_all(&staging)
-            .map_err(|error| format!("remove stale writable runtime staging dir: {error}"))?;
-    }
-    copy_dir_replace(&source, &staging)?;
-    match std::fs::rename(&staging, &destination) {
-        Ok(()) => Ok(()),
-        Err(_error) if destination.join("agentmain.py").exists() => {
-            let _ = std::fs::remove_dir_all(&staging);
-            Ok(())
-        }
-        Err(error) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            Err(format!("activate writable runtime: {error}"))
-        }
-    }
+    refresh_runtime_copy(&source, &destination, &expected_runtime_marker()).map(|_| ())
 }
 
 fn same_path(a: &Path, b: &Path) -> bool {
@@ -2544,5 +2738,248 @@ mod tests {
             resolve_settings_path(Some(PathBuf::from("/home/user")), None),
             PathBuf::from("/home/user/.ga_desktop_settings.json")
         );
+    }
+
+    fn runtime_test_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ga-runtime-{label}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    fn seed_package_runtime(root: &Path, agent_text: &str, bridge_text: &str) {
+        std::fs::create_dir_all(root.join("frontends")).unwrap();
+        std::fs::create_dir_all(root.join("memory")).unwrap();
+        std::fs::create_dir_all(root.join("temp")).unwrap();
+        std::fs::write(root.join("agentmain.py"), agent_text).unwrap();
+        std::fs::write(
+            root.join("frontends").join("desktop_bridge.py"),
+            bridge_text,
+        )
+        .unwrap();
+        std::fs::write(root.join("memory").join("package-default.md"), "package").unwrap();
+        std::fs::write(root.join("temp").join("package-cache.txt"), "package").unwrap();
+        std::fs::write(root.join("mykey_template.py"), "# template").unwrap();
+    }
+
+    fn write_runtime_marker(root: &Path, marker: &RuntimePackageMarker) {
+        std::fs::write(
+            runtime_marker_path(root),
+            serde_json::to_string_pretty(marker).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn runtime_tree_bytes(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+        fn collect(root: &Path, folder: &Path, output: &mut Vec<(PathBuf, Vec<u8>)>) {
+            for entry in std::fs::read_dir(folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    collect(root, &path, output);
+                } else {
+                    output.push((
+                        path.strip_prefix(root).unwrap().to_path_buf(),
+                        std::fs::read(path).unwrap(),
+                    ));
+                }
+            }
+        }
+
+        let mut output = Vec::new();
+        collect(root, root, &mut output);
+        output.sort_by(|left, right| left.0.cmp(&right.0));
+        output
+    }
+
+    #[test]
+    fn fresh_runtime_install_never_writes_the_packaged_source() {
+        let root = runtime_test_root("fresh-install");
+        let package = root
+            .join("GenericAgent.app")
+            .join("Contents")
+            .join("Resources");
+        let runtime = root.join("application-support").join("app");
+        seed_package_runtime(&package, "packaged agent", "packaged bridge");
+        let package_before = runtime_tree_bytes(&package);
+        let expected = expected_runtime_marker();
+
+        let result = refresh_runtime_copy(&package, &runtime, &expected).unwrap();
+
+        assert_eq!(result, RuntimeCopyStatus::Installed);
+        assert_eq!(runtime_tree_bytes(&package), package_before);
+        assert!(!runtime_marker_path(&package).exists());
+        assert_eq!(read_runtime_marker(&runtime), Some(expected));
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("agentmain.py")).unwrap(),
+            "packaged agent"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stale_same_version_runtime_refreshes_package_code_and_preserves_user_data() {
+        let root = runtime_test_root("refresh");
+        let package = root.join("signed-package-app");
+        let runtime = root.join("application-support").join("app");
+        seed_package_runtime(&package, "new agent", "new bridge");
+        seed_package_runtime(&runtime, "old fork agent", "old fork bridge");
+
+        std::fs::write(runtime.join("mykey.py"), "user key").unwrap();
+        std::fs::write(runtime.join("mykey.json"), "user json key").unwrap();
+        std::fs::write(runtime.join("memory").join("user.md"), "remember me").unwrap();
+        std::fs::remove_file(runtime.join("memory").join("package-default.md")).unwrap();
+        let responses = runtime.join("temp").join("model_responses");
+        let sessions = runtime.join("temp").join("desktop_sessions");
+        std::fs::create_dir_all(&responses).unwrap();
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(responses.join("response.txt"), "response").unwrap();
+        std::fs::write(sessions.join("sess-one.json"), "session").unwrap();
+        std::fs::write(
+            runtime.join("temp").join("tui_v3_settings.json"),
+            "settings",
+        )
+        .unwrap();
+        std::fs::write(runtime.join("temp").join("token_ledger.jsonl"), "ledger").unwrap();
+        let host_settings = root.join(".ga_desktop_settings.json");
+        std::fs::write(&host_settings, "host settings").unwrap();
+
+        let expected = expected_runtime_marker();
+        let mut old_marker = expected.clone();
+        old_marker.build_id = "old-fork-build".to_string();
+        old_marker.source_revision = "old-fork-source".to_string();
+        write_runtime_marker(&runtime, &old_marker);
+
+        let result = refresh_runtime_copy(&package, &runtime, &expected).unwrap();
+
+        assert_eq!(result, RuntimeCopyStatus::Refreshed);
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("agentmain.py")).unwrap(),
+            "new agent"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("frontends").join("desktop_bridge.py")).unwrap(),
+            "new bridge"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("mykey.py")).unwrap(),
+            "user key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("mykey.json")).unwrap(),
+            "user json key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("memory").join("user.md")).unwrap(),
+            "remember me"
+        );
+        assert!(!runtime.join("memory").join("package-default.md").exists());
+        assert_eq!(
+            std::fs::read_to_string(responses.join("response.txt")).unwrap(),
+            "response"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sessions.join("sess-one.json")).unwrap(),
+            "session"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("temp").join("tui_v3_settings.json")).unwrap(),
+            "settings"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("temp").join("token_ledger.jsonl")).unwrap(),
+            "ledger"
+        );
+        assert_eq!(read_runtime_marker(&runtime), Some(expected));
+        assert_eq!(
+            std::fs::read_to_string(&host_settings).unwrap(),
+            "host settings"
+        );
+        assert_eq!(
+            std::fs::read_to_string(package.join("agentmain.py")).unwrap(),
+            "new agent"
+        );
+        assert!(!runtime_marker_path(&package).exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn matching_runtime_marker_keeps_hot_start_copy_untouched() {
+        let root = runtime_test_root("current");
+        let package = root.join("signed-package-app");
+        let runtime = root.join("application-support").join("app");
+        seed_package_runtime(&package, "new package bytes", "new package bridge");
+        seed_package_runtime(&runtime, "already active bytes", "already active bridge");
+        let expected = expected_runtime_marker();
+        write_runtime_marker(&runtime, &expected);
+
+        let result = refresh_runtime_copy(&package, &runtime, &expected).unwrap();
+
+        assert_eq!(result, RuntimeCopyStatus::Current);
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("agentmain.py")).unwrap(),
+            "already active bytes"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_runtime_activation_restores_old_code_marker_and_user_data() {
+        let root = runtime_test_root("rollback");
+        let package = root.join("signed-package-app");
+        let runtime = root.join("application-support").join("app");
+        seed_package_runtime(&package, "new agent", "new bridge");
+        seed_package_runtime(&runtime, "old agent", "old bridge");
+        std::fs::write(runtime.join("mykey.py"), "user key").unwrap();
+        std::fs::write(runtime.join("memory").join("user.md"), "user memory").unwrap();
+        let expected = expected_runtime_marker();
+        let mut old_marker = expected.clone();
+        old_marker.build_id = "old-build".to_string();
+        write_runtime_marker(&runtime, &old_marker);
+
+        let error = refresh_runtime_copy_with_activation(
+            &package,
+            &runtime,
+            &expected,
+            |_staging, _destination| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "simulated activation failure",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("simulated activation failure"));
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("agentmain.py")).unwrap(),
+            "old agent"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("mykey.py")).unwrap(),
+            "user key"
+        );
+        assert_eq!(
+            std::fs::read_to_string(runtime.join("memory").join("user.md")).unwrap(),
+            "user memory"
+        );
+        assert_eq!(read_runtime_marker(&runtime), Some(old_marker));
+        let leftovers = std::fs::read_dir(runtime.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".app-"))
+            .count();
+        assert_eq!(leftovers, 0);
+        assert_eq!(
+            std::fs::read_to_string(package.join("agentmain.py")).unwrap(),
+            "new agent"
+        );
+        assert!(!runtime_marker_path(&package).exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
