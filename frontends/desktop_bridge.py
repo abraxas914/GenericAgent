@@ -147,8 +147,18 @@ def _get_ui_lang() -> str:
     try:
         p = Path.home() / ".ga_desktop_settings.json"
         doc = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
-        lang = doc.get("lang") if isinstance(doc, dict) else None
-        return lang if isinstance(lang, str) and lang in _EMPTY_TURN_MICROCOPY else "zh"
+        if not isinstance(doc, dict):
+            return "zh"
+        ui = doc.get("ui")
+        candidates = (
+            ui.get("lang") if isinstance(ui, dict) else None,
+            doc.get("lang"),  # legacy Desktop settings
+        )
+        return next(
+            (lang for lang in candidates
+             if isinstance(lang, str) and lang in _EMPTY_TURN_MICROCOPY),
+            "zh",
+        )
     except Exception:
         return "zh"
 

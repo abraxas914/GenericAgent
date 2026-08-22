@@ -154,6 +154,18 @@ def _load_empty_turn_helpers():
 
 class TestEmptyTurnFallback:
     def test_uses_english_microcopy(self, tmp_path, monkeypatch):
+        (tmp_path / ".ga_desktop_settings.json").write_text(
+            '{"ui":{"lang":"en"},"lang":"zh"}', encoding="utf-8"
+        )
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        helpers = _load_empty_turn_helpers()
+
+        assert helpers["empty_turn_fallback"]() == (
+            '⚠️ This turn ended without a visible response. You can send "continue" to retry.'
+        )
+
+    def test_supports_legacy_top_level_language(self, tmp_path, monkeypatch):
         (tmp_path / ".ga_desktop_settings.json").write_text('{"lang":"en"}', encoding="utf-8")
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -173,7 +185,9 @@ class TestEmptyTurnFallback:
         assert helpers["empty_turn_fallback"]() == expected
 
     def test_defaults_to_chinese_for_non_string_language(self, tmp_path, monkeypatch):
-        (tmp_path / ".ga_desktop_settings.json").write_text('{"lang":[]}', encoding="utf-8")
+        (tmp_path / ".ga_desktop_settings.json").write_text(
+            '{"ui":{"lang":[]},"lang":[]}', encoding="utf-8"
+        )
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         helpers = _load_empty_turn_helpers()
