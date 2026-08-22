@@ -67,11 +67,13 @@
 | Key | zh | en | Layer |
 |-----|----|----|-------|
 | `data.importData` | 导入记忆与会话 | Import memory & sessions | L1 label |
-| `data.importDataTip` | 从另一个本地仓库合并记忆文件和历史会话 | Merge memory files and session history from another local repository | L2 tooltip |
-| `data.importDataBtn` | 选择仓库 | Pick repository | button |
-| `data.importDataSuccess` | 导入完成 — {copied} 个文件，{skipped} 个跳过 | Done — {copied} files, {skipped} skipped | toast |
+| `data.importDataTip` | 先完整备份当前记忆；来源同名记忆覆盖，回复与会话只新增 | Fully back up memory first; source memory overwrites, responses and sessions are add-only | L2 tooltip |
+| `data.importDataBtn` | 选择来源 | Choose source | button |
+| `data.importDataSuccess` | 导入完成 — 写入 {memory} 个记忆文件，新增 {responses} 个回复记录和 {sessions} 个会话 | Import complete — {memory} memory files written, {responses} responses and {sessions} sessions added | toast |
 | `data.importDataError` | 导入失败 | Import failed | toast |
-| `data.importDataNoData` | 所选目录中未找到记忆或会话数据 | No memory or session data found | toast |
+| `data.maintenanceBlocked` | 先停止运行中的会话和受管理服务 | Stop running sessions and managed services first | inline status |
+| `data.externalProcessWarning` | 另行停止使用同一目录的命令行、终端进程和自动化 | Also stop command-line, terminal, and automation processes using the same folder | inline warning |
+| `data.importResultBackup` | 导入前备份路径或无需备份 | Pre-import backup path or no-backup explanation | result modal |
 
 ### 连接本地仓库 (was: 连接源目录)
 

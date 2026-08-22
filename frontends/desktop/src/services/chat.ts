@@ -19,6 +19,7 @@ export interface SessionInfo {
   title: string;
   untitled: boolean;
   pinned?: boolean;
+  status?: 'idle' | 'running' | 'error' | 'cancelled';
   updatedAt?: number | string;
   createdAt?: number | string;
 }

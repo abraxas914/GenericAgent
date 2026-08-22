@@ -64,7 +64,7 @@ class TestDataBackupExport:
         assert "agentmain.py" not in names
         assert "logs/bridge.log" not in names
 
-    def test_skips_symlinks(self, tmp_path: Path):
+    def test_rejects_symlinks_instead_of_reading_through_them(self, tmp_path: Path):
         source = tmp_path / "source"
         (source / "memory").mkdir(parents=True)
         secret = tmp_path / "outside-secret.txt"
@@ -72,10 +72,94 @@ class TestDataBackupExport:
         (source / "memory" / "linked.txt").symlink_to(secret)
         destination = tmp_path / "backup.zip"
 
-        export_data_backup(str(source), str(destination), "included")
+        with pytest.raises(ValueError, match="link or reparse point"):
+            export_data_backup(str(source), str(destination), "included")
 
-        with zipfile.ZipFile(destination) as archive:
-            assert set(archive.namelist()) == {"manifest.json"}
+        assert not destination.exists()
+
+    def test_rejects_destination_inside_exported_data_before_replacing_it(
+        self, tmp_path: Path
+    ):
+        source = tmp_path / "source"
+        (source / "memory").mkdir(parents=True)
+        destination = source / "memory" / "nested-backup.zip"
+        destination.write_bytes(b"old-destination")
+
+        with pytest.raises(ValueError, match="protected application data"):
+            export_data_backup(str(source), str(destination), "included")
+
+        assert destination.read_bytes() == b"old-destination"
+
+    def test_rejects_http_readable_destination_before_creating_it(self, tmp_path: Path):
+        source = tmp_path / "source"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "one.md").write_text("one", encoding="utf-8")
+        upload_root = source / "temp" / "desktop_uploads"
+        upload_root.mkdir(parents=True)
+        destination = upload_root / "exfil.zip"
+
+        with pytest.raises(ValueError, match="protected application data"):
+            export_data_backup(
+                str(source), str(destination), "included", forbidden_roots=(upload_root,)
+            )
+
+        assert not destination.exists()
+
+    def test_export_enforces_the_same_entry_limit_as_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "one.md").write_text("one", encoding="utf-8")
+        destination = tmp_path / "backup.zip"
+        destination.write_bytes(b"old")
+        monkeypatch.setattr(data_backup, "MAX_ARCHIVE_ENTRIES", 1)
+
+        with pytest.raises(BackupFormatError, match="too many files"):
+            export_data_backup(str(source), str(destination), "included")
+
+        assert destination.read_bytes() == b"old"
+
+    def test_export_enforces_the_same_size_limit_as_import(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "one.md").write_text("one", encoding="utf-8")
+        destination = tmp_path / "backup.zip"
+        destination.write_bytes(b"old")
+        monkeypatch.setattr(data_backup, "MAX_ARCHIVE_UNCOMPRESSED_BYTES", 1)
+
+        with pytest.raises(BackupFormatError, match="too large"):
+            export_data_backup(str(source), str(destination), "included")
+
+        assert destination.read_bytes() == b"old"
+
+    def test_export_revalidates_written_zip_before_replacing_destination(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        (source / "memory").mkdir(parents=True)
+        data_file = source / "memory" / "one.md"
+        data_file.write_text("one", encoding="utf-8")
+        destination = tmp_path / "backup.zip"
+        destination.write_bytes(b"old")
+        monkeypatch.setattr(data_backup, "MAX_ARCHIVE_UNCOMPRESSED_BYTES", 10_000)
+        original_write = zipfile.ZipFile.write
+
+        def grow_then_write(archive, filename, arcname=None, *args, **kwargs):
+            path = Path(filename)
+            if path == data_file:
+                path.write_bytes(b"x" * 20_000)
+            return original_write(archive, filename, arcname, *args, **kwargs)
+
+        monkeypatch.setattr(zipfile.ZipFile, "write", grow_then_write)
+
+        with pytest.raises(BackupFormatError, match="too large"):
+            export_data_backup(str(source), str(destination), "included")
+
+        assert destination.read_bytes() == b"old"
+        assert not list(tmp_path.glob(".backup.*.tmp"))
 
 
 class TestDataBackupInspection:
@@ -160,16 +244,76 @@ class TestDataBackupInspection:
         with pytest.raises(BackupFormatError, match="duplicate"):
             inspect_import_source(str(destination))
 
-    def test_rejects_session_only_folder_as_non_ga_source(self, tmp_path: Path):
+    def test_accepts_session_only_legacy_folder(self, tmp_path: Path):
+        source = tmp_path / "legacy"
+        (source / "temp").mkdir(parents=True)
+        (source / "temp" / "desktop_sessions.json").write_text(
+            json.dumps([{"id": "sess-only", "messages": [], "msg_seq": 0}]),
+            encoding="utf-8",
+        )
+
+        result = inspect_import_source(str(source))
+
+        assert result["sourceType"] == "legacyFolder"
+        assert result["content"] == {"memory": 0, "responses": 0, "sessions": 1}
+
+    def test_rejects_empty_legacy_folder_and_empty_backup(self, tmp_path: Path):
         source = tmp_path / "legacy"
         (source / "temp").mkdir(parents=True)
         (source / "temp" / "desktop_sessions.json").write_text("[]", encoding="utf-8")
-
-        with pytest.raises(BackupFormatError, match="not a GA directory"):
+        with pytest.raises(BackupFormatError, match="no importable data"):
             inspect_import_source(str(source))
+
+        backup = tmp_path / "empty.zip"
+        manifest = {
+            "schema": BACKUP_SCHEMA,
+            "formatVersion": BACKUP_FORMAT_VERSION,
+            "exportedAt": "2026-08-22T00:00:00Z",
+            "sourceMode": "included",
+            "content": {"memory": 0, "responses": 0, "sessions": 0},
+        }
+        with zipfile.ZipFile(backup, "w") as archive:
+            archive.writestr("manifest.json", json.dumps(manifest))
+        with pytest.raises(BackupFormatError, match="no importable data"):
+            inspect_import_source(str(backup))
+
+    def test_accepts_generated_sessions_only_zip(self, tmp_path: Path):
+        source = tmp_path / "source"
+        sessions = source / "temp" / "desktop_sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "sess-only.json").write_text(
+            json.dumps({"id": "sess-only", "messages": [], "msg_seq": 0}),
+            encoding="utf-8",
+        )
+        backup = tmp_path / "sessions-only.zip"
+
+        export_data_backup(str(source), str(backup), "included")
+        inspection = inspect_import_source(str(backup))
+
+        assert inspection["content"] == {"memory": 0, "responses": 0, "sessions": 1}
 
 
 class TestDataBackupImport:
+    def test_sessions_only_backup_round_trips(self, tmp_path: Path):
+        source = tmp_path / "source"
+        sessions = source / "temp" / "desktop_sessions"
+        sessions.mkdir(parents=True)
+        (sessions / "sess-only.json").write_text(
+            json.dumps({"id": "sess-only", "messages": [], "msg_seq": 0}),
+            encoding="utf-8",
+        )
+        backup = tmp_path / "sessions-only.zip"
+        export_data_backup(str(source), str(backup), "included")
+        target = tmp_path / "target"
+        target.mkdir()
+
+        with materialize_import_source(str(backup)) as extracted:
+            result = merge_data_files(str(extracted), str(target))
+
+        assert result["sessionsAdded"] == 1
+        assert result["memoryCopied"] == 0
+        assert (target / "temp" / "desktop_sessions" / "sess-only.json").is_file()
+
     def test_materializes_backup_and_applies_the_full_merge_contract(self, tmp_path: Path):
         source = tmp_path / "source"
         source.mkdir()
@@ -272,6 +416,99 @@ class TestDataBackupImport:
         assert (target_sessions / "sess-new.json").is_file()
         assert (target_sessions / "sess-legacy.json").is_file()
         assert not (tmp_path / "escape.json").exists()
+
+    def test_invalid_session_schema_is_skipped_and_valid_record_is_canonical(
+        self, tmp_path: Path
+    ):
+        source = tmp_path / "source"
+        sessions = source / "temp" / "desktop_sessions"
+        sessions.mkdir(parents=True)
+        records = {
+            "int-id.json": {"id": 7, "messages": [], "msg_seq": 0},
+            "nan-time.json": {
+                "id": "sess-nan",
+                "messages": [],
+                "msg_seq": 0,
+                "updated_at": float("nan"),
+            },
+            "bad-seq.json": {"id": "sess-seq", "messages": [], "msg_seq": -1},
+            "bad-messages.json": {
+                "id": "sess-msg",
+                "messages": ["not-an-object"],
+                "msg_seq": 0,
+            },
+            "valid.json": {
+                "id": "sess-valid",
+                "title": "Valid",
+                "messages": [{"id": 1, "role": "user", "content": "hi"}],
+                "msg_seq": 1,
+                "created_at": 10,
+                "updated_at": 11.5,
+                "llm_history": [{"role": "user", "content": "hi"}],
+                "unknown": "drop-me",
+            },
+        }
+        for name, record in records.items():
+            (sessions / name).write_text(json.dumps(record), encoding="utf-8")
+        target = tmp_path / "target"
+        target.mkdir()
+
+        result = merge_data_files(str(source), str(target))
+
+        assert result["sessionsAdded"] == 1
+        assert result["sessionsSkipped"] == 4
+        document = json.loads(
+            (target / "temp" / "desktop_sessions" / "sess-valid.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert document["id"] == "sess-valid"
+        assert document["updated_at"] == 11.5
+        assert document["messages"][0]["role"] == "user"
+        assert "unknown" not in document
+
+    def test_mocked_windows_reparse_source_is_rejected_before_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        memory = source / "memory"
+        memory.mkdir(parents=True)
+        (memory / "secret.md").write_text("secret", encoding="utf-8")
+        destination = tmp_path / "backup.zip"
+        real_check = data_backup._is_link_or_reparse
+
+        monkeypatch.setattr(
+            data_backup,
+            "_is_link_or_reparse",
+            lambda path: Path(path) == memory or real_check(Path(path)),
+        )
+
+        with pytest.raises(ValueError, match="safe directory"):
+            export_data_backup(str(source), str(destination), "included")
+        assert not destination.exists()
+
+    def test_mocked_windows_reparse_target_ancestor_is_rejected_before_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        source = tmp_path / "source"
+        target = tmp_path / "target"
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "new.md").write_text("new", encoding="utf-8")
+        target_memory = target / "memory"
+        target_memory.mkdir(parents=True)
+        (target_memory / "old.md").write_text("old", encoding="utf-8")
+        real_check = data_backup._is_link_or_reparse
+
+        monkeypatch.setattr(
+            data_backup,
+            "_is_link_or_reparse",
+            lambda path: Path(path) == target_memory or real_check(Path(path)),
+        )
+
+        with pytest.raises(ValueError, match="safe directory"):
+            merge_data_files(str(source), str(target))
+        assert (target_memory / "old.md").read_text(encoding="utf-8") == "old"
+        assert not (target_memory / "new.md").exists()
 
     def test_empty_target_needs_no_backup_and_reports_missing_sessions(self, tmp_path: Path):
         source = tmp_path / "source"

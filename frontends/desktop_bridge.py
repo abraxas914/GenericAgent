@@ -48,11 +48,13 @@ from typing import Any, Dict, List, Optional, Set
 from aiohttp import web, WSMsgType
 from data_backup import (
     BackupFormatError,
+    canonical_session_record,
     export_data_backup,
     inspect_import_source,
     materialize_import_source,
     merge_data_files,
 )
+from desktop_settings import DesktopSettingsError, read_settings, update_settings
 
 APP_DIR = Path(__file__).resolve().parent
 
@@ -235,9 +237,33 @@ class Session:
     running_model: Optional[str] = None
 
 
+class MaintenanceConflict(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        running_sessions: Optional[List[str]] = None,
+        running_extras: Optional[List[str]] = None,
+    ):
+        super().__init__(message)
+        self.running_sessions = sorted(set(running_sessions or []))
+        self.running_extras = sorted(set(running_extras or []))
+
+    def payload(self) -> dict:
+        return {
+            "ok": False,
+            "error": str(self),
+            "code": "maintenance_conflict",
+            "runningSessions": self.running_sessions,
+            "runningExtras": self.running_extras,
+        }
+
+
 def _is_desktop_session_id(session_id: Any) -> bool:
     """Keep internal TUI/Conductor worker artifacts out of Desktop sessions."""
-    value = str(session_id or "")
+    if not isinstance(session_id, str):
+        return False
+    value = session_id
     return (
         not value.startswith("tui_")
         and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", value) is not None
@@ -269,6 +295,9 @@ class AgentManager:
         self.ga_root = str(DEFAULT_GA_ROOT)
         self.config: Dict[str, Any] = {}
         self.sessions: Dict[str, Session] = {}
+        self._retired_sessions: Dict[str, Session] = {}
+        self._maintenance_token: Optional[str] = None
+        self._maintenance_kind: Optional[str] = None
         self.active_session_id: Optional[str] = None
         self._sessions_dir = Path(self.ga_root) / "temp" / "desktop_sessions"
         # Legacy monolithic store; migrated into _sessions_dir on first load, then retired.
@@ -298,9 +327,73 @@ class AgentManager:
     def _session_file(self, sid: str) -> Path:
         return self._sessions_dir / f"{sid}.json"
 
-    def _persist_session(self, s: "Session"):
+    @staticmethod
+    def _session_has_unfinished_work(session: "Session") -> bool:
+        agent = session.agent
+        task_queue = getattr(agent, "task_queue", None)
+        unfinished = int(getattr(task_queue, "unfinished_tasks", 0) or 0)
+        agent_running = bool(getattr(agent, "is_running", False))
+        thread_running = bool(session.thread and session.thread.is_alive())
+        return session.status == "running" or unfinished > 0 or agent_running or thread_running
+
+    def _running_session_ids_locked(self) -> List[str]:
+        retired_sessions = getattr(self, "_retired_sessions", {})
+        self._retired_sessions = retired_sessions
+        for sid, retired in list(retired_sessions.items()):
+            if not self._session_has_unfinished_work(retired):
+                retired_sessions.pop(sid, None)
+        running = [
+            sid for sid, session in self.sessions.items()
+            if self._session_has_unfinished_work(session)
+        ]
+        running.extend(
+            sid for sid, session in retired_sessions.items()
+            if self._session_has_unfinished_work(session)
+        )
+        return sorted(set(running))
+
+    def _assert_mutation_allowed_locked(self) -> None:
+        if getattr(self, "_maintenance_token", None) is not None:
+            raise MaintenanceConflict(
+                f"data {getattr(self, '_maintenance_kind', None) or 'maintenance'} is in progress"
+            )
+
+    @contextlib.contextmanager
+    def mutation(self):
+        with self.lock:
+            self._assert_mutation_allowed_locked()
+            yield
+
+    def begin_maintenance(self, kind: str, running_extras_fn) -> str:
+        with self.lock:
+            if getattr(self, "_maintenance_token", None) is not None:
+                raise MaintenanceConflict(
+                    f"data {getattr(self, '_maintenance_kind', None) or 'maintenance'} is already in progress"
+                )
+            running_sessions = self._running_session_ids_locked()
+            running_extras = list(running_extras_fn())
+            if running_sessions or running_extras:
+                raise MaintenanceConflict(
+                    "stop running sessions and managed services before data maintenance",
+                    running_sessions=running_sessions,
+                    running_extras=running_extras,
+                )
+            token = uuid.uuid4().hex
+            self._maintenance_token = token
+            self._maintenance_kind = kind
+            return token
+
+    def end_maintenance(self, token: str) -> None:
+        with self.lock:
+            if self._maintenance_token != token:
+                raise RuntimeError("maintenance token does not own the active gate")
+            self._maintenance_token = None
+            self._maintenance_kind = None
+
+    def _persist_session(self, s: "Session", *, strict: bool = False):
         """Write a single session file. Cost is O(one session), independent of how many
         sessions exist — this is the fix for the monolithic-file scaling problem."""
+        tmp = self._sessions_dir / f"{s.id}.json.tmp"
         try:
             self._sessions_dir.mkdir(parents=True, exist_ok=True)
             with self.lock:
@@ -308,11 +401,14 @@ class AgentManager:
                 data["messages"] = copy.deepcopy(data["messages"])
                 if data.get("llm_history"):
                     data["llm_history"] = copy.deepcopy(data["llm_history"])
-            tmp = self._sessions_dir / f"{s.id}.json.tmp"
             tmp.write_text(json.dumps(data, ensure_ascii=False, default=str), encoding="utf-8")
             os.replace(tmp, self._session_file(s.id))
         except Exception as e:
+            with contextlib.suppress(OSError):
+                tmp.unlink()
             bridge_print(f"[bridge] persist session {s.id} failed: {e}")
+            if strict:
+                raise OSError(f"could not persist session {s.id}: {e}") from e
 
     def _delete_session_file(self, sid: str):
         try:
@@ -322,28 +418,29 @@ class AgentManager:
         except Exception as e:
             bridge_print(f"[bridge] delete session file {sid} failed: {e}")
 
-    def _persist(self):
+    def _persist(self, *, strict: bool = False):
         """Write every session (one file each). Used for bulk ops (import) / full flush."""
         with self.lock:
             sessions = list(self.sessions.values())
         for s in sessions:
-            self._persist_session(s)
+            self._persist_session(s, strict=strict)
 
     def _session_from_item(self, item: dict) -> "Session":
-        msgs = item.get("messages", [])
-        return Session(id=item["id"], title=item.get("title", "New chat"),
-                       cwd=item.get("cwd", self.ga_root),
-                       created_at=item.get("created_at", time.time()),
-                       updated_at=item.get("updated_at", time.time()),
+        item = canonical_session_record(item, default_cwd=self.ga_root)
+        msgs = item["messages"]
+        return Session(id=item["id"], title=item["title"],
+                       cwd=item["cwd"],
+                       created_at=item["created_at"],
+                       updated_at=item["updated_at"],
                        messages=msgs,
-                       msg_seq=item.get("msg_seq", 0),
-                       pinned=item.get("pinned", False),
-                       untitled=item.get("untitled", True),
+                       msg_seq=item["msg_seq"],
+                       pinned=item["pinned"],
+                       untitled=item["untitled"],
                        plan_scan_baseline=_load_plan_baseline(item, msgs),
-                       plan_path=_sanitize_desktop_plan_path(item["id"], item.get("plan_path") or ""),
+                       plan_path=_sanitize_desktop_plan_path(item["id"], item["plan_path"]),
                        status="idle", agent=None,
-                       llm_history=item.get("llm_history"),
-                       llm_no=item.get("llm_no"))
+                       llm_history=item["llm_history"],
+                       llm_no=item["llm_no"])
 
     def _load_sessions(self):
         # New format: one file per session under temp/desktop_sessions/.
@@ -424,18 +521,22 @@ class AgentManager:
         added = 0
         skipped = 0
         new_sessions: List["Session"] = []
-        with self.lock:
+        with self.mutation():
             for item in items:
                 sid = item.get("id")
                 if not _is_desktop_session_id(sid) or sid in self.sessions:
                     skipped += 1
                     continue
-                sess = self._session_from_item(item)
+                try:
+                    sess = self._session_from_item(item)
+                except ValueError:
+                    skipped += 1
+                    continue
                 self.sessions[sid] = sess
                 new_sessions.append(sess)
                 added += 1
-        for sess in new_sessions:
-            self._persist_session(sess)
+            for sess in new_sessions:
+                self._persist_session(sess)
         return {"sessionsAdded": added, "sessionsSkipped": skipped, "sessionsFileFound": True}
 
     def _mykey_file(self) -> Path:
@@ -813,11 +914,11 @@ class AgentManager:
     def create_session(self, cwd: Optional[str] = None) -> Session:
         sid = "sess-" + uuid.uuid4().hex[:12]
         sess = Session(id=sid, cwd=str(cwd or self.ga_root), llm_no=_global_default_llm_no())
-        with self.lock:
+        with self.mutation():
             self.sessions[sid] = sess
             self.active_session_id = sid
-        emit_session_state(sess, "created")
-        self._persist_session(sess)
+            emit_session_state(sess, "created")
+            self._persist_session(sess)
         return sess
 
     def get_session(self, sid: str) -> Session:
@@ -828,18 +929,26 @@ class AgentManager:
             return sess
 
     def delete_session(self, sid: str) -> dict:
-        with self.lock:
+        with self.mutation():
             sess = self.sessions.pop(sid, None)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
             if self.active_session_id == sid:
                 self.active_session_id = next(iter(self.sessions), None)
+            # Retire the turn identity before aborting so a late runner cannot
+            # persist and resurrect the deleted session file.
+            sess.cancel_requested = True
+            sess.active_turn_id = ""
+            sess.status = "cancelled"
+            sess.partial = None
             if sess.agent and hasattr(sess.agent, "abort"):
                 with contextlib.suppress(Exception):
                     sess.agent.abort()
-        emit_session_state(sess, "closed")
-        self._delete_session_file(sid)
-        _purge_session_uploads(sid)
+            if self._session_has_unfinished_work(sess):
+                self._retired_sessions[sid] = sess
+            emit_session_state(sess, "closed")
+            self._delete_session_file(sid)
+            _purge_session_uploads(sid)
         return {"ok": True, "sessionId": sid}
 
     def submit_prompt(self, sid: str, prompt: Any, images: Optional[list] = None, display: Optional[str] = None, files_meta: Optional[list] = None, image_metas: Optional[list] = None) -> dict:
@@ -850,7 +959,7 @@ class AgentManager:
             paths = [m["path"] for m in files_meta if m.get("path")]
             if paths:
                 agent_prompt = " ".join(paths) + "\n" + prompt
-        with self.lock:
+        with self.mutation():
             sess = self.sessions.get(sid)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
@@ -1128,7 +1237,7 @@ class AgentManager:
             }
 
     def cancel(self, sid: str) -> dict:
-        with self.lock:
+        with self.mutation():
             sess = self.sessions.get(sid)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
@@ -1191,7 +1300,7 @@ class AgentManager:
         An idle agent switches immediately. A running turn keeps its captured client;
         the new binding is applied at the start of the next turn.
         """
-        with self.lock:
+        with self.mutation():
             sess = self.sessions.get(sid)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
@@ -1201,7 +1310,7 @@ class AgentManager:
                 with contextlib.suppress(Exception):
                     sess.agent.next_llm(int(llm_no))
             sess.updated_at = time.time()
-        self._persist_session(sess)
+            self._persist_session(sess)
         return {"ok": True, "sessionId": sid, "llmNo": sess.llm_no, "model": self._live_model(sess)}
 
 
@@ -1401,6 +1510,7 @@ class ServiceManager:
     """hub.pyw ServiceManager + HTTP/WS glue."""
 
     def __init__(self, ga_root: str, emit_fn):
+        self.lock = threading.RLock()
         self.ga_root = Path(ga_root)
         self.procs: Dict[str, subprocess.Popen] = {}
         self.buffers: Dict[str, deque] = {}
@@ -1491,7 +1601,7 @@ class ServiceManager:
             "id": sid,
             "status": status,
             "running": running,
-            "pid": proc.pid if running else None,
+            "pid": proc.pid if running and proc is not None else None,
             "lastError": last_error,
             "errorKey": error_key,
             "lastWarning": last_warning,
@@ -1499,7 +1609,15 @@ class ServiceManager:
         }
 
     def list_state(self) -> List[dict]:
-        return [self._state(sid) for sid in sorted(self._im_catalog)]
+        with self.lock:
+            return [self._state(sid) for sid in sorted(self._im_catalog)]
+
+    def running_managed_ids(self) -> List[str]:
+        with self.lock:
+            return [
+                sid for sid in sorted(self._catalog)
+                if self._state(sid).get("running")
+            ]
 
     def _bridge_state(self) -> dict:
         pid = os.getpid()
@@ -1516,19 +1634,23 @@ class ServiceManager:
             "lastError": "",
         }
 
+    def _managed_state(self, sid: str, *, err: str = "") -> dict:
+        item = self._state(sid, err=err)
+        item["name"] = sid
+        item["memMb"] = _mem_mb(item.get("pid"))
+        item["cpuPct"] = _cpu_pct(item.get("pid"))
+        item["managed"] = True
+        return item
+
     def list_panel_state(self) -> List[dict]:
-        out = [self._bridge_state()]
-        for sid in sorted(self._catalog, key=lambda s: (s in self._im_catalog, s)):
-            item = self._state(sid)
-            item["name"] = sid
-            item["memMb"] = _mem_mb(item.get("pid"))
-            item["cpuPct"] = _cpu_pct(item.get("pid"))
-            item["managed"] = True
-            out.append(item)
-        return out
+        with self.lock:
+            out = [self._bridge_state()]
+            for sid in sorted(self._catalog, key=lambda s: (s in self._im_catalog, s)):
+                out.append(self._managed_state(sid))
+            return out
 
     def _notify(self, sid: str, *, err: str = "") -> None:
-        self._emit({"type": "service.changed", "service": self._state(sid, err=err)})
+        self._emit({"type": "service.changed", "service": self._managed_state(sid, err=err)})
 
     def _wait_started(self, proc: subprocess.Popen, timeout: float = 2.0) -> None:
         deadline = time.time() + timeout
@@ -1546,39 +1668,46 @@ class ServiceManager:
         self._notify(sid)
 
     def start_service(self, sid: str) -> dict:
-        svc = self._catalog.get(sid)
-        if not svc:
-            raise KeyError(sid)
-        proc = self.procs.get(sid)
-        if proc is not None and proc.poll() is None:
-            return {"ok": True, "service": self._state(sid)}
-        if not self._is_configured(sid):
-            keys = ", ".join(_SERVICE_KEYS.get(sid, ()))
-            err = f"not configured in mykey.py ({keys})"
-            self._notify(sid, err=err)
-            return {"ok": False, "error": "not_configured", "service": self._state(sid, err=err)}
-        self.buffers[sid] = deque(maxlen=500)
-        env = {
-            **os.environ,
-            "PYTHONUNBUFFERED": "1",
-            "PYTHONIOENCODING": "utf-8",
-            "GA_ROOT": str(self.ga_root),
-        }
-        kw: Dict[str, Any] = dict(
-            cwd=str(self.ga_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
-        )
-        if sys.platform == "win32":
-            kw["creationflags"] = subprocess.CREATE_NO_WINDOW
-        proc = subprocess.Popen(svc["cmd"], **kw)
-        self.procs[sid] = proc
-        threading.Thread(target=self._reader, args=(sid, proc), daemon=True).start()
-        self._wait_started(proc)
-        item = self._state(sid)
-        self._notify(sid)
-        if item["status"] == "error":
-            return {"ok": False, "error": item["lastError"] or "start_failed", "service": item}
-        return {"ok": True, "service": item}
+        # Lock order is always AgentManager -> ServiceManager. This makes a
+        # service start atomic with maintenance-gate admission.
+        with manager.mutation(), self.lock:
+            svc = self._catalog.get(sid)
+            if not svc:
+                raise KeyError(sid)
+            proc = self.procs.get(sid)
+            if proc is not None and proc.poll() is None:
+                return {"ok": True, "service": self._managed_state(sid)}
+            if not self._is_configured(sid):
+                keys = ", ".join(_SERVICE_KEYS.get(sid, ()))
+                err = f"not configured in mykey.py ({keys})"
+                self._notify(sid, err=err)
+                return {
+                    "ok": False,
+                    "error": "not_configured",
+                    "service": self._managed_state(sid, err=err),
+                }
+            self.buffers[sid] = deque(maxlen=500)
+            env = {
+                **os.environ,
+                "PYTHONUNBUFFERED": "1",
+                "PYTHONIOENCODING": "utf-8",
+                "GA_ROOT": str(self.ga_root),
+            }
+            kw: Dict[str, Any] = dict(
+                cwd=str(self.ga_root), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1, env=env,
+            )
+            if sys.platform == "win32":
+                kw["creationflags"] = subprocess.CREATE_NO_WINDOW
+            proc = subprocess.Popen(svc["cmd"], **kw)
+            self.procs[sid] = proc
+            threading.Thread(target=self._reader, args=(sid, proc), daemon=True).start()
+            self._wait_started(proc)
+            item = self._managed_state(sid)
+            self._notify(sid)
+            if item["status"] == "error":
+                return {"ok": False, "error": item["lastError"] or "start_failed", "service": item}
+            return {"ok": True, "service": item}
 
     def autostart_extras(self) -> None:
         """Auto-start non-IM services on bridge boot. Currently:
@@ -1629,18 +1758,19 @@ class ServiceManager:
             bridge_print(f"[restart-broken] {sid}: {tag}")
 
     def stop_service(self, sid: str) -> dict:
-        if sid not in self._catalog:
-            raise KeyError(sid)
-        self._stopping.add(sid)
-        proc = self.procs.get(sid)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            proc.wait()
-        self.procs.pop(sid, None)
-        self._stopping.discard(sid)
-        item = self._state(sid)
-        self._notify(sid)
-        return {"ok": True, "service": item}
+        with self.lock:
+            if sid not in self._catalog:
+                raise KeyError(sid)
+            self._stopping.add(sid)
+            proc = self.procs.get(sid)
+            if proc and proc.poll() is None:
+                proc.terminate()
+                proc.wait()
+            self.procs.pop(sid, None)
+            self._stopping.discard(sid)
+            item = self._managed_state(sid)
+            self._notify(sid)
+            return {"ok": True, "service": item}
 
     def read_logs(self, sid: str, tail: int = 200) -> dict:
         if sid == BRIDGE_ID:
@@ -1684,6 +1814,12 @@ def emit_session_state(sess: Session, state_name: str):
 
 
 async def ws_handler(request):
+    origin_error = _request_origin_error(request)
+    if origin_error:
+        return web.json_response(
+            {"ok": False, "error": origin_error, "code": "origin_forbidden"},
+            status=403,
+        )
     ws = web.WebSocketResponse(heartbeat=30)
     await ws.prepare(request)
     hub.websockets.add(ws)
@@ -1696,7 +1832,7 @@ async def ws_handler(request):
     }, ensure_ascii=False))
     await ws.send_str(json.dumps({
         "type": "services.snapshot",
-        "services": services.list_state(),
+        "services": services.list_panel_state(),
     }, ensure_ascii=False, default=str))
     async for msg in ws:
         if msg.type == WSMsgType.TEXT:
@@ -1713,26 +1849,95 @@ async def ws_handler(request):
 # Transport layer: HTTP command/data API
 # ---------------------------------------------------------------------------
 
-def cors_headers():
-    return {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+def _valid_port(value: str, default: int) -> int:
+    if not re.fullmatch(r"[0-9]{1,5}", value or ""):
+        return default
+    port = int(value)
+    return port if 1 <= port <= 65535 else default
+
+
+def _allowed_request_origins() -> Set[str]:
+    bridge_port = _valid_port(os.environ.get("BRIDGE_PORT", "14168"), 14168)
+    origins = {
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "http://localhost:5173",
+        f"http://127.0.0.1:{bridge_port}",
+        f"http://localhost:{bridge_port}",
+        f"http://[::1]:{bridge_port}",
     }
+    if os.environ.get("GA_E2E") == "1":
+        vite_port = os.environ.get("VITE_PORT", "")
+        if re.fullmatch(r"[0-9]{1,5}", vite_port or ""):
+            parsed_port = int(vite_port)
+            if 1 <= parsed_port <= 65535:
+                origins.add(f"http://127.0.0.1:{parsed_port}")
+    return origins
+
+
+def _request_origin_error(request) -> Optional[str]:
+    origin = request.headers.get("Origin")
+    if origin is not None:
+        if origin not in _allowed_request_origins():
+            return "request origin is not allowed"
+        return None
+    if request.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site":
+        return "cross-site request without an Origin header is not allowed"
+    return None
+
+
+def _add_cors_response_headers(response: web.StreamResponse, origin: Optional[str]) -> None:
+    if origin is None:
+        return
+    response.headers["Access-Control-Allow-Origin"] = origin
+    vary = [part.strip() for part in response.headers.get("Vary", "").split(",") if part.strip()]
+    if not any(part.lower() == "origin" for part in vary):
+        vary.append("Origin")
+    response.headers["Vary"] = ", ".join(vary)
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-GA-E2E-Token"
 
 
 @web.middleware
 async def cors_middleware(request, handler):
+    origin = request.headers.get("Origin")
+    origin_error = _request_origin_error(request)
+    if origin_error:
+        return web.json_response(
+            {"ok": False, "error": origin_error, "code": "origin_forbidden"},
+            status=403,
+        )
     if request.method == "OPTIONS":
-        return web.Response(status=204, headers=cors_headers())
-    resp = await handler(request)
-    for k, v in cors_headers().items():
-        resp.headers[k] = v
-    return resp
+        response: web.StreamResponse = web.Response(status=204)
+    else:
+        try:
+            response = await handler(request)
+        except MaintenanceConflict as error:
+            response = web.json_response(error.payload(), status=409)
+        except web.HTTPException as error:
+            response = web.Response(
+                status=error.status,
+                reason=error.reason,
+                body=error.body,
+                headers=error.headers,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            bridge_print(f"[bridge] unhandled request error: {type(error).__name__}: {error}")
+            response = web.json_response(
+                {"ok": False, "error": "internal server error"}, status=500
+            )
+    _add_cors_response_headers(response, origin)
+    return response
 
 
 def json_ok(data: dict, status: int = 200):
-    return web.json_response(data, status=status, headers=cors_headers(), dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str))
+    return web.json_response(
+        data,
+        status=status,
+        dumps=lambda x: json.dumps(x, ensure_ascii=False, default=str),
+    )
 
 
 async def read_json(request) -> dict:
@@ -1754,6 +1959,7 @@ async def status_handler(request):
         "mykeyPath": manager.mykey_path,
         "sessionCount": len(manager.sessions),
         "activeSessionId": manager.active_session_id,
+        "maintenance": getattr(manager, "_maintenance_kind", None),
         "ws": "/ws",
         "transport": {"http": True, "wsEventsOnly": True},
     })
@@ -1764,15 +1970,11 @@ _UI_KEYS = ("lang", "theme", "appearance", "plain", "llmNo", "fontSize")
 
 
 def _settings_doc() -> dict:
-    try:
-        doc = json.loads(_SETTINGS.read_text(encoding="utf-8")) if _SETTINGS.is_file() else {}
-        return doc if isinstance(doc, dict) else {}
-    except Exception:
-        return {}
+    return read_settings(_SETTINGS, strict=False)
 
 
-def _write_settings_doc(doc: dict) -> None:
-    _SETTINGS.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+def _update_settings_doc(mutate) -> dict:
+    return update_settings(_SETTINGS, mutate)
 
 
 def _desktop_ui() -> dict:
@@ -1837,17 +2039,20 @@ async def save_config_handler(request):
     data = await read_json(request)
     cfg = data.get("config", data)
     if isinstance(cfg, dict):
-        patch = {k: cfg[k] for k in _UI_KEYS if k in cfg}
-        if patch:
-            try:
-                doc = _settings_doc()
-                ui = doc["ui"] if isinstance(doc.get("ui"), dict) else {}
-                ui.update(patch)
-                doc["ui"] = ui
-                _write_settings_doc(doc)
-            except Exception as e:
-                bridge_print(f"[bridge] save ui prefs failed: {e}")
-        manager.config.update(cfg)
+        with manager.mutation():
+            patch = {k: cfg[k] for k in _UI_KEYS if k in cfg}
+            if patch:
+                try:
+                    def update_ui(doc):
+                        ui = doc["ui"] if isinstance(doc.get("ui"), dict) else {}
+                        ui.update(patch)
+                        doc["ui"] = ui
+
+                    _update_settings_doc(update_ui)
+                except DesktopSettingsError as error:
+                    bridge_print(f"[bridge] save ui prefs failed: {error}")
+                    return json_ok({"ok": False, "error": str(error)}, status=500)
+            manager.config.update(cfg)
     return json_ok({"ok": True, "gaRoot": manager.ga_root, "mykeyPath": manager.mykey_path, "config": manager.config})
 
 
@@ -1859,13 +2064,20 @@ async def model_profiles_handler(request):
             if request.method == "GET":
                 return json_ok({"profile": manager.get_model_profile(profile_id)})
             if request.method == "PUT":
-                return json_ok({"ok": True, **manager.update_model_profile(profile_id, await read_json(request))})
+                data = await read_json(request)
+                with manager.mutation():
+                    return json_ok({"ok": True, **manager.update_model_profile(profile_id, data)})
             if request.method == "DELETE":
-                return json_ok({"ok": True, **manager.delete_model_profile(profile_id)})
+                with manager.mutation():
+                    return json_ok({"ok": True, **manager.delete_model_profile(profile_id)})
             return json_ok({"ok": False, "error": "method not allowed"}, status=405)
         if request.method == "POST":
-            return json_ok({"ok": True, **manager.add_model_profile(await read_json(request))})
+            data = await read_json(request)
+            with manager.mutation():
+                return json_ok({"ok": True, **manager.add_model_profile(data)})
         return json_ok({"profiles": manager.list_model_profiles()})
+    except MaintenanceConflict:
+        raise
     except ValueError as e:
         return json_ok({"ok": False, "error": str(e)}, status=400)
     except Exception as e:
@@ -1876,11 +2088,14 @@ async def mixin_handler(request):
     """聚合渠道成员管理：POST 加入 / DELETE 移出 主聚合渠道。"""
     try:
         profile_id = int(request.match_info.get("id"))
-        if request.method == "POST":
-            return json_ok({"ok": True, **manager.add_to_mixin(profile_id)})
-        if request.method == "DELETE":
-            return json_ok({"ok": True, **manager.remove_from_mixin(profile_id)})
+        with manager.mutation():
+            if request.method == "POST":
+                return json_ok({"ok": True, **manager.add_to_mixin(profile_id)})
+            if request.method == "DELETE":
+                return json_ok({"ok": True, **manager.remove_from_mixin(profile_id)})
         return json_ok({"ok": False, "error": "method not allowed"}, status=405)
+    except MaintenanceConflict:
+        raise
     except ValueError as e:
         return json_ok({"ok": False, "error": str(e)}, status=400)
     except Exception as e:
@@ -1891,7 +2106,10 @@ async def mixin_order_handler(request):
     """渠道组成员拖拽排序：PUT {members:[name,...]}。"""
     try:
         data = await read_json(request)
-        return json_ok({"ok": True, **manager.reorder_mixin(data.get("members") or [])})
+        with manager.mutation():
+            return json_ok({"ok": True, **manager.reorder_mixin(data.get("members") or [])})
+    except MaintenanceConflict:
+        raise
     except ValueError as e:
         return json_ok({"ok": False, "error": str(e)}, status=400)
     except Exception as e:
@@ -1924,20 +2142,21 @@ async def delete_session_handler(request):
 
 async def patch_session_handler(request):
     sid = request.match_info["sid"]
-    sess = manager.get_session(sid)
     data = await read_json(request)
-    if "title" in data:
-        sess.title = data["title"]
-        sess.untitled = False
-    if "pinned" in data:
-        sess.pinned = bool(data["pinned"])
-    if "untitled" in data:
-        sess.untitled = bool(data["untitled"])
-    if "plan_scan_baseline" in data:
-        sess.plan_scan_baseline = int(data["plan_scan_baseline"])
-    sess.updated_at = time.time()
-    manager._persist_session(sess)
-    return json_ok({"ok": True, "session": manager.snapshot(sess, include_messages=False)})
+    with manager.mutation():
+        sess = manager.get_session(sid)
+        if "title" in data:
+            sess.title = data["title"]
+            sess.untitled = False
+        if "pinned" in data:
+            sess.pinned = bool(data["pinned"])
+        if "untitled" in data:
+            sess.untitled = bool(data["untitled"])
+        if "plan_scan_baseline" in data:
+            sess.plan_scan_baseline = int(data["plan_scan_baseline"])
+        sess.updated_at = time.time()
+        manager._persist_session(sess)
+        return json_ok({"ok": True, "session": manager.snapshot(sess, include_messages=False)})
 
 
 async def prompt_handler(request):
@@ -1968,7 +2187,8 @@ async def cancel_handler(request):
 
 async def restore_handler(request):
     sid = request.match_info["sid"]
-    return json_ok(manager.restore_context(sid))
+    with manager.mutation():
+        return json_ok(manager.restore_context(sid))
 
 
 async def session_model_handler(request):
@@ -2107,8 +2327,9 @@ async def upload_handler(request):
     if not blob:
         return json_ok({"ok": False, "error": "empty file"})
     safe_name = name or "file"
-    fpath = _session_upload_dir(data.get("sid") or "") / f"{uuid.uuid4().hex[:12]}__{safe_name}"
-    fpath.write_bytes(blob)
+    with manager.mutation():
+        fpath = _session_upload_dir(data.get("sid") or "") / f"{uuid.uuid4().hex[:12]}__{safe_name}"
+        fpath.write_bytes(blob)
     return json_ok({"ok": True, "path": str(fpath)})
 
 
@@ -2117,13 +2338,16 @@ async def upload_delete_handler(request):
     data = await read_json(request)
     raw = data.get("path") or ""
     try:
-        target = Path(raw).resolve()
-        upload_root = _WEB_UPLOAD_DIR.resolve()
-        if upload_root not in target.parents:
-            return json_ok({"ok": False, "error": "path outside upload dir"})
-        if target.exists():
-            target.unlink()
+        with manager.mutation():
+            target = Path(raw).resolve()
+            upload_root = _WEB_UPLOAD_DIR.resolve()
+            if upload_root not in target.parents:
+                return json_ok({"ok": False, "error": "path outside upload dir"})
+            if target.exists():
+                target.unlink()
         return json_ok({"ok": True})
+    except MaintenanceConflict:
+        raise
     except Exception as e:
         return json_ok({"ok": False, "error": str(e)})
 
@@ -2233,18 +2457,39 @@ async def mykey_save_handler(request):
     if content is None:
         return json_ok({"ok": False, "error": "missing_content"}, status=400)
     try:
-        profiles = manager._save_mykey_text(str(content))
+        with manager.mutation():
+            profiles = manager._save_mykey_text(str(content))
+            # Importing/rewriting mykey may recover only extras that are already
+            # broken. Healthy tasks keep their current process/model snapshot.
+            services.restart_broken_extras()
+    except MaintenanceConflict:
+        raise
     except Exception as e:
         return json_ok({"ok": False, "error": str(e)}, status=400)
-    # 导入/整体重写 mykey 后,只有「已崩坏」的 conductor/scheduler 才重启(死了才救);
-    # 健康运行中的进程不打断,它们会在下个任务靠自身 mtime 热重载读到新 key。
-    services.restart_broken_extras()
     return json_ok({"ok": True, "path": str(manager._mykey_file()), "profiles": profiles})
 
 
 def _import_memory_from(source_dir: str, ga_root: str) -> dict:
     """Compatibility wrapper for the transactional Desktop data import."""
     return merge_data_files(source_dir, ga_root)
+
+
+async def _run_worker_to_completion(function, *args):
+    """A cancelled HTTP task must not release a worker-owned maintenance gate."""
+    worker = asyncio.create_task(asyncio.to_thread(function, *args))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError as cancellation:
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        with contextlib.suppress(Exception):
+            worker.result()
+        raise cancellation
 
 
 async def memory_import_inspect_handler(request):
@@ -2261,23 +2506,27 @@ async def memory_import_inspect_handler(request):
 
 def _import_data_source(source_path: str) -> dict:
     with materialize_import_source(source_path) as source_root:
-        with manager.lock:
-            existing_session_ids = set(manager.sessions)
-        result = merge_data_files(
-            str(source_root),
-            manager.ga_root,
-            existing_session_ids=existing_session_ids,
-            session_preparer=manager._session_from_item,
-        )
-        prepared_sessions = result.pop("_preparedSessions", [])
-        if prepared_sessions:
-            # Files are already committed atomically by merge_data_files. Adopt the
-            # prevalidated objects without a second persistence pass that could
-            # partially fail or overwrite an existing Desktop session.
+        token = manager.begin_maintenance("import", services.running_managed_ids)
+        try:
             with manager.lock:
-                for session in prepared_sessions:
-                    manager.sessions.setdefault(session.id, session)
-        return result
+                existing_session_ids = set(manager.sessions)
+            result = merge_data_files(
+                str(source_root),
+                manager.ga_root,
+                existing_session_ids=existing_session_ids,
+                session_preparer=manager._session_from_item,
+            )
+            prepared_sessions = result.pop("_preparedSessions", [])
+            if prepared_sessions:
+                # Files are already committed atomically by merge_data_files. Adopt the
+                # prevalidated objects without a second persistence pass that could
+                # partially fail or overwrite an existing Desktop session.
+                with manager.lock:
+                    for session in prepared_sessions:
+                        manager.sessions.setdefault(session.id, session)
+            return result
+        finally:
+            manager.end_maintenance(token)
 
 
 async def memory_import_handler(request):
@@ -2286,10 +2535,31 @@ async def memory_import_handler(request):
     if not source_path:
         return json_ok({"ok": False, "error": "missing_sourceDir"}, status=400)
     try:
-        result = await asyncio.to_thread(_import_data_source, source_path)
-    except (BackupFormatError, OSError, ValueError) as error:
+        result = await _run_worker_to_completion(_import_data_source, source_path)
+    except MaintenanceConflict as error:
+        return json_ok(error.payload(), status=409)
+    except (BackupFormatError, ValueError) as error:
         return json_ok({"ok": False, "error": str(error)}, status=400)
+    except OSError as error:
+        return json_ok({"ok": False, "error": str(error)}, status=500)
     return json_ok(result)
+
+
+def _export_data_source(destination_path: str, source_mode: str) -> dict:
+    token = manager.begin_maintenance("export", services.running_managed_ids)
+    try:
+        manager._persist(strict=True)
+        return export_data_backup(
+            manager.ga_root,
+            destination_path,
+            source_mode,
+            forbidden_roots=(
+                _WEB_UPLOAD_DIR,
+                APP_DIR / "desktop" / "static",
+            ),
+        )
+    finally:
+        manager.end_maintenance(token)
 
 
 async def memory_export_handler(request):
@@ -2299,15 +2569,15 @@ async def memory_export_handler(request):
     if not destination_path:
         return json_ok({"ok": False, "error": "missing_destinationPath"}, status=400)
     try:
-        await asyncio.to_thread(manager._persist)
-        result = await asyncio.to_thread(
-            export_data_backup,
-            manager.ga_root,
-            destination_path,
-            source_mode,
+        result = await _run_worker_to_completion(
+            _export_data_source, destination_path, source_mode
         )
-    except (BackupFormatError, OSError, ValueError) as error:
+    except MaintenanceConflict as error:
+        return json_ok(error.payload(), status=409)
+    except (BackupFormatError, ValueError) as error:
         return json_ok({"ok": False, "error": str(error)}, status=400)
+    except OSError as error:
+        return json_ok({"ok": False, "error": str(error)}, status=500)
     return json_ok(result)
 
 
@@ -2326,11 +2596,15 @@ async def conductor_model_save_handler(request):
     if llm_no < 0 or llm_no >= profile_count:
         return json_ok({"ok": False, "error": "model_out_of_range"}, status=400)
     try:
-        doc = _settings_doc()
-        conductor = doc["conductor"] if isinstance(doc.get("conductor"), dict) else {}
-        conductor["llmNo"] = llm_no
-        doc["conductor"] = conductor
-        _write_settings_doc(doc)
+        with manager.mutation():
+            def update_conductor(doc):
+                conductor = doc["conductor"] if isinstance(doc.get("conductor"), dict) else {}
+                conductor["llmNo"] = llm_no
+                doc["conductor"] = conductor
+
+            doc = _update_settings_doc(update_conductor)
+    except MaintenanceConflict:
+        raise
     except Exception as e:
         return json_ok({"ok": False, "error": str(e)}, status=500)
     state = _resolve_conductor_model_state(doc, profile_count)
@@ -2383,7 +2657,8 @@ async def stop_extras_handler(request):
 async def start_extras_handler(request):
     if not _is_local_peer(request.remote or ""):
         return json_ok({"ok": False, "error": "forbidden"}, status=403)
-    services.autostart_extras()
+    with manager.mutation():
+        services.autostart_extras()
     return json_ok({"ok": True})
 
 
@@ -2401,7 +2676,8 @@ def _exit_bridge() -> None:
 async def bridge_exit_handler(request):
     if not _is_local_peer(request.remote or ""):
         return json_ok({"ok": False, "error": "forbidden"}, status=403)
-    _exit_bridge()
+    with manager.mutation():
+        _exit_bridge()
     return json_ok({"ok": True})
 
 
@@ -2415,7 +2691,8 @@ async def e2e_next_turn_handler(request):
         return json_ok({"ok": False, "error": "forbidden"}, status=403)
     try:
         body = await request.json()
-        _set_e2e_next_turn(str(body.get("mode", "")))
+        with manager.mutation():
+            _set_e2e_next_turn(str(body.get("mode", "")))
     except (ValueError, TypeError, json.JSONDecodeError):
         return json_ok({"ok": False, "error": "mode must be empty"}, status=400)
     return json_ok({"ok": True, "mode": "empty"})
@@ -2474,7 +2751,8 @@ async def subscription_portal_handler(request):
         return json_ok({"available": bool(sp)})
     if not sp:
         return json_ok({"ok": False, "available": False}, status=404)
-    sp()
+    with manager.mutation():
+        sp()
     return json_ok({"ok": True})
 
 

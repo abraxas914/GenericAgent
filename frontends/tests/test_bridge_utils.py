@@ -114,6 +114,16 @@ class TestMemoryImport:
             sessions = {}
 
             @staticmethod
+            def begin_maintenance(kind, running_extras_fn):
+                assert kind == "import"
+                assert running_extras_fn() == []
+                return "test-token"
+
+            @staticmethod
+            def end_maintenance(token):
+                assert token == "test-token"
+
+            @staticmethod
             def _session_from_item(item):
                 return SimpleNamespace(id=item["id"], title=item.get("title", ""))
 
@@ -121,6 +131,7 @@ class TestMemoryImport:
             {"_import_data_source"},
             {
                 "manager": Manager(),
+                "services": SimpleNamespace(running_managed_ids=lambda: []),
                 "materialize_import_source": materialize_import_source,
                 "merge_data_files": merge_data_files,
             },

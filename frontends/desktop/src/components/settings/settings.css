@@ -342,11 +342,16 @@
 }
 
 .ga-data-confirm-summary p,
-.ga-data-source-description {
+.ga-data-source-description,
+.ga-data-maintenance-note {
   margin: 4px 0 0;
   color: var(--semi-color-text-2, #646a73);
   font-size: 13px;
   line-height: 1.6;
+}
+
+.ga-data-maintenance-note[role='status'] {
+  color: var(--semi-color-warning, #d99200);
 }
 
 .ga-data-source-actions {
@@ -370,6 +375,10 @@
   overflow-wrap: anywhere;
   word-break: break-word;
   box-sizing: border-box;
+}
+
+.ga-data-export-path--inline {
+  margin-top: 0;
 }
 
 /* ── Connection mode section ── */
