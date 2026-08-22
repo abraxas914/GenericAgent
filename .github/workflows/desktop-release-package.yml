@@ -30,6 +30,7 @@ env:
   RUST_TOOLCHAIN: "1.95.0"
   PBS_RELEASE: "20260814"
   PBS_PYTHON_VERSION: "3.12.14"
+  MACOS_PACKAGING_PYTHON_VERSION: "3.12.10"
 
 jobs:
   # ----------------------------------------------------------------------------
@@ -90,7 +91,10 @@ jobs:
           # Fixed python-build-standalone Windows x86_64 archive.
           PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_RELEASE}/cpython-${PBS_PYTHON_VERSION}%2B${PBS_RELEASE}-x86_64-pc-windows-msvc-install_only.tar.gz"
           PBS_SHA256="7330282b47cd43a66b702d39078d2e5a88e580cee351d82f95045f21f5ee042a"
-          PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"
+          command -v cygpath >/dev/null 2>&1 || { echo "cygpath not found on Windows runner" >&2; exit 1; }
+          RUNNER_TEMP_POSIX="$(cygpath -u "$RUNNER_TEMP")"
+          [[ "$RUNNER_TEMP_POSIX" == /* ]] || { echo "cygpath did not return an absolute POSIX path" >&2; exit 1; }
+          PBS_ARCHIVE="${RUNNER_TEMP_POSIX}/pbs-windows-x86_64.tar.gz"
           echo "Python build-standalone: $PBS_URL"
           curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --output "$PBS_ARCHIVE" "$PBS_URL"
           printf '%s  %s\n' "$PBS_SHA256" "$PBS_ARCHIVE" | sha256sum --check --strict -
@@ -416,10 +420,10 @@ jobs:
         working-directory: frontends/desktop
         run: npm ci
 
-      - name: Set up Python packaging runtime
+      - name: Set up Python DMG tooling runtime
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: ${{ env.PBS_PYTHON_VERSION }}
+          python-version: ${{ env.MACOS_PACKAGING_PYTHON_VERSION }}
 
       - name: Install Python packaging tools
         run: >-

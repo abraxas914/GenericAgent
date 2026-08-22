@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = path.resolve(__dirname, '..');
+const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..');
 const TAURI_DIR = path.join(DESKTOP_ROOT, 'src-tauri');
 const PACKAGING_DIR = path.join(DESKTOP_ROOT, 'packaging');
 
@@ -55,6 +56,14 @@ function processFailureDetails(error) {
     .filter(Boolean)
     .join('\n');
   return output ? `${error.message}\n${output}` : error.message;
+}
+
+function windowsPbsArchiveUsesPosixTempPath(workflow) {
+  return (workflow.match(/command -v cygpath >\/dev\/null 2>&1/g) ?? []).length === 1
+    && (workflow.match(/RUNNER_TEMP_POSIX="\$\(cygpath -u "\$RUNNER_TEMP"\)"/g) ?? []).length === 1
+    && (workflow.match(/\[\[ "\$RUNNER_TEMP_POSIX" == \/\* \]\]/g) ?? []).length === 1
+    && (workflow.match(/PBS_ARCHIVE="\$\{RUNNER_TEMP_POSIX\}\/pbs-windows-x86_64\.tar\.gz"/g) ?? []).length === 1
+    && !workflow.includes('PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"');
 }
 
 // ── 1. tauri.conf.json validation ──
@@ -248,6 +257,25 @@ if (!fs.existsSync(scriptsDir)) {
 
 // ── 4. Locked package inputs ──
 console.log('\n[4] Locked package inputs');
+
+const releaseWorkflow = fs.readFileSync(
+  path.join(REPO_ROOT, '.github', 'workflows', 'desktop-release-package.yml'),
+  'utf8',
+);
+if (windowsPbsArchiveUsesPosixTempPath(releaseWorkflow)) {
+  ok('Windows PBS archive uses an asserted absolute POSIX runner temp path');
+} else {
+  bad('Windows PBS archive can expose a raw drive-letter path to POSIX tools');
+}
+const unsafeWindowsWorkflow = releaseWorkflow.replace(
+  'PBS_ARCHIVE="${RUNNER_TEMP_POSIX}/pbs-windows-x86_64.tar.gz"',
+  'PBS_ARCHIVE="${RUNNER_TEMP}/pbs-windows-x86_64.tar.gz"',
+);
+if (!windowsPbsArchiveUsesPosixTempPath(unsafeWindowsWorkflow)) {
+  ok('Windows PBS archive contract rejects a raw drive-letter runner temp path');
+} else {
+  bad('Windows PBS archive contract accepted an unsafe raw runner temp path');
+}
 
 const runtimeRequirementsPath = path.join(PACKAGING_DIR, 'python-runtime-requirements.txt');
 const dmgRequirementsPath = path.join(PACKAGING_DIR, 'dmg-build-requirements.txt');

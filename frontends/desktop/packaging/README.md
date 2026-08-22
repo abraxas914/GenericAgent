@@ -79,6 +79,10 @@ GitHub Release API。`publish-release` 显式 `needs` 三个平台，且只在 t
 - Rust toolchain 固定为 `1.95.0`，crate 图由 `Cargo.lock` 固定。
 - `actions/checkout`、`setup-node`、`setup-python`、artifact upload/download、Rust toolchain
   action 与 Rust cache action 均固定完整 commit SHA，workflow 行尾保留对应版本/来源注释。
+- macOS 的 `actions/setup-python` 固定为 CPython `3.12.10`，仅供构建机安装已 hash-lock 的
+  DMG 布局工具；它不会进入产物，也不决定包内 Python runtime 版本。
+- Windows 在 Git Bash 下用 `cygpath -u` 把 runner 临时目录转换为绝对 POSIX 路径，并硬断言
+  转换工具和结果可用，避免盘符被 tar 误判为远端位置；下载 URL、SHA-256 与包内 runtime 不变。
 - python-build-standalone 固定 release `20260814`、CPython `3.12.14` 和明确架构；Windows
   x86_64、Linux x86_64、macOS arm64 三个 tarball 均在解压前校验已记录的 SHA-256。
 - Python runtime 的 32 个直接/传递依赖全部在 `python-runtime-requirements.txt` 使用 `==`；
