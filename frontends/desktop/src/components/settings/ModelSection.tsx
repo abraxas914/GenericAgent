@@ -1,10 +1,11 @@
 import { useState, useCallback } from 'react';
-import { Button, Modal, Toast, Tag } from '@douyinfe/semi-ui';
+import { Button, Modal, Toast, Tag, Tooltip } from '@douyinfe/semi-ui';
 import { useSettingsStore } from '../../stores/settings';
 import { useI18n } from '../../i18n';
 import * as bridge from '../../services/bridge';
 import type { ModelProfile } from '../../services/bridge';
 import { getProviderIcon, providerFromModel } from '../../data/provider-icons';
+import { SettingsSectionTitle } from './SettingsSectionTitle';
 
 function ModelIcon({ model, size = 16 }: { model: string; size?: number }) {
   const key = providerFromModel(model);
@@ -120,7 +121,12 @@ export function ModelSection({ onAdd, onEdit }: Props) {
 
   return (
     <div className="ga-set-block">
-      <div className="ga-set-sec-t">{t('set.model')}</div>
+      <SettingsSectionTitle
+        tip={t('model.configurationTip')}
+        tipLabel={t('model.configurationHelp')}
+      >
+        {t('set.model')}
+      </SettingsSectionTitle>
 
       {/* ── Mixin / 渠道组 ── */}
       {mixin && (
@@ -137,7 +143,15 @@ export function ModelSection({ onAdd, onEdit }: Props) {
             >
               <CaretIcon expanded={mixinExpanded} />
             </button>
-            <span className="ga-mixin-label">{t('model.aggregation')}</span>
+            <Tooltip content={t('model.aggregationTip')} position="topLeft">
+              <span
+                className="ga-mixin-label"
+                tabIndex={0}
+                aria-label={`${t('model.aggregation')}：${t('model.aggregationTip')}`}
+              >
+                {t('model.aggregation')}
+              </span>
+            </Tooltip>
             {mixinIdx === selectedModelNo && <Tag color="green" size="small">{t('set.current')}</Tag>}
           </div>
 

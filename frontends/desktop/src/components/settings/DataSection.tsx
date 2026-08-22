@@ -12,6 +12,7 @@ import {
 import { useChatStore } from '../../stores/chat';
 import { useSettingsStore } from '../../stores/settings';
 import { isTauri } from '../../utils/tauri';
+import { SettingsSectionTitle } from './SettingsSectionTitle';
 
 const tauriAvailable = isTauri();
 
@@ -209,7 +210,9 @@ export function DataSection() {
 
   return (
     <div className="ga-set-block" data-testid="data-maintenance-section">
-      <div className="ga-set-sec-t">{t('data.title')}</div>
+      <SettingsSectionTitle tip={t('data.sectionTip')} tipLabel={t('data.sectionHelp')}>
+        {t('data.title')}
+      </SettingsSectionTitle>
       <OpRow
         label={t('data.importKey')}
         tip={t('data.importKeyTip')}

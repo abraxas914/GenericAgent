@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button, Radio, RadioGroup, Tag, Toast } from '@douyinfe/semi-ui';
+import { Button, Radio, RadioGroup, Tag, Toast, Tooltip } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import * as bridge from '../../services/bridge';
@@ -8,6 +8,7 @@ import { useAppStore } from '../../stores/app';
 import { useChatStore } from '../../stores/chat';
 import { useSettingsStore } from '../../stores/settings';
 import { isTauri } from '../../utils/tauri';
+import { SettingsSectionTitle } from './SettingsSectionTitle';
 
 type ConnectionMode = 'included' | 'localRepository';
 
@@ -151,7 +152,12 @@ export function ConnectionModeSection() {
 
   return (
     <div className="ga-set-block ga-connection-section" data-testid="connection-mode-section">
-      <div className="ga-set-sec-t">{t('connection.title')}</div>
+      <SettingsSectionTitle
+        tip={t('connection.sectionTip')}
+        tipLabel={t('connection.sectionHelp')}
+      >
+        {t('connection.title')}
+      </SettingsSectionTitle>
       <p className="ga-connection-description">{t('connection.description')}</p>
 
       <RadioGroup
@@ -168,20 +174,32 @@ export function ConnectionModeSection() {
           className="ga-connection-mode-card"
           extra={t('connection.includedDescription')}
         >
-          <span className="ga-connection-card-title">
-            {t('connection.included')}
-            {actualMode === 'included' && <Tag size="small" color="green">{t('connection.current')}</Tag>}
-          </span>
+          <Tooltip content={t('connection.includedTip')} position="topLeft">
+            <span
+              className="ga-connection-card-title"
+              tabIndex={0}
+              aria-label={`${t('connection.included')}：${t('connection.includedTip')}`}
+            >
+              {t('connection.included')}
+              {actualMode === 'included' && <Tag size="small" color="green">{t('connection.current')}</Tag>}
+            </span>
+          </Tooltip>
         </Radio>
         <Radio
           value="localRepository"
           className="ga-connection-mode-card"
           extra={t('connection.localDescription')}
         >
-          <span className="ga-connection-card-title">
-            {t('connection.local')}
-            {actualMode === 'localRepository' && <Tag size="small" color="green">{t('connection.current')}</Tag>}
-          </span>
+          <Tooltip content={t('connection.localTip')} position="topLeft">
+            <span
+              className="ga-connection-card-title"
+              tabIndex={0}
+              aria-label={`${t('connection.local')}：${t('connection.localTip')}`}
+            >
+              {t('connection.local')}
+              {actualMode === 'localRepository' && <Tag size="small" color="green">{t('connection.current')}</Tag>}
+            </span>
+          </Tooltip>
         </Radio>
       </RadioGroup>
 
@@ -226,7 +244,15 @@ export function ConnectionModeSection() {
       <div className="ga-connection-status-row">
         <div className="ga-connection-status-copy">
           <span className={`ga-source-dot ga-source-dot--${statusDot}`} />
-          <span>{t('connection.status')}</span>
+          <Tooltip content={t('connection.statusTip')} position="topLeft">
+            <span
+              className="ga-connection-status-label"
+              tabIndex={0}
+              aria-label={`${t('connection.status')}：${t('connection.statusTip')}`}
+            >
+              {t('connection.status')}
+            </span>
+          </Tooltip>
           <strong>{t(statusKey)}</strong>
         </div>
         <Button size="small" type="tertiary" onClick={handleOpenStatus}>

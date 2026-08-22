@@ -31,6 +31,22 @@ describe('DataSection user-facing copy', () => {
     expect([en['connection.included'], en['connection.local']]).toEqual(['Included environment', 'Local repository']);
     expect(zh['connection.apply']).toBe('应用并连接');
     expect(en['connection.apply']).toBe('Apply and connect');
+    expect(zh['connection.includedDescription'])
+      .toContain('本桌面应用内置的运行环境');
+    expect(zh['connection.description'])
+      .toContain('本桌面应用内置的运行环境');
+    expect(zh['connection.localDescription'])
+      .toContain('在使用桌面版之前已经拥有的本地仓库');
+    expect(zh['connection.sectionTip']).toContain('不会复制、移动或合并');
+    expect(en['connection.sectionTip']).toContain('does not copy, move, or merge');
+  });
+
+  it('explains data operations and their consequences in tooltips', () => {
+    expect(zh['data.importKeyTip']).toContain('替换当前密钥配置');
+    expect(zh['data.exportKeyTip']).toContain('敏感信息');
+    expect(zh['data.importDataTip']).toContain('密钥配置不受影响');
+    expect(zh['data.exportDataTip']).toContain('不会移动或删除原数据');
+    expect(en['data.exportDataTip']).toContain('original data stays in place');
   });
 
   it('keeps implementation vocabulary out of both settings flows', () => {

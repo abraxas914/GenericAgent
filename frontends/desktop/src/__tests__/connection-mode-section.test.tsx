@@ -86,6 +86,9 @@ vi.mock('@douyinfe/semi-ui', async () => {
       );
     },
     Tag: ({ children }: { children: ReactNode }) => <span>{children}</span>,
+    Tooltip: ({ children, content }: { children: ReactNode; content: ReactNode }) => (
+      <span data-tooltip={String(content)}>{children}</span>
+    ),
     Toast: { error: vi.fn(), success: vi.fn() },
   };
 });
@@ -114,6 +117,21 @@ describe('ConnectionModeSection', () => {
     const path = await screen.findByText(fullPath);
     expect(path.textContent).toBe(fullPath);
     expect(path.classList.contains('ga-connection-path')).toBe(true);
+  });
+
+  it('adds focused explanations for the section, both modes, and runtime status', async () => {
+    mocks.tauriInvoke.mockResolvedValueOnce('');
+    const { container } = render(<ConnectionModeSection />);
+    await screen.findByText('connection.statusReady');
+
+    expect(Array.from(container.querySelectorAll('[data-tooltip]')).map((node) => (
+      node.getAttribute('data-tooltip')
+    ))).toEqual([
+      'connection.sectionTip',
+      'connection.includedTip',
+      'connection.localTip',
+      'connection.statusTip',
+    ]);
   });
 
   it('validates a local repository before staging it and only reconnects after Apply', async () => {
