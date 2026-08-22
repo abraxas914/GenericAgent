@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_DIST = path.resolve(__dirname, '..', 'dist');
-const CHUNK_WARN_SIZE = 2 * 1024 * 1024; // 2 MB
+const MAX_JS_CHUNK_SIZE = 500 * 1000;
 
 /**
  * @param {string} distDir
@@ -95,11 +95,16 @@ export function checkDistBuilt(distDir) {
     }
   }
 
-  // 5. No oversized chunks
+  // 5. Keep every production JavaScript chunk below Vite's default 500 kB budget.
+  // The complete Semi stylesheet remains a shared CSS asset; this budget deliberately targets
+  // JavaScript parse/evaluation cost and prevents the renderer from collapsing back into one entry.
   for (const jsFile of jsFiles) {
     const size = fs.statSync(path.join(assetsDir, jsFile)).size;
-    if (size > CHUNK_WARN_SIZE) {
-      warnings.push(`chunk ${jsFile} is ${(size / 1024 / 1024).toFixed(1)}MB (> 2MB threshold)`);
+    if (size > MAX_JS_CHUNK_SIZE) {
+      return {
+        ok: false,
+        error: `JavaScript chunk ${jsFile} is ${(size / 1000).toFixed(1)} kB (> 500 kB budget)`,
+      };
     }
   }
 
