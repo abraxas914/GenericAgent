@@ -1,8 +1,11 @@
 import importlib.util
+import io
 import json
 import plistlib
+import urllib.error
 import urllib.request
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -183,3 +186,212 @@ def test_package_shape_rejects_excluded_source_package_json(tmp_path):
         "packagedBundleVersion": "0.2.0",
         "packageShape": True,
     }
+
+
+def chat_snapshot(*, status="idle", unfinished=False):
+    return {
+        "status": status,
+        "hasUnfinishedWork": unfinished,
+        "messages": [{"role": "assistant", "content": "Harness reply"}],
+        "lastError": "model failed" if status == "error" else "",
+    }
+
+
+def test_package_chat_waits_for_the_live_turn_thread_after_reply_and_idle_status():
+    assert journey.completed_assistant_reply(chat_snapshot(status="running", unfinished=True)) is None
+    assert journey.completed_assistant_reply(chat_snapshot(unfinished=True)) is None
+    assert journey.completed_assistant_reply(chat_snapshot()) == "Harness reply"
+
+    missing_barrier = chat_snapshot()
+    missing_barrier.pop("hasUnfinishedWork")
+    assert journey.completed_assistant_reply(missing_barrier) is None
+
+
+@pytest.mark.parametrize("status", ["error", "cancelled"])
+def test_package_chat_fails_immediately_on_terminal_session_state(status):
+    with pytest.raises(journey.JourneyFailure, match=f"terminal state {status}"):
+        journey.completed_assistant_reply(chat_snapshot(status=status))
+
+
+def valid_import_conflict():
+    return {
+        "ok": False,
+        "error": "managed Desktop services are running",
+        "code": "maintenance_conflict",
+        "runningSessions": [],
+        "runningExtras": ["frontends/conductor.py", "reflect/scheduler.py"],
+    }
+
+
+def test_package_import_requires_the_exact_running_extras_conflict():
+    assert journey.validate_import_maintenance_conflict(409, valid_import_conflict()) == [
+        "frontends/conductor.py",
+        "reflect/scheduler.py",
+    ]
+
+
+def test_package_request_reads_the_expected_http_error_json(monkeypatch):
+    payload = {**valid_import_conflict(), "runningExtras": ["frontends/conductor.py"]}
+    error = urllib.error.HTTPError(
+        "http://127.0.0.1:14168/memory/import",
+        409,
+        "Conflict",
+        {},
+        io.BytesIO(json.dumps(payload).encode("utf-8")),
+    )
+
+    def reject(*_args, **_kwargs):
+        raise error
+
+    monkeypatch.setattr(urllib.request, "urlopen", reject)
+    status, response = journey.request_json_with_status(
+        "POST",
+        "/memory/import",
+        {"sourceDir": "/source"},
+    )
+
+    assert status == 409
+    assert response == payload
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (200, valid_import_conflict()),
+        (409, {**valid_import_conflict(), "ok": True}),
+        (409, {**valid_import_conflict(), "code": "other_conflict"}),
+        (409, {**valid_import_conflict(), "runningSessions": ["sess-live"]}),
+        (409, {**valid_import_conflict(), "runningExtras": []}),
+        (409, {**valid_import_conflict(), "runningExtras": ["reflect/scheduler.py"]}),
+        (409, {**valid_import_conflict(), "runningExtras": ["frontends/conductor.py"] * 2}),
+    ],
+)
+def test_package_import_rejects_inexact_maintenance_conflicts(status, payload):
+    with pytest.raises(journey.JourneyFailure):
+        journey.validate_import_maintenance_conflict(status, payload)
+
+
+def stopped_panel(*services):
+    return {"services": list(services)}
+
+
+def test_package_import_waits_until_every_reported_extra_is_offline():
+    ids = ["frontends/conductor.py", "reflect/scheduler.py"]
+    complete = stopped_panel(
+        {"id": "frontends/conductor.py", "running": False, "status": "offline"},
+        {"id": "reflect/scheduler.py", "running": False, "status": "offline"},
+    )
+    assert journey.verified_stopped_extras_panel(complete, ids) is complete
+    assert journey.verified_stopped_extras_panel(
+        stopped_panel({"id": ids[0], "running": False, "status": "offline"}),
+        ids,
+    ) is None
+    assert journey.verified_stopped_extras_panel(
+        stopped_panel(
+            {"id": ids[0], "running": False, "status": "offline"},
+            {"id": ids[1], "running": True, "status": "running"},
+        ),
+        ids,
+    ) is None
+    assert journey.verified_stopped_extras_panel(
+        stopped_panel(
+            {"id": ids[0], "running": False, "status": "offline"},
+            {"id": ids[1], "running": False, "status": "error"},
+        ),
+        ids,
+    ) is None
+
+
+def test_real_package_memory_import_stops_reported_extras_before_one_successful_import(
+    tmp_path, monkeypatch
+):
+    candidate = object.__new__(journey.Journey)
+    candidate.external_root = tmp_path / "external"
+    candidate.work_dir = tmp_path / "work"
+    candidate.fake = SimpleNamespace(transcript=[{"model": "e2e-model"}])
+    candidate.report = {"checks": {}}
+    sid = "sess-package-test"
+    session_file = candidate.external_root / "temp" / "desktop_sessions" / f"{sid}.json"
+    imported_sid = "sess-p2-package-imported"
+    stopped = False
+    calls = []
+
+    def fake_request(method, path, body=None, timeout=5.0):
+        nonlocal stopped
+        calls.append((method, path))
+        if path == "/session/new":
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text('{"id":"sess-package-test"}\n', encoding="utf-8")
+            return {"sessionId": sid}
+        if path == "/upload":
+            upload = candidate.external_root / "temp" / "desktop_uploads" / "p2.png"
+            upload.parent.mkdir(parents=True, exist_ok=True)
+            upload.write_bytes(b"png")
+            return {"ok": True, "path": str(upload)}
+        if path.endswith("/prompt"):
+            return {"ok": True}
+        if path.endswith("/messages?limit=20"):
+            return chat_snapshot()
+        if path == "/services/stop-extras":
+            stopped = True
+            return {"ok": True}
+        if path == "/services/panel":
+            assert stopped is True
+            return stopped_panel(
+                {"id": "frontends/conductor.py", "running": False, "status": "offline"}
+            )
+        if path == "/memory/import":
+            assert stopped is True
+            source = Path(body["sourceDir"])
+            memory = candidate.external_root / "memory" / "p2-package-memory.txt"
+            responses = candidate.external_root / "temp" / "model_responses"
+            backup = candidate.external_root / "temp" / "memory_import_backup_test"
+            (backup / "memory").mkdir(parents=True)
+            (backup / "memory" / memory.name).write_bytes(memory.read_bytes())
+            memory.write_bytes((source / "memory" / memory.name).read_bytes())
+            (responses / "new.json").write_bytes(
+                (source / "temp" / "model_responses" / "new.json").read_bytes()
+            )
+            imported = candidate.external_root / "temp" / "desktop_sessions" / f"{imported_sid}.json"
+            imported.write_bytes(
+                (source / "temp" / "desktop_sessions" / imported.name).read_bytes()
+            )
+            return {
+                "ok": True,
+                "memoryCopied": 1,
+                "responsesCopied": 1,
+                "responsesSkipped": 1,
+                "sessionsAdded": 1,
+                "backupDir": str(backup),
+            }
+        raise AssertionError(f"unexpected request: {method} {path}")
+
+    def fake_conflict(method, path, body=None, timeout=5.0):
+        calls.append((method, f"{path}:expected-conflict"))
+        memory = candidate.external_root / "memory" / "p2-package-memory.txt"
+        responses = candidate.external_root / "temp" / "model_responses"
+        assert memory.read_text(encoding="utf-8") == "before\n"
+        assert (responses / "shared.json").read_text(encoding="utf-8") == "destination\n"
+        assert not (responses / "new.json").exists()
+        assert session_file.read_text(encoding="utf-8") == '{"id":"sess-package-test"}\n'
+        return 409, {**valid_import_conflict(), "runningExtras": ["frontends/conductor.py"]}
+
+    monkeypatch.setattr(journey, "request_json", fake_request)
+    monkeypatch.setattr(journey, "request_json_with_status", fake_conflict)
+
+    candidate.run_chat_upload_memory()
+
+    assert calls == [
+        ("POST", "/session/new"),
+        ("POST", "/upload"),
+        ("POST", f"/session/{sid}/prompt"),
+        ("GET", f"/session/{sid}/messages?limit=20"),
+        ("POST", "/memory/import:expected-conflict"),
+        ("POST", "/services/stop-extras"),
+        ("GET", "/services/panel"),
+        ("POST", "/memory/import"),
+    ]
+    gate = candidate.report["checks"]["memoryImportMaintenanceGate"]
+    assert gate["runningSessions"] == []
+    assert gate["runningExtras"] == ["frontends/conductor.py"]
+    assert candidate.report["checks"]["memoryImport"]["ok"] is True

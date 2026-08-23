@@ -1221,6 +1221,7 @@ class AgentManager:
             return {
                 "sessionId": sid,
                 "status": sess.status,
+                "hasUnfinishedWork": self._session_has_unfinished_work(sess),
                 "messages": msgs,
                 "partial": dict(sess.partial) if sess.partial else None,
                 "plan": plan_state.desktop_plan_payload_from_session(sess, self.ga_root),

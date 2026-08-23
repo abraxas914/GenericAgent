@@ -771,6 +771,33 @@ class TestMaintenanceGate:
 
         assert raised.value.running_sessions == ["sess-queued"]
 
+    def test_messages_reports_idle_live_thread_as_unfinished_until_joined(
+        self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
+    ):
+        release = threading.Event()
+        worker = threading.Thread(target=release.wait)
+        session = _make_session("sess-idle-live-thread")
+        session.thread = worker
+        manager.sessions[session.id] = session
+        monkeypatch.setattr(
+            _plan_state_stub,
+            "desktop_plan_payload_from_session",
+            lambda *_args, **_kwargs: {},
+            raising=False,
+        )
+
+        worker.start()
+        try:
+            snapshot = manager.messages(session.id)
+            assert snapshot["status"] == "idle"
+            assert snapshot["hasUnfinishedWork"] is True
+        finally:
+            release.set()
+            worker.join(timeout=2)
+
+        assert worker.is_alive() is False
+        assert manager.messages(session.id)["hasUnfinishedWork"] is False
+
     def test_deleted_running_session_remains_registered_until_done(
         self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
     ):
