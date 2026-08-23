@@ -13,6 +13,7 @@ export type BootstrapFailureCode =
   | 'config_unresolved'
   | 'prepare_failed'
   | 'spawn_failed'
+  | 'bridge_shutdown_refused'
   | 'port_conflict'
   | 'service_timeout'
   | 'service_exited'

@@ -19,7 +19,7 @@ In addition to the shared chat/data/port/relocation checks, this journey hard-fa
 does not contain the build-time `.prepared` marker or if any file inside the `.app` changes from
 first launch through restart and relocation. It verifies the package bridge remains inside the
 app while `GA_ROOT` points at an external core, then verifies a deleted override falls back to the
-versioned writable runtime outside the app.
+stable writable runtime at `~/Library/Application Support/GenericAgent/runtime/app`.
 
 After automation, mark the manual report items `pass`: Gatekeeper/open-anyway, traffic lights,
 focus, retry button after port release, native directory picker, and visual/loading checks. The

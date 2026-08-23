@@ -185,12 +185,13 @@ enum BootstrapPhase {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum BootstrapFailureCode {
     ConfigUnresolved,
     PrepareFailed,
     SpawnFailed,
+    BridgeShutdownRefused,
     PortConflict,
     ServiceTimeout,
     ServiceExited,
@@ -1707,6 +1708,14 @@ fn run_offline_prepare(
 const MAX_IDENTITY_RESPONSE_BYTES: usize = 32 * 1024;
 const MAX_IDENTITY_PATH_BYTES: usize = 2 * 1024;
 const MAX_IDENTITY_BUILD_BYTES: usize = 256;
+const MAX_SHUTDOWN_RESPONSE_BYTES: usize = 4 * 1024;
+
+#[derive(Debug, PartialEq, Eq)]
+enum BridgeShutdownResponse {
+    Accepted,
+    Refused { status: u16, maintenance: bool },
+    Indeterminate,
+}
 
 fn normalize_bridge_identity(identity: serde_json::Value) -> Option<serde_json::Value> {
     let ga_root = identity.get("ga_root")?.as_str()?;
@@ -1779,14 +1788,64 @@ fn bootstrap_failure(code: BootstrapFailureCode, detail: impl AsRef<str>) -> Boo
     }
 }
 
-fn request_bridge_shutdown() {
+fn parse_bridge_shutdown_response(response: &[u8]) -> BridgeShutdownResponse {
+    // The HTTP status line is authoritative even if an error body is truncated
+    // or contains non-UTF-8 bytes. Lossy decoding cannot turn an invalid status
+    // line into one of the exact HTTP/version/status tokens accepted below.
+    let text = String::from_utf8_lossy(response);
+    let Some((status_line, _)) = text.split_once("\r\n") else {
+        return BridgeShutdownResponse::Indeterminate;
+    };
+    let mut parts = status_line.split_ascii_whitespace();
+    let Some(version) = parts.next() else {
+        return BridgeShutdownResponse::Indeterminate;
+    };
+    if version != "HTTP/1.0" && version != "HTTP/1.1" {
+        return BridgeShutdownResponse::Indeterminate;
+    }
+    let Some(raw_status) = parts.next() else {
+        return BridgeShutdownResponse::Indeterminate;
+    };
+    if raw_status.len() != 3 || !raw_status.bytes().all(|byte| byte.is_ascii_digit()) {
+        return BridgeShutdownResponse::Indeterminate;
+    }
+    let Ok(status) = raw_status.parse::<u16>() else {
+        return BridgeShutdownResponse::Indeterminate;
+    };
+    if (200..300).contains(&status) {
+        return BridgeShutdownResponse::Accepted;
+    }
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.trim())
+        .unwrap_or("");
+    let maintenance = status == 409
+        && serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|document| {
+                document
+                    .get("code")
+                    .and_then(serde_json::Value::as_str)
+                    .map(|code| code == "maintenance_conflict")
+            })
+            .unwrap_or(false);
+    BridgeShutdownResponse::Refused {
+        status,
+        maintenance,
+    }
+}
+
+fn request_bridge_shutdown() -> BridgeShutdownResponse {
+    request_bridge_shutdown_at(&bridge_endpoint())
+}
+
+fn request_bridge_shutdown_at(endpoint: &BridgeEndpoint) -> BridgeShutdownResponse {
     use std::io::{Read, Write};
-    let endpoint = bridge_endpoint();
     let Some(addr) = endpoint.tcp_addr() else {
-        return;
+        return BridgeShutdownResponse::Indeterminate;
     };
     let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(800)) else {
-        return;
+        return BridgeShutdownResponse::Indeterminate;
     };
     let _ = stream.set_read_timeout(Some(Duration::from_millis(600)));
     let _ = stream.set_write_timeout(Some(Duration::from_millis(600)));
@@ -1794,8 +1853,36 @@ fn request_bridge_shutdown() {
         "POST /services/bridge/exit HTTP/1.1\r\nHost: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         endpoint.socket_addr(),
     );
-    let _ = stream.write_all(req.as_bytes());
-    let _ = stream.read(&mut [0u8; 512]);
+    if stream.write_all(req.as_bytes()).is_err() {
+        return BridgeShutdownResponse::Indeterminate;
+    }
+    let mut response = Vec::new();
+    // A timeout or oversized body must not erase an already received explicit
+    // non-2xx status. Parse the bounded prefix; an incomplete status line stays
+    // indeterminate and retains the established own-child fallback.
+    let _ = stream
+        .take(MAX_SHUTDOWN_RESPONSE_BYTES as u64)
+        .read_to_end(&mut response);
+    parse_bridge_shutdown_response(&response)
+}
+
+fn shutdown_refusal_failure(response: BridgeShutdownResponse) -> Option<BootstrapFailure> {
+    let BridgeShutdownResponse::Refused {
+        status,
+        maintenance,
+    } = response
+    else {
+        return None;
+    };
+    let detail = if maintenance {
+        "the Desktop bridge is busy with data maintenance and refused a safe restart".to_string()
+    } else {
+        format!("the Desktop bridge refused a safe restart with HTTP {status}")
+    };
+    Some(bootstrap_failure(
+        BootstrapFailureCode::BridgeShutdownRefused,
+        detail,
+    ))
 }
 
 fn is_bridge_running() -> bool {
@@ -1842,7 +1929,10 @@ fn resolve_existing_listener(
                 app_handle,
                 "A previous GenericAgent bridge was found; requesting graceful shutdown.",
             );
-            request_bridge_shutdown();
+            if let Some(failure) = shutdown_refusal_failure(request_bridge_shutdown()) {
+                record_diagnostic_log(app_handle, &failure.detail);
+                return Err(failure);
+            }
             let start = Instant::now();
             while is_bridge_running() && start.elapsed() < Duration::from_secs(10) {
                 thread::sleep(Duration::from_millis(200));
@@ -2300,10 +2390,7 @@ fn execute_bootstrap(
     match bootstrap_inner(app_handle, &python_path, &project_dir, dev_mode) {
         Ok(()) => Ok(()),
         Err(failure) => {
-            if matches!(
-                failure.code,
-                BootstrapFailureCode::ServiceTimeout | BootstrapFailureCode::PortConflict
-            ) {
+            if should_force_stop_tracked_bridge(failure.code) {
                 // This handle only ever refers to a child spawned by this desktop process.
                 // It is safe to stop; the unidentified listener itself is never targeted.
                 stop_tracked_bridge();
@@ -2318,6 +2405,13 @@ fn execute_bootstrap(
             Err(failure.detail)
         }
     }
+}
+
+fn should_force_stop_tracked_bridge(code: BootstrapFailureCode) -> bool {
+    matches!(
+        code,
+        BootstrapFailureCode::ServiceTimeout | BootstrapFailureCode::PortConflict
+    )
 }
 
 async fn execute_bootstrap_async(
@@ -2908,6 +3002,105 @@ mod tests {
             "pid": 42
         }))
         .is_none());
+    }
+
+    #[test]
+    fn bridge_shutdown_response_distinguishes_acceptance_and_explicit_refusal() {
+        assert_eq!(
+            parse_bridge_shutdown_response(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"),
+            BridgeShutdownResponse::Accepted
+        );
+        assert_eq!(
+            parse_bridge_shutdown_response(
+                b"HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\n\r\n{\"code\":\"maintenance_conflict\"}"
+            ),
+            BridgeShutdownResponse::Refused {
+                status: 409,
+                maintenance: true,
+            }
+        );
+        assert_eq!(
+            parse_bridge_shutdown_response(b"HTTP/1.0 503 Unavailable\r\n\r\n"),
+            BridgeShutdownResponse::Refused {
+                status: 503,
+                maintenance: false,
+            }
+        );
+        assert_eq!(
+            parse_bridge_shutdown_response(b"HTTP/1.1 409"),
+            BridgeShutdownResponse::Indeterminate
+        );
+        assert_eq!(
+            parse_bridge_shutdown_response(b"NOT-HTTP 200 OK\r\n\r\n"),
+            BridgeShutdownResponse::Indeterminate
+        );
+        let mut non_utf8_refusal = b"HTTP/1.1 503 Unavailable\r\n\r\n".to_vec();
+        non_utf8_refusal.push(0xff);
+        assert_eq!(
+            parse_bridge_shutdown_response(&non_utf8_refusal),
+            BridgeShutdownResponse::Refused {
+                status: 503,
+                maintenance: false,
+            }
+        );
+    }
+
+    #[test]
+    fn explicit_shutdown_refusal_never_allows_force_stopping_the_tracked_bridge() {
+        let failure = shutdown_refusal_failure(BridgeShutdownResponse::Refused {
+            status: 409,
+            maintenance: true,
+        })
+        .unwrap();
+        assert_eq!(failure.code, BootstrapFailureCode::BridgeShutdownRefused);
+        assert!(failure.detail.contains("data maintenance"));
+        assert!(!should_force_stop_tracked_bridge(failure.code));
+        assert!(should_force_stop_tracked_bridge(
+            BootstrapFailureCode::PortConflict
+        ));
+        assert!(should_force_stop_tracked_bridge(
+            BootstrapFailureCode::ServiceTimeout
+        ));
+    }
+
+    #[test]
+    fn shutdown_request_honors_a_live_bridge_maintenance_refusal() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (request_sender, request_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let length = stream.read(&mut request).unwrap();
+            request_sender.send(request[..length].to_vec()).unwrap();
+            let body = br#"{"code":"maintenance_conflict"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .unwrap();
+            stream.write_all(body).unwrap();
+        });
+        let endpoint = BridgeEndpoint {
+            host: "127.0.0.1".to_string(),
+            port,
+        };
+
+        assert_eq!(
+            request_bridge_shutdown_at(&endpoint),
+            BridgeShutdownResponse::Refused {
+                status: 409,
+                maintenance: true,
+            }
+        );
+        let request = String::from_utf8(request_receiver.recv().unwrap()).unwrap();
+        assert!(request.starts_with("POST /services/bridge/exit HTTP/1.1\r\n"));
+        server.join().unwrap();
     }
 
     #[test]
