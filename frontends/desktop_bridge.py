@@ -57,6 +57,27 @@ from data_backup import (
 from desktop_settings import DesktopSettingsError, read_settings, update_settings
 
 APP_DIR = Path(__file__).resolve().parent
+DEFAULT_CONDUCTOR_PORT = 8900
+E2E_CONDUCTOR_PORT_ENV = "GA_DESKTOP_E2E_CONDUCTOR_PORT"
+E2E_REPORT_DIR_ENV = "GA_DESKTOP_E2E_REPORT_DIR"
+
+
+def _configured_conductor_port() -> int:
+    """Return the package-journey conductor port without changing production :8900.
+
+    Desktop's compiled renderer and production CSP intentionally use :8900.  The
+    alternate port exists only to isolate real-package evidence from an installed
+    user's conductor; both E2E variables are required before it is honored.
+    """
+    if not os.environ.get(E2E_REPORT_DIR_ENV):
+        return DEFAULT_CONDUCTOR_PORT
+    raw = os.environ.get(E2E_CONDUCTOR_PORT_ENV)
+    if raw is None:
+        return DEFAULT_CONDUCTOR_PORT
+    value = raw.strip()
+    if not value.isascii() or not value.isdigit() or not 1 <= int(value) <= 65535:
+        raise RuntimeError(f"{E2E_CONDUCTOR_PORT_ENV} must be an integer between 1 and 65535")
+    return int(value)
 
 # ─── Bridge self-log ring buffer ───
 import datetime as _dt, io as _io
@@ -1437,10 +1458,17 @@ def discover_extra_services(ga_root: Path) -> List[dict]:
     # external core through GA_ROOT instead of executing arbitrary UI glue from that checkout.
     conductor = APP_DIR / "conductor.py"
     if conductor.is_file():
+        conductor_port = _configured_conductor_port()
         out.append({
             "id": "frontends/conductor.py",
-            "cmd": [sys.executable, str(conductor), "--no-browser"],
-            "port": 8900,
+            "cmd": [
+                sys.executable,
+                str(conductor),
+                "--no-browser",
+                "--port",
+                str(conductor_port),
+            ],
+            "port": conductor_port,
         })
     return out
 
@@ -1570,19 +1598,24 @@ class ServiceManager:
 
     def _state(self, sid: str, *, err: str = "") -> dict:
         proc = self.procs.get(sid)
-        running = proc is not None and proc.poll() is None
-        status = "running" if running else "offline"
+        owned = proc is not None and proc.poll() is None
+        running = owned
+        status = "running" if owned else "offline"
         last_error = err
         error_key = ""
         last_warning = ""
         warning_key = ""
         scan = self._scan_errors(sid)
         catalog_port = self._catalog.get(sid, {}).get("port")
-        if proc is not None and proc.poll() is not None:
+        port_alive = _port_alive(catalog_port)
+        external = bool(catalog_port and port_alive and not owned)
+        if proc is not None and not owned:
             if sid in self._stopping:
                 status, last_error = "offline", ""
-            elif _port_alive(catalog_port):
-                status, running = "running", True
+            elif external:
+                status = "error"
+                last_error = err or f"port {catalog_port} is occupied by an untracked process"
+                error_key = "err.portBusy"
             else:
                 status = "error"
                 if scan["fatal"]:
@@ -1592,9 +1625,11 @@ class ServiceManager:
                     last_error = err
                 else:
                     last_error = f"exit code {proc.returncode}"
-        elif not running and not err and _port_alive(catalog_port):
-            status, running = "running", True
-        elif running:
+        elif external:
+            status = "error"
+            last_error = err or f"port {catalog_port} is occupied by an untracked process"
+            error_key = "err.portBusy"
+        elif owned:
             if scan["warning"]:
                 last_warning = scan["warning"][0]
                 warning_key = scan["warning"][1]
@@ -1607,7 +1642,11 @@ class ServiceManager:
             "id": sid,
             "status": status,
             "running": running,
-            "pid": proc.pid if running and proc is not None else None,
+            "owned": owned,
+            "external": external,
+            "portConflict": external,
+            "port": catalog_port,
+            "pid": proc.pid if owned and proc is not None else None,
             "lastError": last_error,
             "errorKey": error_key,
             "lastWarning": last_warning,
@@ -1622,7 +1661,7 @@ class ServiceManager:
         with self.lock:
             return [
                 sid for sid in sorted(self._catalog)
-                if self._state(sid).get("running")
+                if self._state(sid).get("owned") is True
             ]
 
     def _bridge_state(self) -> dict:
@@ -1683,6 +1722,12 @@ class ServiceManager:
             proc = self.procs.get(sid)
             if proc is not None and proc.poll() is None:
                 return {"ok": True, "service": self._managed_state(sid)}
+            catalog_port = svc.get("port")
+            if catalog_port and _port_alive(catalog_port):
+                err = f"port {catalog_port} is occupied by an untracked process"
+                item = self._managed_state(sid, err=err)
+                self._notify(sid, err=err)
+                return {"ok": False, "error": "port_conflict", "service": item}
             if not self._is_configured(sid):
                 keys = ", ".join(_SERVICE_KEYS.get(sid, ()))
                 err = f"not configured in mykey.py ({keys})"
@@ -1711,7 +1756,7 @@ class ServiceManager:
             self._wait_started(proc)
             item = self._managed_state(sid)
             self._notify(sid)
-            if item["status"] == "error":
+            if item["running"] is not True:
                 return {"ok": False, "error": item["lastError"] or "start_failed", "service": item}
             return {"ok": True, "service": item}
 
@@ -1769,14 +1814,29 @@ class ServiceManager:
                 raise KeyError(sid)
             self._stopping.add(sid)
             proc = self.procs.get(sid)
+            stop_error = ""
             if proc and proc.poll() is None:
-                proc.terminate()
-                proc.wait()
-            self.procs.pop(sid, None)
+                try:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5.0)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=2.0)
+                except Exception as exc:
+                    stop_error = f"failed to stop managed process: {type(exc).__name__}: {exc}"
+            if proc is None or proc.poll() is not None:
+                self.procs.pop(sid, None)
             self._stopping.discard(sid)
-            item = self._managed_state(sid)
-            self._notify(sid)
-            return {"ok": True, "service": item}
+            item = self._managed_state(sid, err=stop_error)
+            self._notify(sid, err=stop_error)
+            if item.get("external") is True:
+                return {"ok": False, "error": "not_owned", "service": item}
+            return {
+                "ok": not stop_error,
+                "error": "stop_failed" if stop_error else "",
+                "service": item,
+            }
 
     def read_logs(self, sid: str, tail: int = 200) -> dict:
         if sid == BRIDGE_ID:

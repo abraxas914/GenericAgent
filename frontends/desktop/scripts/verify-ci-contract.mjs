@@ -757,6 +757,7 @@ for (const relativePath of requiredFiles) {
 
 const realPackageJourney = readText('e2e/package/real_package_journey.py');
 const desktopBridge = readText('../desktop_bridge.py');
+const conductorSource = readText('../conductor.py');
 function nativePackageVersionContract(source) {
   return source.includes('plistlib.load(stream)')
     && source.includes('"CFBundleShortVersionString": info.get("CFBundleShortVersionString")')
@@ -789,6 +790,109 @@ for (const [label, mutation] of [
   )],
 ]) {
   check(!nativePackageVersionContract(mutation), `native package version contract rejects deleting ${label}`);
+}
+
+function managedServiceOwnershipContract(bridgeSource) {
+  return bridgeSource.includes('owned = proc is not None and proc.poll() is None')
+    && bridgeSource.includes('        running = owned\n')
+    && bridgeSource.includes('"owned": owned')
+    && bridgeSource.includes('"external": external')
+    && bridgeSource.includes('"portConflict": external')
+    && bridgeSource.includes('if self._state(sid).get("owned") is True')
+    && bridgeSource.includes('if catalog_port and _port_alive(catalog_port):')
+    && bridgeSource.includes('return {"ok": False, "error": "port_conflict", "service": item}')
+    && bridgeSource.includes('return {"ok": False, "error": "not_owned", "service": item}')
+    && bridgeSource.includes('proc.wait(timeout=5.0)')
+    && bridgeSource.includes('proc.wait(timeout=2.0)');
+}
+check(
+  managedServiceOwnershipContract(desktopBridge),
+  'managed service state and lifecycle are based only on the bridge-owned child process',
+);
+for (const [label, mutation] of [
+  ['owned running predicate', desktopBridge.replace('running = owned', 'running = owned or external')],
+  ['maintenance owned-process predicate', desktopBridge.replace(
+    'if self._state(sid).get("owned") is True',
+    'if self._state(sid).get("running")',
+  )],
+  ['external-listener identity', desktopBridge.replace('"external": external', '"external": False')],
+  ['pre-spawn port-conflict refusal', desktopBridge.replace(
+    'if catalog_port and _port_alive(catalog_port):',
+    'if False:',
+  )],
+  ['unowned stop refusal', desktopBridge.replace(
+    'return {"ok": False, "error": "not_owned", "service": item}',
+    'return {"ok": True, "service": item}',
+  )],
+  ['bounded graceful stop', desktopBridge.replace('proc.wait(timeout=5.0)', 'proc.wait()')],
+]) {
+  check(
+    !managedServiceOwnershipContract(mutation),
+    `managed service ownership contract rejects deleting ${label}`,
+  );
+}
+
+function isolatedConductorPortContract(bridgeSource, conductor, journeySource) {
+  return bridgeSource.includes('E2E_CONDUCTOR_PORT_ENV = "GA_DESKTOP_E2E_CONDUCTOR_PORT"')
+    && bridgeSource.includes('if not os.environ.get(E2E_REPORT_DIR_ENV):')
+    && bridgeSource.includes('"--port",')
+    && bridgeSource.includes('str(conductor_port),')
+    && bridgeSource.includes('"port": conductor_port')
+    && conductor.includes('E2E_CONDUCTOR_PORT_ENV = "GA_DESKTOP_E2E_CONDUCTOR_PORT"')
+    && conductor.includes('if not os.environ.get(E2E_REPORT_DIR_ENV):')
+    && conductor.includes('parser.add_argument("--port", type=_parse_conductor_port, default=PORT)')
+    && conductor.includes('PORT = args.port')
+    && journeySource.includes('env[E2E_CONDUCTOR_PORT_ENV] = str(self.conductor_port)')
+    && journeySource.includes('{BRIDGE_PORT, DEFAULT_BRIDGE_PORT, DEFAULT_CONDUCTOR_PORT}')
+    && journeySource.includes('state.get("owned") is not True')
+    && journeySource.includes('state.get("external") is not False')
+    && journeySource.includes('state.get("port") != expected_port')
+    && journeySource.includes('port_is_listening is not True')
+    && journeySource.includes('not loopback_port_is_free(self.conductor_port)')
+    && journeySource.includes('self.report["pids"][-1]["conductor"] = conductor["pid"]')
+    && journeySource.includes('self.report["checks"]["finalConductorPortFree"] = loopback_port_is_free(')
+    && journeySource.includes('"defaultConductorPortPreserved"');
+}
+check(
+  isolatedConductorPortContract(desktopBridge, conductorSource, realPackageJourney),
+  'real-package evidence uses one E2E-scoped conductor port and proves exact child ownership',
+);
+for (const [label, bridgeMutation = desktopBridge, conductorMutation = conductorSource, journeyMutation = realPackageJourney] of [
+  ['bridge E2E scope', desktopBridge.replace(
+    'if not os.environ.get(E2E_REPORT_DIR_ENV):',
+    'if False:',
+  )],
+  ['bridge explicit child port', desktopBridge.replace('str(conductor_port),', '"8900",')],
+  ['conductor E2E scope', desktopBridge, conductorSource.replace(
+    'if not os.environ.get(E2E_REPORT_DIR_ENV):',
+    'if False:',
+  )],
+  ['conductor effective global port', desktopBridge, conductorSource.replace('PORT = args.port', 'PORT = DEFAULT_PORT')],
+  ['journey port injection', desktopBridge, conductorSource, realPackageJourney.replace(
+    'env[E2E_CONDUCTOR_PORT_ENV] = str(self.conductor_port)',
+    'env[E2E_CONDUCTOR_PORT_ENV] = "8900"',
+  )],
+  ['journey default bridge-port exclusion', desktopBridge, conductorSource, realPackageJourney.replace(
+    '{BRIDGE_PORT, DEFAULT_BRIDGE_PORT, DEFAULT_CONDUCTOR_PORT}',
+    '{BRIDGE_PORT, DEFAULT_CONDUCTOR_PORT}',
+  )],
+  ['journey owned-child assertion', desktopBridge, conductorSource, realPackageJourney.replace(
+    'state.get("owned") is not True',
+    'False',
+  )],
+  ['journey actual-listener assertion', desktopBridge, conductorSource, realPackageJourney.replace(
+    'port_is_listening is not True',
+    'False',
+  )],
+  ['journey isolated-port cleanup', desktopBridge, conductorSource, realPackageJourney.replace(
+    'self.report["checks"]["finalConductorPortFree"] = loopback_port_is_free(',
+    'self.report["checks"]["ignoredConductorPortFree"] = loopback_port_is_free(',
+  )],
+]) {
+  check(
+    !isolatedConductorPortContract(bridgeMutation, conductorMutation, journeyMutation),
+    `isolated conductor port contract rejects deleting ${label}`,
+  );
 }
 
 function packageImportIdleBarrierContract(journeySource, bridgeSource) {

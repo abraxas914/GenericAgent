@@ -24,17 +24,47 @@ if ROOT not in sys.path: sys.path.insert(0, ROOT)
 from agentmain import GenericAgent
 
 HOST = "127.0.0.1"
-PORT = 8900
+DEFAULT_PORT = 8900
+E2E_CONDUCTOR_PORT_ENV = "GA_DESKTOP_E2E_CONDUCTOR_PORT"
+E2E_REPORT_DIR_ENV = "GA_DESKTOP_E2E_REPORT_DIR"
+
+
+def _parse_conductor_port(value: Any) -> int:
+    raw = str(value).strip()
+    if not raw.isascii() or not raw.isdigit():
+        raise argparse.ArgumentTypeError("conductor port must be an integer between 1 and 65535")
+    port = int(raw)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("conductor port must be an integer between 1 and 65535")
+    return port
+
+
+def _default_conductor_port() -> int:
+    """Keep production on :8900; only the isolated package journey may override it.
+
+    The renderer and production CSP intentionally target :8900.  Treating this as a
+    general runtime setting would make the backend claim configurability the renderer
+    cannot honor, so the override is gated by the existing package-evidence marker.
+    """
+    if not os.environ.get(E2E_REPORT_DIR_ENV):
+        return DEFAULT_PORT
+    raw = os.environ.get(E2E_CONDUCTOR_PORT_ENV)
+    return DEFAULT_PORT if raw is None else _parse_conductor_port(raw)
+
+
+PORT = _default_conductor_port()
 HTML_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "conductor.html")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--host", default=HOST)
-parser.add_argument("--port", type=int, default=PORT)
+parser.add_argument("--port", type=_parse_conductor_port, default=PORT)
 parser.add_argument("--key")
 parser.add_argument("--no-browser", action="store_true")
 args = parser.parse_args()
 if args.host not in ("127.0.0.1", "localhost", "::1") and not args.key:
     parser.error("--key is required for non-loopback listening")
+HOST = args.host
+PORT = args.port
 
 
 def _settings_doc() -> dict:

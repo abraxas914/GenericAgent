@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import importlib.util
+import argparse
+import os
 import queue
 import sys
 import threading
@@ -90,6 +92,26 @@ def test_out_of_range_config_falls_back_without_modulo(monkeypatch):
     assert agent.next_llm_calls == [1]
     assert state["effective"] == 1
     assert state["fallbackReason"] == "invalid_configured"
+
+
+def test_conductor_default_port_override_is_e2e_scoped(monkeypatch):
+    monkeypatch.delenv(conductor.E2E_REPORT_DIR_ENV, raising=False)
+    monkeypatch.setenv(conductor.E2E_CONDUCTOR_PORT_ENV, "29890")
+    assert conductor._default_conductor_port() == 8900
+
+    monkeypatch.setenv(conductor.E2E_REPORT_DIR_ENV, "/tmp/package-evidence")
+    assert conductor._default_conductor_port() == 29890
+
+
+@pytest.mark.parametrize("value", ["1", "8900", "65535"])
+def test_conductor_port_parser_accepts_full_valid_range(value):
+    assert conductor._parse_conductor_port(value) == int(value)
+
+
+@pytest.mark.parametrize("value", ["", "0", "65536", "2.5", "-1", "１２３４"])
+def test_conductor_port_parser_rejects_invalid_values(value):
+    with pytest.raises(argparse.ArgumentTypeError, match="between 1 and 65535"):
+        conductor._parse_conductor_port(value)
 
 
 def test_unusable_configured_client_falls_back_to_ui_default(monkeypatch):

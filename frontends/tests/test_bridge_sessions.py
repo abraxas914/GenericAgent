@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import socket
 import sys
 import tempfile
 import threading
@@ -1078,6 +1079,209 @@ class TestMaintenanceGate:
         assert state["running"] is False
         assert "memMb" in state
         assert "cpuPct" in state
+
+
+class TestManagedServiceOwnership:
+    @staticmethod
+    def service_manager(tmp_path: Path, port: int = 8900) -> ServiceManager:
+        service_manager = ServiceManager.__new__(ServiceManager)
+        service_manager.lock = threading.RLock()
+        service_manager.ga_root = tmp_path
+        service_manager.procs = {}
+        service_manager.buffers = {}
+        service_manager._emit = lambda _event: None
+        service_manager._im_catalog = {}
+        service_manager._catalog = {
+            "frontends/conductor.py": {
+                "id": "frontends/conductor.py",
+                "cmd": ["python", "conductor.py", "--no-browser", "--port", str(port)],
+                "port": port,
+            }
+        }
+        service_manager._stopping = set()
+        return service_manager
+
+    def test_foreign_listener_is_external_not_owned_or_running(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        service_manager = self.service_manager(tmp_path)
+        monkeypatch.setattr(_mod, "_port_alive", lambda port: port == 8900)
+
+        state = service_manager.list_panel_state()[1]
+
+        assert state == {
+            **state,
+            "id": "frontends/conductor.py",
+            "status": "error",
+            "running": False,
+            "owned": False,
+            "external": True,
+            "portConflict": True,
+            "port": 8900,
+            "pid": None,
+            "errorKey": "err.portBusy",
+        }
+        assert service_manager.running_managed_ids() == []
+
+    def test_foreign_listener_prevents_spawn_and_stop_never_touches_it(
+        self,
+        manager: AgentManager,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        service_manager = self.service_manager(tmp_path)
+        spawn_calls: list[object] = []
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod, "_port_alive", lambda port: port == 8900)
+        monkeypatch.setattr(service_manager, "_is_configured", lambda _sid: True)
+        monkeypatch.setattr(
+            _mod.subprocess,
+            "Popen",
+            lambda *_args, **_kwargs: spawn_calls.append(object()),
+        )
+
+        started = service_manager.start_service("frontends/conductor.py")
+        stopped = service_manager.stop_service("frontends/conductor.py")
+
+        assert started["ok"] is False
+        assert started["error"] == "port_conflict"
+        assert started["service"]["status"] == "error"
+        assert stopped["ok"] is False
+        assert stopped["error"] == "not_owned"
+        assert stopped["service"]["status"] == "error"
+        assert spawn_calls == []
+        assert service_manager.procs == {}
+
+    def test_dead_owned_child_with_foreign_port_is_port_conflict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        class DeadProcess:
+            pid = 41001
+            returncode = 1
+
+            @staticmethod
+            def poll():
+                return 1
+
+        service_manager = self.service_manager(tmp_path)
+        service_manager.procs["frontends/conductor.py"] = DeadProcess()
+        monkeypatch.setattr(_mod, "_port_alive", lambda _port: True)
+
+        state = service_manager.list_panel_state()[1]
+
+        assert state["status"] == "error"
+        assert state["running"] is False
+        assert state["owned"] is False
+        assert state["external"] is True
+        assert state["pid"] is None
+        assert service_manager.running_managed_ids() == []
+
+    def test_stop_terminates_only_the_tracked_owned_process_with_a_bound(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        class OwnedProcess:
+            pid = 41002
+            returncode = None
+            terminate_calls = 0
+            kill_calls = 0
+            waits: list[float | None] = []
+
+            def poll(self):
+                return self.returncode
+
+            def terminate(self):
+                self.terminate_calls += 1
+
+            def wait(self, timeout=None):
+                self.waits.append(timeout)
+                if len(self.waits) == 1:
+                    raise _mod.subprocess.TimeoutExpired("conductor", timeout)
+                self.returncode = -9
+                return self.returncode
+
+            def kill(self):
+                self.kill_calls += 1
+
+        service_manager = self.service_manager(tmp_path, 29890)
+        owned = OwnedProcess()
+        service_manager.procs["frontends/conductor.py"] = owned
+        monkeypatch.setattr(
+            _mod,
+            "_port_alive",
+            lambda _port: owned.poll() is None,
+        )
+
+        before = service_manager.list_panel_state()[1]
+        result = service_manager.stop_service("frontends/conductor.py")
+
+        assert before["status"] == "running"
+        assert before["running"] is True
+        assert before["owned"] is True
+        assert before["external"] is False
+        assert before["pid"] == owned.pid
+        assert result["ok"] is True
+        assert result["service"]["status"] == "offline"
+        assert owned.terminate_calls == 1
+        assert owned.kill_calls == 1
+        assert owned.waits == [5.0, 2.0]
+        assert service_manager.procs == {}
+
+    def test_real_foreign_socket_survives_panel_start_and_stop(
+        self,
+        manager: AgentManager,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as foreign:
+            foreign.bind(("127.0.0.1", 0))
+            foreign.listen()
+            port = int(foreign.getsockname()[1])
+            service_manager = self.service_manager(tmp_path, port)
+            monkeypatch.setattr(_mod, "manager", manager)
+            monkeypatch.setattr(service_manager, "_is_configured", lambda _sid: True)
+            monkeypatch.setattr(
+                _mod.subprocess,
+                "Popen",
+                lambda *_args, **_kwargs: pytest.fail("foreign listener must prevent spawn"),
+            )
+
+            assert service_manager.list_panel_state()[1]["status"] == "error"
+            assert service_manager.start_service("frontends/conductor.py")["error"] == "port_conflict"
+            stopped = service_manager.stop_service("frontends/conductor.py")
+            assert stopped["ok"] is False
+            assert stopped["error"] == "not_owned"
+            assert stopped["service"]["status"] == "error"
+            assert foreign.getsockname()[1] == port
+
+
+class TestConductorPortIsolation:
+    def test_production_ignores_e2e_port_without_report_marker(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv(_mod.E2E_REPORT_DIR_ENV, raising=False)
+        monkeypatch.setenv(_mod.E2E_CONDUCTOR_PORT_ENV, "29890")
+        assert _mod._configured_conductor_port() == 8900
+
+    def test_e2e_catalog_and_explicit_child_argv_share_the_validated_port(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv(_mod.E2E_REPORT_DIR_ENV, str(tmp_path / "report"))
+        monkeypatch.setenv(_mod.E2E_CONDUCTOR_PORT_ENV, "29890")
+
+        services = _mod.discover_extra_services(tmp_path)
+        conductor = next(item for item in services if item["id"] == "frontends/conductor.py")
+
+        assert conductor["port"] == 29890
+        assert conductor["cmd"][-2:] == ["--port", "29890"]
+
+    @pytest.mark.parametrize("value", ["", "0", "65536", "2.5", "-1", "１２３４"])
+    def test_invalid_e2e_conductor_port_fails_closed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str
+    ):
+        monkeypatch.setenv(_mod.E2E_REPORT_DIR_ENV, str(tmp_path / "report"))
+        monkeypatch.setenv(_mod.E2E_CONDUCTOR_PORT_ENV, value)
+        with pytest.raises(RuntimeError, match="between 1 and 65535"):
+            _mod._configured_conductor_port()
 
 
 class TestCanonicalSessionRestart:

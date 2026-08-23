@@ -34,6 +34,20 @@ evidence = load_module(
 
 def complete_report(platform: str = "linux"):
     checks = {name: True for name in evidence.COMMON_CHECKS}
+    isolated_port = 29890
+    ownership = {
+        scenario: owned_conductor(port=isolated_port, pid=44120 + index)
+        for index, scenario in enumerate(sorted(evidence.SUCCESSFUL_APPLICATION_SCENARIOS))
+    }
+    checks["isolatedConductorOwnership"] = ownership
+    checks["ownedProcessStops"] = {
+        scenario: {
+            "app": 45120 + index * 3,
+            "bridge": 45121 + index * 3,
+            "conductor": ownership[scenario]["pid"],
+        }
+        for index, scenario in enumerate(sorted(evidence.SUCCESSFUL_APPLICATION_SCENARIOS))
+    }
     checks["portRecovery"] = "release-then-production-restart"
     if platform == "macos":
         checks["macAppImmutable"] = True
@@ -52,6 +66,7 @@ def complete_report(platform: str = "linux"):
         "expectedCommit": "abc1234",
         "releaseVersion": "0.2.0",
         "artifact": {"sha256": "f" * 64},
+        "environment": {"isolatedConductorPort": isolated_port},
         "success": True,
         "checks": checks,
         "bootstrap": bootstrap,
@@ -72,6 +87,17 @@ def test_candidate_report_contract_rejects_incomplete_manual_and_commit_evidence
     failures = evidence.assert_report("linux", report, "abc1234")
     assert any("commit" in failure for failure in failures)
     assert any("manual checklist" in failure for failure in failures)
+
+
+def test_candidate_report_contract_rejects_partial_or_unowned_conductor_evidence():
+    report = complete_report()
+    report["checks"]["isolatedConductorOwnership"].pop("relocated")
+    report["checks"]["ownedProcessStops"]["warm-restart"].pop("conductor")
+
+    failures = evidence.assert_report("linux", report, "abc1234")
+
+    assert any("ownership does not cover every successful launch" in item for item in failures)
+    assert any("invalid owned process stop evidence for warm-restart" in item for item in failures)
 
 
 def test_stdlib_fake_model_emits_sse_and_redacts_auth_in_transcript():
@@ -273,6 +299,139 @@ def test_package_import_rejects_inexact_maintenance_conflicts(status, payload):
 
 def stopped_panel(*services):
     return {"services": list(services)}
+
+
+def owned_conductor(port=29890, pid=44123):
+    return {
+        "id": "frontends/conductor.py",
+        "status": "running",
+        "running": True,
+        "owned": True,
+        "external": False,
+        "port": port,
+        "pid": pid,
+    }
+
+
+def test_package_journey_requires_exact_owned_isolated_conductor_state():
+    state = owned_conductor()
+    payload = stopped_panel(state)
+    assert journey.verified_owned_conductor(payload, 29890, True) is state
+    assert journey.verified_owned_conductor(payload, 29890, False) is None
+
+    mutations = [
+        {**state, "status": "error"},
+        {**state, "running": False},
+        {**state, "owned": False},
+        {**state, "external": True},
+        {**state, "port": 8900},
+        {**state, "pid": None},
+    ]
+    for mutation in mutations:
+        assert journey.verified_owned_conductor(stopped_panel(mutation), 29890, True) is None
+    assert journey.verified_owned_conductor(stopped_panel(state, state), 29890, True) is None
+
+
+def test_package_start_injects_only_the_isolated_e2e_conductor_port(tmp_path, monkeypatch):
+    candidate = object.__new__(journey.Journey)
+    candidate.process = None
+    candidate.package_root = tmp_path
+    candidate.application = tmp_path / "GenericAgent"
+    candidate.report_dir = tmp_path / "reports"
+    candidate.conductor_port = 29890
+    candidate.process_log = None
+    candidate.report = {"pids": []}
+    captured = {}
+
+    class FakeProcess:
+        pid = 44120
+
+    def fake_popen(command, **kwargs):
+        captured["command"] = command
+        captured.update(kwargs)
+        return FakeProcess()
+
+    monkeypatch.setattr(journey, "loopback_port_is_free", lambda port: port == 29890)
+    monkeypatch.setattr(journey.subprocess, "Popen", fake_popen)
+
+    candidate.start_application("first-launch")
+    candidate.process_log.close()
+
+    assert captured["env"]["GA_DESKTOP_E2E_CONDUCTOR_PORT"] == "29890"
+    assert captured["env"]["GA_DESKTOP_E2E_REPORT_DIR"].endswith(
+        "bootstrap/first-launch"
+    )
+    assert candidate.report["pids"] == [{"scenario": "first-launch", "app": 44120}]
+
+
+def test_isolated_conductor_allocator_rejects_active_and_default_product_ports(monkeypatch):
+    candidates = iter([24170, 14168, 8900, 29890])
+
+    class FakeReservation:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def bind(self, _address):
+            return None
+
+        def getsockname(self):
+            return ("127.0.0.1", next(candidates))
+
+    monkeypatch.setattr(journey, "BRIDGE_PORT", 24170)
+    monkeypatch.setattr(journey.socket, "socket", lambda *_args, **_kwargs: FakeReservation())
+
+    assert journey.allocate_isolated_conductor_port() == 29890
+
+
+def test_every_successful_ready_snapshot_records_its_owned_conductor_pid(
+    tmp_path, monkeypatch
+):
+    candidate = object.__new__(journey.Journey)
+    candidate.args = SimpleNamespace(start_timeout=1, expected_commit="abc1234")
+    candidate.report_dir = tmp_path / "report"
+    candidate.external_root = tmp_path / "external"
+    candidate.runtime_root = tmp_path / "package" / "runtime"
+    candidate.conductor_port = 29890
+    candidate.report = {
+        "bootstrap": {},
+        "identities": {},
+        "pids": [{"scenario": "warm-restart", "app": 44120}],
+        "checks": {},
+    }
+    expected_app_dir = candidate.runtime_root / "app" / "frontends"
+    latest = candidate.scenario_dir("warm-restart") / "bootstrap-latest.json"
+    journey.write_json(latest, {"phase": "ready"})
+
+    def fake_request(_method, path, body=None, timeout=5.0):
+        del body, timeout
+        if path == "/services/identity":
+            return {
+                "ga_root": str(candidate.external_root),
+                "app_dir": str(expected_app_dir),
+                "pid": 44121,
+                "build_id": "desktop-abc1234",
+            }
+        if path == "/services/panel":
+            return stopped_panel(owned_conductor(pid=44122))
+        raise AssertionError(path)
+
+    monkeypatch.setattr(journey, "request_json", fake_request)
+    monkeypatch.setattr(
+        journey,
+        "loopback_port_is_free",
+        lambda port: False if port == 29890 else True,
+    )
+
+    candidate.wait_ready("warm-restart", candidate.external_root)
+
+    assert candidate.report["pids"][-1]["bridge"] == 44121
+    assert candidate.report["pids"][-1]["conductor"] == 44122
+    assert candidate.report["checks"]["isolatedConductorOwnership"] == {
+        "warm-restart": owned_conductor(pid=44122)
+    }
 
 
 def test_package_import_waits_until_every_reported_extra_is_offline():

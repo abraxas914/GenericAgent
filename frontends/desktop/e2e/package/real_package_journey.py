@@ -36,10 +36,13 @@ from typing import Any
 
 
 BRIDGE_HOST = "127.0.0.1"
-BRIDGE_PORT = 14168
+DEFAULT_BRIDGE_PORT = 14168
+BRIDGE_PORT = DEFAULT_BRIDGE_PORT
 BRIDGE_BASE = f"http://{BRIDGE_HOST}:{BRIDGE_PORT}"
 RELEASE_VERSION = "0.2.0"
 CONDUCTOR_SERVICE_ID = "frontends/conductor.py"
+DEFAULT_CONDUCTOR_PORT = 8900
+E2E_CONDUCTOR_PORT_ENV = "GA_DESKTOP_E2E_CONDUCTOR_PORT"
 
 
 class JourneyFailure(RuntimeError):
@@ -209,6 +212,40 @@ def verified_stopped_extras_panel(payload: Any, expected_ids: list[str]) -> dict
     return payload
 
 
+def verified_owned_conductor(
+    payload: Any,
+    expected_port: int,
+    port_is_listening: bool,
+) -> dict[str, Any] | None:
+    """Return the one live conductor owned by this bridge, never an external listener."""
+    if port_is_listening is not True or not isinstance(payload, dict):
+        return None
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return None
+    matches = [
+        item
+        for item in services
+        if isinstance(item, dict) and item.get("id") == CONDUCTOR_SERVICE_ID
+    ]
+    if len(matches) != 1:
+        return None
+    state = matches[0]
+    pid = state.get("pid")
+    if (
+        state.get("status") != "running"
+        or state.get("running") is not True
+        or state.get("owned") is not True
+        or state.get("external") is not False
+        or state.get("port") != expected_port
+        or not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid <= 0
+    ):
+        return None
+    return state
+
+
 def wait_until(label: str, predicate, timeout: float, interval: float = 0.25) -> Any:
     deadline = time.monotonic() + timeout
     last_error: BaseException | None = None
@@ -224,10 +261,24 @@ def wait_until(label: str, predicate, timeout: float, interval: float = 0.25) ->
     raise JourneyFailure(f"timed out waiting for {label}{suffix}")
 
 
-def port_is_free() -> bool:
+def loopback_port_is_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.25)
-        return probe.connect_ex((BRIDGE_HOST, BRIDGE_PORT)) != 0
+        return probe.connect_ex((BRIDGE_HOST, port)) != 0
+
+
+def port_is_free() -> bool:
+    return loopback_port_is_free(BRIDGE_PORT)
+
+
+def allocate_isolated_conductor_port() -> int:
+    for _ in range(20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind((BRIDGE_HOST, 0))
+            port = int(reservation.getsockname()[1])
+        if port not in {BRIDGE_PORT, DEFAULT_BRIDGE_PORT, DEFAULT_CONDUCTOR_PORT}:
+            return port
+    raise JourneyFailure("could not allocate an isolated conductor port")
 
 
 def pid_is_alive(pid: int) -> bool:
@@ -388,6 +439,8 @@ class Journey:
         self.settings_existed = self.settings_path.exists()
         self.settings_bytes = self.settings_path.read_bytes() if self.settings_existed else b""
         self.settings_mode = self.settings_path.stat().st_mode if self.settings_existed else None
+        self.conductor_port = allocate_isolated_conductor_port()
+        self.default_conductor_port_initially_free = loopback_port_is_free(DEFAULT_CONDUCTOR_PORT)
         self.fake = FakeOpenAI()
         self.external_root = self.work_dir / "external compatible core"
         self.stale_root = self.work_dir / "external compatible core.removed"
@@ -409,6 +462,8 @@ class Journey:
                 "version": platform.version(),
                 "architecture": platform.machine(),
                 "python": platform.python_version(),
+                "isolatedConductorPort": self.conductor_port,
+                "defaultConductorPortInitiallyFree": self.default_conductor_port_initially_free,
             },
             "paths": {"before": str(self.package_root)},
             "checks": {},
@@ -487,12 +542,17 @@ class Journey:
     def start_application(self, scenario: str) -> None:
         if self.process is not None:
             raise JourneyFailure("application is already running")
+        if not loopback_port_is_free(self.conductor_port):
+            raise JourneyFailure(
+                f"isolated conductor port {self.conductor_port} is occupied before {scenario}"
+            )
         report = self.scenario_dir(scenario)
         log_path = self.report_dir / "logs" / f"{scenario}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self.process_log = log_path.open("wb")
         env = os.environ.copy()
         env["GA_DESKTOP_E2E_REPORT_DIR"] = str(report)
+        env[E2E_CONDUCTOR_PORT_ENV] = str(self.conductor_port)
         self.process = subprocess.Popen(
             [str(self.application)],
             cwd=str(self.package_root),
@@ -503,6 +563,7 @@ class Journey:
         self.report["pids"].append({"scenario": scenario, "app": self.process.pid})
 
     def stop_application(self) -> None:
+        process_record = self.report["pids"][-1] if self.report["pids"] else None
         with contextlib.suppress(Exception):
             request_json("POST", "/services/bridge/exit", {}, timeout=2)
         if self.process is not None:
@@ -517,6 +578,27 @@ class Journey:
             self.process_log.close()
             self.process_log = None
         wait_until("bridge port cleanup", port_is_free, 20)
+        wait_until(
+            "isolated conductor port cleanup",
+            lambda: loopback_port_is_free(self.conductor_port),
+            20,
+        )
+        if process_record is not None:
+            owned = {
+                kind: int(pid)
+                for kind in ("app", "bridge", "conductor")
+                if isinstance((pid := process_record.get(kind)), int)
+                and not isinstance(pid, bool)
+                and pid > 0
+            }
+            wait_until(
+                f"{process_record.get('scenario', 'application')} owned processes to exit",
+                lambda: all(not pid_is_alive(pid) for pid in owned.values()),
+                20,
+            )
+            self.report["checks"].setdefault("ownedProcessStops", {})[
+                str(process_record.get("scenario", "application"))
+            ] = owned
 
     def wait_ready(self, scenario: str, expected_root: Path | None) -> dict[str, Any]:
         latest = self.scenario_dir(scenario) / "bootstrap-latest.json"
@@ -552,6 +634,19 @@ class Journey:
         self.report["bootstrap"][scenario] = snapshot
         self.report["identities"][scenario] = identity
         self.report["pids"][-1]["bridge"] = identity["pid"]
+        conductor = wait_until(
+            f"{scenario} owned isolated conductor",
+            lambda: verified_owned_conductor(
+                request_json("GET", "/services/panel", timeout=5),
+                self.conductor_port,
+                not loopback_port_is_free(self.conductor_port),
+            ),
+            30,
+            0.25,
+        )
+        self.report["pids"][-1]["conductor"] = conductor["pid"]
+        ownership = self.report["checks"].setdefault("isolatedConductorOwnership", {})
+        ownership[scenario] = conductor
         return identity
 
     def run_chat_upload_memory(self) -> None:
@@ -807,10 +902,17 @@ class Journey:
             else not self.settings_path.exists()
         )
         self.report["checks"]["finalPortFree"] = port_is_free()
+        self.report["checks"]["finalConductorPortFree"] = loopback_port_is_free(
+            self.conductor_port
+        )
+        self.report["checks"]["defaultConductorPortPreserved"] = (
+            loopback_port_is_free(DEFAULT_CONDUCTOR_PORT)
+            == self.default_conductor_port_initially_free
+        )
         owned_pids = {
             int(pid)
             for item in self.report["pids"]
-            for pid in (item.get("app"), item.get("bridge"))
+            for pid in (item.get("app"), item.get("bridge"), item.get("conductor"))
             if isinstance(pid, int) and pid > 0
         }
         deadline = time.monotonic() + 10
@@ -916,7 +1018,12 @@ def main() -> int:
     finally:
         with contextlib.suppress(BaseException):
             journey.cleanup()
-        journey.save_report(success and journey.report["checks"].get("finalPortFree", False))
+        journey.save_report(
+            success
+            and journey.report["checks"].get("finalPortFree", False)
+            and journey.report["checks"].get("finalConductorPortFree", False)
+            and journey.report["checks"].get("defaultConductorPortPreserved", False)
+        )
         print(journey.report_dir / "real-package-report.json")
 
 

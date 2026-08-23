@@ -44,12 +44,20 @@ def test_bridge_discovers_package_conductor_but_external_scheduler(tmp_path):
     discover = _load_function(
         BRIDGE_SOURCE,
         "discover_extra_services",
-        {"Path": Path, "List": list, "APP_DIR": bundle_frontends, "sys": sys},
+        {
+            "Path": Path,
+            "List": list,
+            "APP_DIR": bundle_frontends,
+            "sys": sys,
+            "_configured_conductor_port": lambda: 29890,
+        },
     )
 
     catalog = {item["id"]: item for item in discover(external)}
 
     assert catalog["frontends/conductor.py"]["cmd"][1] == str(bundled_conductor)
+    assert catalog["frontends/conductor.py"]["cmd"][-2:] == ["--port", "29890"]
+    assert catalog["frontends/conductor.py"]["port"] == 29890
     assert catalog["reflect/scheduler.py"]["cmd"][-1] == "reflect/scheduler.py"
 
 
