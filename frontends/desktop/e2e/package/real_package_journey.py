@@ -39,6 +39,7 @@ BRIDGE_HOST = "127.0.0.1"
 BRIDGE_PORT = 14168
 BRIDGE_BASE = f"http://{BRIDGE_HOST}:{BRIDGE_PORT}"
 RELEASE_VERSION = "0.2.0"
+CONDUCTOR_SERVICE_ID = "frontends/conductor.py"
 
 
 class JourneyFailure(RuntimeError):
@@ -108,6 +109,104 @@ def request_json(method: str, path: str, body: Any = None, timeout: float = 5.0)
         request.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def request_json_with_status(
+    method: str,
+    path: str,
+    body: Any = None,
+    timeout: float = 5.0,
+) -> tuple[int, Any]:
+    """Return an intentional HTTP error as JSON without treating it as a retry signal."""
+    payload = None if body is None else json.dumps(body).encode("utf-8")
+    request = urllib.request.Request(f"{BRIDGE_BASE}{path}", data=payload, method=method)
+    if payload is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = int(response.status)
+            raw = response.read()
+    except urllib.error.HTTPError as error:
+        status = int(error.code)
+        raw = error.read()
+        error.close()
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise JourneyFailure(f"{method} {path} returned HTTP {status} without valid JSON") from error
+    return status, value
+
+
+def completed_assistant_reply(snapshot: Any) -> str | None:
+    if not isinstance(snapshot, dict):
+        raise JourneyFailure("chat messages response is not an object")
+    status = snapshot.get("status")
+    if status in {"error", "cancelled"}:
+        detail = snapshot.get("lastError") or status
+        raise JourneyFailure(f"chat entered terminal state {status}: {detail}")
+    messages = snapshot.get("messages")
+    if not isinstance(messages, list):
+        raise JourneyFailure("chat messages response has no messages list")
+    reply = next(
+        (
+            content
+            for message in reversed(messages)
+            if isinstance(message, dict)
+            and message.get("role") == "assistant"
+            and isinstance((content := message.get("content")), str)
+            and "Harness reply" in content
+        ),
+        None,
+    )
+    if reply is None:
+        return None
+    if status != "idle" or snapshot.get("hasUnfinishedWork") is not False:
+        return None
+    return reply
+
+
+def validate_import_maintenance_conflict(status: int, payload: Any) -> list[str]:
+    if status != 409 or not isinstance(payload, dict):
+        raise JourneyFailure(f"initial memory import was not the expected HTTP 409: {status} {payload}")
+    if payload.get("ok") is not False or payload.get("code") != "maintenance_conflict":
+        raise JourneyFailure(f"initial memory import returned the wrong conflict: {payload}")
+    if payload.get("runningSessions") != []:
+        raise JourneyFailure(f"memory import still saw unfinished Desktop sessions: {payload}")
+    running_extras = payload.get("runningExtras")
+    if (
+        not isinstance(running_extras, list)
+        or not running_extras
+        or any(not isinstance(item, str) or not item for item in running_extras)
+        or len(running_extras) != len(set(running_extras))
+        or CONDUCTOR_SERVICE_ID not in running_extras
+    ):
+        raise JourneyFailure(f"memory import did not identify the running conductor: {payload}")
+    return running_extras
+
+
+def verified_stopped_extras_panel(payload: Any, expected_ids: list[str]) -> dict[str, Any] | None:
+    if not isinstance(payload, dict) or not expected_ids:
+        return None
+    services = payload.get("services")
+    if not isinstance(services, list):
+        return None
+    states: dict[str, dict[str, Any]] = {}
+    for item in services:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        service_id = item["id"]
+        if service_id in states:
+            return None
+        states[service_id] = item
+    for service_id in expected_ids:
+        state = states.get(service_id)
+        if (
+            state is None
+            or state.get("running") is not False
+            or state.get("status") != "offline"
+        ):
+            return None
+    return payload
 
 
 def wait_until(label: str, predicate, timeout: float, interval: float = 0.25) -> Any:
@@ -481,12 +580,7 @@ class Journey:
 
         def assistant_reply() -> str | None:
             value = request_json("GET", f"/session/{sid}/messages?limit=20", timeout=3)
-            for message in reversed(value.get("messages", [])):
-                if message.get("role") == "assistant" and "Harness reply" in message.get("content", ""):
-                    return message["content"]
-            if value.get("status") == "error":
-                raise JourneyFailure(f"chat failed: {value.get('lastError')}")
-            return None
+            return completed_assistant_reply(value)
 
         wait_until("deterministic package chat reply", assistant_reply, 90, 0.5)
         if not self.fake.transcript:
@@ -521,6 +615,54 @@ class Journey:
                 "updated_at": time.time(),
             },
         )
+        imported_session_file = self.external_root / "temp" / "desktop_sessions" / f"{imported_sid}.json"
+        backup_parent = self.external_root / "temp"
+
+        def import_target_snapshot() -> dict[str, Any]:
+            files: dict[str, bytes] = {}
+            for data_root in (
+                destination_memory,
+                destination_responses,
+                self.external_root / "temp" / "desktop_sessions",
+            ):
+                if not data_root.exists():
+                    continue
+                for path in sorted(data_root.rglob("*")):
+                    if path.is_file() and not path.is_symlink():
+                        files[path.relative_to(self.external_root).as_posix()] = path.read_bytes()
+            return {
+                "files": files,
+                "importedSessionExists": imported_session_file.exists(),
+                "backupDirectories": sorted(
+                    path.name for path in backup_parent.glob("memory_import_backup_*")
+                ),
+            }
+
+        before_conflict = import_target_snapshot()
+        conflict_status, conflict_payload = request_json_with_status(
+            "POST",
+            "/memory/import",
+            {"sourceDir": str(source)},
+            timeout=20,
+        )
+        running_extras = validate_import_maintenance_conflict(conflict_status, conflict_payload)
+        if import_target_snapshot() != before_conflict:
+            raise JourneyFailure("rejected memory import changed target data")
+
+        stopped = request_json("POST", "/services/stop-extras", {}, timeout=20)
+        if not isinstance(stopped, dict) or stopped.get("ok") is not True:
+            raise JourneyFailure(f"managed extras stop request failed: {stopped}")
+
+        def stopped_extras_panel() -> dict[str, Any] | None:
+            panel = request_json("GET", "/services/panel", timeout=5)
+            return verified_stopped_extras_panel(panel, running_extras)
+
+        stopped_panel = wait_until(
+            "managed extras to stop before memory import",
+            stopped_extras_panel,
+            30,
+            0.25,
+        )
         result = request_json("POST", "/memory/import", {"sourceDir": str(source)}, timeout=20)
         required_fields = {
             "memoryCopied",
@@ -544,6 +686,12 @@ class Journey:
             {
                 "deterministicChat": True,
                 "uploadUnderExternalRoot": True,
+                "memoryImportMaintenanceGate": {
+                    "code": conflict_payload["code"],
+                    "runningSessions": conflict_payload["runningSessions"],
+                    "runningExtras": running_extras,
+                    "stoppedPanel": stopped_panel,
+                },
                 "memoryImport": result,
                 "fakeModelRequests": self.fake.transcript,
             }

@@ -756,6 +756,7 @@ for (const relativePath of requiredFiles) {
 }
 
 const realPackageJourney = readText('e2e/package/real_package_journey.py');
+const desktopBridge = readText('../desktop_bridge.py');
 function nativePackageVersionContract(source) {
   return source.includes('plistlib.load(stream)')
     && source.includes('"CFBundleShortVersionString": info.get("CFBundleShortVersionString")')
@@ -788,6 +789,83 @@ for (const [label, mutation] of [
   )],
 ]) {
   check(!nativePackageVersionContract(mutation), `native package version contract rejects deleting ${label}`);
+}
+
+function packageImportIdleBarrierContract(journeySource, bridgeSource) {
+  const conflictIndex = journeySource.indexOf('conflict_status, conflict_payload = request_json_with_status(');
+  const stopIndex = journeySource.indexOf('"/services/stop-extras"');
+  const panelIndex = journeySource.indexOf('verified_stopped_extras_panel(panel, running_extras)');
+  const successIndex = journeySource.indexOf('result = request_json("POST", "/memory/import"');
+  return bridgeSource.includes('"hasUnfinishedWork": self._session_has_unfinished_work(sess)')
+    && journeySource.includes('snapshot.get("hasUnfinishedWork") is not False')
+    && journeySource.includes('status != "idle"')
+    && journeySource.includes('status in {"error", "cancelled"}')
+    && journeySource.includes('payload.get("ok") is not False')
+    && journeySource.includes('payload.get("runningSessions") != []')
+    && journeySource.includes('CONDUCTOR_SERVICE_ID not in running_extras')
+    && journeySource.includes('if import_target_snapshot() != before_conflict')
+    && journeySource.includes('state.get("running") is not False')
+    && journeySource.includes('state.get("status") != "offline"')
+    && (journeySource.match(/result = request_json\("POST", "\/memory\/import"/g) ?? []).length === 1
+    && conflictIndex >= 0
+    && conflictIndex < stopIndex
+    && stopIndex < panelIndex
+    && panelIndex < successIndex;
+}
+check(
+  packageImportIdleBarrierContract(realPackageJourney, desktopBridge),
+  'real-package journey waits for exact session quiescence and verified extras shutdown before import',
+);
+for (const [label, journeyMutation, bridgeMutation = desktopBridge] of [
+  ['unfinished-work response field', realPackageJourney, desktopBridge.replace(
+    '"hasUnfinishedWork": self._session_has_unfinished_work(sess)',
+    '"hasUnfinishedWork": False',
+  )],
+  ['strict unfinished-work predicate', realPackageJourney.replace(
+    'snapshot.get("hasUnfinishedWork") is not False',
+    'not snapshot.get("hasUnfinishedWork")',
+  )],
+  ['idle session predicate', realPackageJourney.replace(
+    'status != "idle"',
+    'False',
+  )],
+  ['terminal cancelled state', realPackageJourney.replace(
+    'status in {"error", "cancelled"}',
+    'status == "error"',
+  )],
+  ['failed conflict payload', realPackageJourney.replace(
+    'payload.get("ok") is not False',
+    'False',
+  )],
+  ['running-session conflict assertion', realPackageJourney.replace(
+    'payload.get("runningSessions") != []',
+    'False',
+  )],
+  ['conductor conflict assertion', realPackageJourney.replace(
+    'CONDUCTOR_SERVICE_ID not in running_extras',
+    'False',
+  )],
+  ['rejected-import immutability check', realPackageJourney.replace(
+    'if import_target_snapshot() != before_conflict',
+    'if False',
+  )],
+  ['stop-extras request', realPackageJourney.replace(
+    '"/services/stop-extras"',
+    '"/services/panel"',
+  )],
+  ['stopped panel running flag', realPackageJourney.replace(
+    'state.get("running") is not False',
+    'False',
+  )],
+  ['offline panel state', realPackageJourney.replace(
+    'state.get("status") != "offline"',
+    'False',
+  )],
+]) {
+  check(
+    !packageImportIdleBarrierContract(journeyMutation, bridgeMutation),
+    `package import idle barrier rejects deleting ${label}`,
+  );
 }
 
 check(tauriConfig.build?.frontendDist === '../dist', 'Tauri packages the React dist directory');
