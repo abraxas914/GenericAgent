@@ -10,7 +10,7 @@ Desktop 2.0 始终执行发布包内的 `frontends/desktop_bridge.py` 与
 
 - `app_dir` 位于发布包的 `runtime/app/frontends`；
 - `ga_root` 等于当前有效外部核心；没有有效 override 时，Windows/Linux 等于包内
-  `runtime/app`，macOS `.app` 等于 Application Support 中的版本化可写副本；
+  `runtime/app`，macOS `.app` 等于 Application Support 中的稳定可写副本；
 - `build_id` 等于当前 Desktop 构建。
 
 `frontends/desktop/static/**` 属于 upstream Desktop v1，React v2 不读取、复制或校验其
@@ -29,8 +29,8 @@ Desktop 2.0 始终执行发布包内的 `frontends/desktop_bridge.py` 与
 
 清除 override 后异步重启包内 bridge，等待 identity 回到默认核心。Windows/Linux 默认核心
 是包内 `runtime/app`；macOS 为避免首启修改签名 `.app`，会在首次需要时原子复制到
-`~/Library/Application Support/GenericAgent/runtime/<version>/app` 并使用该可写副本。失败时
-恢复原 override 并重启原工作区。
+`~/Library/Application Support/GenericAgent/runtime/app` 并使用该可写副本；旧版
+`runtime/<version>/app` 会在稳定目录尚不存在时安全迁移。失败时恢复原 override 并重启原工作区。
 
 启动时若保存的 override 已被移动或删除，`valid_ga_source_override` 会忽略它，bridge
 自动回退包内 runtime；`get_ga_source` 对这种失效设置返回空字符串。

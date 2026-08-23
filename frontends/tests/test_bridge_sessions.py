@@ -83,6 +83,7 @@ def manager(tmp_ga_root: Path):
     mgr._retired_sessions = {}
     mgr._maintenance_token = None
     mgr._maintenance_kind = None
+    mgr._shutdown_requested = False
     mgr.active_session_id = None
     mgr._sessions_dir = tmp_ga_root / "temp" / "desktop_sessions"
     mgr._sessions_file = tmp_ga_root / "temp" / "desktop_sessions.json"
@@ -829,6 +830,65 @@ class TestMaintenanceGate:
         assert session.partial == {"content": "unfinished"}
         assert session.messages == before_messages
         assert session_path.read_bytes() == before_bytes
+
+    def test_accepted_exit_irreversibly_blocks_new_mutation_and_maintenance(
+        self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
+    ):
+        import asyncio
+
+        class Request:
+            remote = "127.0.0.1"
+
+        exit_calls: list[bool] = []
+        session = _make_session("sess-before-exit")
+        manager.sessions[session.id] = session
+        manager._persist_session(session, strict=True)
+        session_path = manager._session_file(session.id)
+        before_bytes = session_path.read_bytes()
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod, "_exit_bridge", lambda: exit_calls.append(True))
+
+        response = asyncio.run(_mod.bridge_exit_handler(Request()))
+
+        assert response.status == 200
+        assert exit_calls == [True]
+        assert manager._shutdown_requested is True
+        with pytest.raises(MaintenanceConflict) as maintenance_error:
+            manager.begin_maintenance("import", lambda: [])
+        assert maintenance_error.value.code == "shutdown_in_progress"
+        with pytest.raises(MaintenanceConflict) as mutation_error:
+            with manager.mutation():
+                session.title = "must not happen"
+                manager._persist_session(session, strict=True)
+        assert mutation_error.value.code == "shutdown_in_progress"
+        assert session.title == "Test"
+        assert session_path.read_bytes() == before_bytes
+
+    def test_active_maintenance_refuses_exit_with_409_and_keeps_bridge_alive(
+        self, manager: AgentManager, monkeypatch: pytest.MonkeyPatch
+    ):
+        import asyncio
+
+        class Request:
+            remote = "127.0.0.1"
+            headers: dict[str, str] = {}
+            method = "POST"
+
+        exit_calls: list[bool] = []
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(_mod, "_exit_bridge", lambda: exit_calls.append(True))
+        token = manager.begin_maintenance("import", lambda: [])
+        try:
+            response = asyncio.run(
+                _mod.cors_middleware(Request(), _mod.bridge_exit_handler)
+            )
+        finally:
+            manager.end_maintenance(token)
+
+        assert response.status == 409
+        assert json.loads(response.text)["code"] == "maintenance_conflict"
+        assert exit_calls == []
+        assert manager._shutdown_requested is False
 
     def test_import_failure_releases_gate(
         self, manager: AgentManager, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

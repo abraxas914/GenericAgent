@@ -487,6 +487,34 @@ for (const relative of [
   }
 }
 
+const windowsUninstallLauncher = fs.readFileSync(
+  path.join(PACKAGING_DIR, 'scripts', 'windows', 'uninstall.bat'),
+  'utf8',
+);
+if (windowsUninstallLauncher.includes('detach this bundle from shared settings')
+    && !windowsUninstallLauncher.includes('delete settings')) {
+  ok('Windows uninstall launcher accurately describes shared-settings preservation');
+} else {
+  bad('Windows uninstall launcher still claims shared settings are deleted');
+}
+
+const stableMacRuntime = '~/Library/Application Support/GenericAgent/runtime/app';
+const macJourneyReadme = fs.readFileSync(
+  path.join(DESKTOP_ROOT, 'e2e', 'macos', 'README.md'),
+  'utf8',
+);
+const localSourceSpec = fs.readFileSync(
+  path.join(DESKTOP_ROOT, 'spec', 'local-repo-connection.md'),
+  'utf8',
+);
+if (macJourneyReadme.includes(stableMacRuntime)
+    && localSourceSpec.includes(stableMacRuntime)
+    && !macJourneyReadme.includes('versioned writable runtime')) {
+  ok('macOS runtime documentation uses the stable writable root');
+} else {
+  bad('macOS runtime documentation still describes a versioned writable root');
+}
+
 if (packagedRuntimeBytecodeContract(releaseWorkflow)) {
   ok('all three package builders purge bytecode across each complete runtime');
 } else {

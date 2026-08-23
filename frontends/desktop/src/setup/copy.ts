@@ -20,6 +20,10 @@ const FAILURE_MESSAGES: Record<BootstrapFailureCode, Record<SetupLanguage, Failu
     zh: { title: '本地连接未能启动', description: '请选择可用的应用文件夹和 Python 环境后继续。' },
     en: { title: 'Local connection could not start', description: 'Choose a usable application folder and Python environment to continue.' },
   },
+  bridge_shutdown_refused: {
+    zh: { title: '本地连接暂时无法安全重启', description: '请等待当前操作完成后重试。' },
+    en: { title: 'Local connection cannot restart safely', description: 'Wait for the current operation to finish, then retry.' },
+  },
   port_conflict: {
     zh: { title: '本地连接被占用', description: '另一个应用正在使用本地连接。关闭相关应用后继续启动。' },
     en: { title: 'Local connection is in use', description: 'Another app is using the local connection. Close it, then continue startup.' },

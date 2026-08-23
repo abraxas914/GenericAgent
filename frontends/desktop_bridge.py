@@ -242,10 +242,12 @@ class MaintenanceConflict(RuntimeError):
         self,
         message: str,
         *,
+        code: str = "maintenance_conflict",
         running_sessions: Optional[List[str]] = None,
         running_extras: Optional[List[str]] = None,
     ):
         super().__init__(message)
+        self.code = code
         self.running_sessions = sorted(set(running_sessions or []))
         self.running_extras = sorted(set(running_extras or []))
 
@@ -253,7 +255,7 @@ class MaintenanceConflict(RuntimeError):
         return {
             "ok": False,
             "error": str(self),
-            "code": "maintenance_conflict",
+            "code": self.code,
             "runningSessions": self.running_sessions,
             "runningExtras": self.running_extras,
         }
@@ -298,6 +300,7 @@ class AgentManager:
         self._retired_sessions: Dict[str, Session] = {}
         self._maintenance_token: Optional[str] = None
         self._maintenance_kind: Optional[str] = None
+        self._shutdown_requested = False
         self.active_session_id: Optional[str] = None
         self._sessions_dir = Path(self.ga_root) / "temp" / "desktop_sessions"
         # Legacy monolithic store; migrated into _sessions_dir on first load, then retired.
@@ -353,6 +356,11 @@ class AgentManager:
         return sorted(set(running))
 
     def _assert_mutation_allowed_locked(self) -> None:
+        if getattr(self, "_shutdown_requested", False):
+            raise MaintenanceConflict(
+                "Desktop bridge shutdown is in progress",
+                code="shutdown_in_progress",
+            )
         if getattr(self, "_maintenance_token", None) is not None:
             raise MaintenanceConflict(
                 f"data {getattr(self, '_maintenance_kind', None) or 'maintenance'} is in progress"
@@ -366,10 +374,7 @@ class AgentManager:
 
     def begin_maintenance(self, kind: str, running_extras_fn) -> str:
         with self.lock:
-            if getattr(self, "_maintenance_token", None) is not None:
-                raise MaintenanceConflict(
-                    f"data {getattr(self, '_maintenance_kind', None) or 'maintenance'} is already in progress"
-                )
+            self._assert_mutation_allowed_locked()
             running_sessions = self._running_session_ids_locked()
             running_extras = list(running_extras_fn())
             if running_sessions or running_extras:
@@ -2677,6 +2682,10 @@ async def bridge_exit_handler(request):
     if not _is_local_peer(request.remote or ""):
         return json_ok({"ok": False, "error": "forbidden"}, status=403)
     with manager.mutation():
+        # Make graceful shutdown admission irreversible before scheduling the
+        # delayed process exit. Otherwise a new import/export could acquire the
+        # maintenance gate during the response-to-exit timer window.
+        manager._shutdown_requested = True
         _exit_bridge()
     return json_ok({"ok": True})
 
