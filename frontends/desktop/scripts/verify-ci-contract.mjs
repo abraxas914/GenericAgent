@@ -283,6 +283,15 @@ function linuxPortabilityContract(workflow) {
     && linuxJob.includes('actual == expected');
 }
 
+function linuxReleaseRustCacheContract(workflow) {
+  const linuxJob = workflowJob(workflow, 'build-linux');
+  return linuxJob.includes('runs-on: ubuntu-22.04')
+    && linuxJob.includes('prefix-key: "v1-rust-release-ubuntu-22.04-glibc-2.35"')
+    && !linuxJob.includes('prefix-key: "v0-rust"')
+    && linuxJob.includes('cache-targets: "false"')
+    && linuxJob.includes('cache-bin: "false"');
+}
+
 function prunedRuntimeSourceContract(job) {
   const normalized = job.replaceAll("--exclude='./", "--exclude='");
   const excluded = [
@@ -383,6 +392,29 @@ for (const [label, mutation] of [
   ['archived package identity smoke', releaseWorkflow.replace('actual == expected', 'actual != expected')],
 ]) {
   check(!linuxPortabilityContract(mutation), `Linux portability contract rejects deleting ${label}`);
+}
+check(
+  linuxReleaseRustCacheContract(releaseWorkflow),
+  'Linux release cache uses a fresh glibc 2.35 namespace without target or Cargo bin artifacts',
+);
+for (const [label, mutation] of [
+  [
+    'the Ubuntu 22.04 and glibc 2.35 cache namespace',
+    releaseWorkflow.replace(
+      'prefix-key: "v1-rust-release-ubuntu-22.04-glibc-2.35"',
+      'prefix-key: "v0-rust"',
+    ),
+  ],
+  [
+    'target artifact isolation',
+    releaseWorkflow.replace('cache-targets: "false"', 'cache-targets: "true"'),
+  ],
+  ['Cargo bin isolation', releaseWorkflow.replace('cache-bin: "false"', 'cache-bin: "true"')],
+]) {
+  check(
+    !linuxReleaseRustCacheContract(mutation),
+    `Linux release cache contract rejects deleting ${label}`,
+  );
 }
 for (const [label, mutation] of [
   ['the no-bytecode environment', releaseWorkflow.replace('  PYTHONDONTWRITEBYTECODE: "1"\n', '')],
