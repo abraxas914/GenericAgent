@@ -755,6 +755,41 @@ for (const relativePath of requiredFiles) {
   check(fs.existsSync(path.join(desktopRoot, relativePath)), `required E2E file exists: ${relativePath}`);
 }
 
+const realPackageJourney = readText('e2e/package/real_package_journey.py');
+function nativePackageVersionContract(source) {
+  return source.includes('plistlib.load(stream)')
+    && source.includes('"CFBundleShortVersionString": info.get("CFBundleShortVersionString")')
+    && source.includes('"CFBundleVersion": info.get("CFBundleVersion")')
+    && source.includes('not isinstance(value, str) or value != RELEASE_VERSION')
+    && source.includes('runtime contains excluded Desktop source metadata')
+    && !source.includes('package_json = read_json(')
+    && !source.includes('packaged package.json version');
+}
+check(
+  nativePackageVersionContract(realPackageJourney),
+  'real-package journey validates both native macOS version keys and rejects source package metadata',
+);
+for (const [label, mutation] of [
+  ['CFBundleShortVersionString validation', realPackageJourney.replace(
+    '"CFBundleShortVersionString": info.get("CFBundleShortVersionString"),',
+    '"IgnoredShortVersion": info.get("CFBundleShortVersionString"),',
+  )],
+  ['CFBundleVersion validation', realPackageJourney.replace(
+    '"CFBundleVersion": info.get("CFBundleVersion"),',
+    '"IgnoredBundleVersion": info.get("CFBundleVersion"),',
+  )],
+  ['strict string version equality', realPackageJourney.replace(
+    'not isinstance(value, str) or value != RELEASE_VERSION',
+    'str(value) != RELEASE_VERSION',
+  )],
+  ['source package metadata rejection', realPackageJourney.replace(
+    'runtime contains excluded Desktop source metadata',
+    'runtime source metadata is ignored',
+  )],
+]) {
+  check(!nativePackageVersionContract(mutation), `native package version contract rejects deleting ${label}`);
+}
+
 check(tauriConfig.build?.frontendDist === '../dist', 'Tauri packages the React dist directory');
 check(
   tauriConfig.build?.beforeBuildCommand === 'npm run build:tauri-assets',
