@@ -9,7 +9,7 @@ application/runtime paths here.
 The production binary uses the real per-user settings file, so the runner refuses to start
 without an explicit acknowledgement.  It backs up that file byte-for-byte and restores it in
 ``finally``.  Run this only in a dedicated OS test account: macOS may also create its normal
-versioned writable runtime under Application Support during the stale-override fallback test.
+stable writable runtime under Application Support during the stale-override fallback test.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ import http.server
 import json
 import os
 import platform
+import plistlib
 import shutil
 import socket
 import subprocess
@@ -78,6 +79,26 @@ def read_json(path: Path, default: Any = None) -> Any:
 def write_json(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def read_macos_bundle_versions(package_root: Path) -> tuple[str, str]:
+    info_path = package_root / "Contents" / "Info.plist"
+    try:
+        with info_path.open("rb") as stream:
+            info = plistlib.load(stream)
+    except (OSError, plistlib.InvalidFileException, TypeError, ValueError) as error:
+        raise JourneyFailure(f"macOS application Info.plist is missing or invalid: {info_path}") from error
+    if not isinstance(info, dict):
+        raise JourneyFailure(f"macOS application Info.plist is missing or invalid: {info_path}")
+
+    values = {
+        "CFBundleShortVersionString": info.get("CFBundleShortVersionString"),
+        "CFBundleVersion": info.get("CFBundleVersion"),
+    }
+    for key, value in values.items():
+        if not isinstance(value, str) or value != RELEASE_VERSION:
+            raise JourneyFailure(f"macOS {key} is {value!r}; expected {RELEASE_VERSION!r}")
+    return values["CFBundleShortVersionString"], values["CFBundleVersion"]
 
 
 def request_json(method: str, path: str, body: Any = None, timeout: float = 5.0) -> Any:
@@ -338,13 +359,16 @@ class Journey:
         missing = [str(path) for path in required if not path.exists()]
         if missing:
             raise JourneyFailure(f"package paths are missing: {missing}")
-        package_json = read_json(self.runtime_root / "app" / "frontends" / "desktop" / "package.json", {})
-        if package_json.get("version") != RELEASE_VERSION:
-            raise JourneyFailure(f"packaged package.json version is {package_json.get('version')!r}")
+        source_package_json = self.runtime_root / "app" / "frontends" / "desktop" / "package.json"
+        if source_package_json.exists():
+            raise JourneyFailure(f"runtime contains excluded Desktop source metadata: {source_package_json}")
         if self.args.platform == "macos" and not (self.runtime_root / ".prepared").is_file():
             raise JourneyFailure("macOS package has no build-time .prepared marker")
+        if self.args.platform == "macos":
+            short_version, bundle_version = read_macos_bundle_versions(self.package_root)
+            self.report["checks"]["packagedVersion"] = short_version
+            self.report["checks"]["packagedBundleVersion"] = bundle_version
         self.report["checks"]["packageShape"] = True
-        self.report["checks"]["packagedVersion"] = package_json.get("version")
 
     def prepare_external_root(self) -> None:
         if self.external_root.exists() or self.stale_root.exists():
