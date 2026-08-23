@@ -14,6 +14,7 @@ COMMON_CHECKS = (
     "packageShape",
     "deterministicChat",
     "uploadUnderExternalRoot",
+    "isolatedConductorOwnership",
     "memoryImport",
     "warmRestart",
     "foreignListenerSurvived",
@@ -23,8 +24,19 @@ COMMON_CHECKS = (
     "optionalP2PDoesNotBlockReady",
     "settingsRestored",
     "finalPortFree",
+    "finalConductorPortFree",
+    "defaultConductorPortPreserved",
+    "ownedProcessStops",
     "finalOwnedProcessesExited",
 )
+
+SUCCESSFUL_APPLICATION_SCENARIOS = {
+    "first-launch",
+    "warm-restart",
+    "after-port-release",
+    "relocated",
+    "stale-override",
+}
 
 
 def load(path: str) -> dict[str, Any]:
@@ -54,9 +66,57 @@ def assert_report(name: str, report: dict[str, Any], expected_commit: str) -> li
     for check in COMMON_CHECKS:
         if not checks.get(check):
             failures.append(f"{name}: required check {check} did not pass")
+    environment = report.get("environment")
+    isolated_port = (
+        environment.get("isolatedConductorPort") if isinstance(environment, dict) else None
+    )
+    if (
+        not isinstance(isolated_port, int)
+        or isinstance(isolated_port, bool)
+        or not 1 <= isolated_port <= 65535
+        or isolated_port in {8900, 14168}
+    ):
+        failures.append(f"{name}: isolated conductor port is missing or invalid")
+    ownership = checks.get("isolatedConductorOwnership")
+    if not isinstance(ownership, dict) or set(ownership) != SUCCESSFUL_APPLICATION_SCENARIOS:
+        failures.append(f"{name}: conductor ownership does not cover every successful launch")
+    elif isinstance(isolated_port, int):
+        for scenario, state in ownership.items():
+            pid = state.get("pid") if isinstance(state, dict) else None
+            if (
+                not isinstance(state, dict)
+                or state.get("status") != "running"
+                or state.get("running") is not True
+                or state.get("owned") is not True
+                or state.get("external") is not False
+                or state.get("port") != isolated_port
+                or not isinstance(pid, int)
+                or isinstance(pid, bool)
+                or pid <= 0
+            ):
+                failures.append(f"{name}: invalid conductor ownership evidence for {scenario}")
+    stops = checks.get("ownedProcessStops")
+    if not isinstance(stops, dict) or set(stops) != SUCCESSFUL_APPLICATION_SCENARIOS:
+        failures.append(f"{name}: owned process stops do not cover every successful launch")
+    else:
+        for scenario, pids in stops.items():
+            expected_conductor_pid = (
+                ownership.get(scenario, {}).get("pid") if isinstance(ownership, dict) else None
+            )
+            if (
+                not isinstance(pids, dict)
+                or set(pids) != {"app", "bridge", "conductor"}
+                or any(
+                    not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0
+                    for pid in pids.values()
+                )
+                or len(set(pids.values())) != 3
+                or pids.get("conductor") != expected_conductor_pid
+            ):
+                failures.append(f"{name}: invalid owned process stop evidence for {scenario}")
     if name == "macos" and checks.get("macAppImmutable") is not True:
         failures.append("macos: signed .app immutability did not pass")
-    required_bootstrap = {"first-launch", "warm-restart", "foreign-port", "after-port-release", "relocated", "stale-override"}
+    required_bootstrap = SUCCESSFUL_APPLICATION_SCENARIOS | {"foreign-port"}
     missing_bootstrap = sorted(required_bootstrap - set(report.get("bootstrap", {})))
     if missing_bootstrap:
         failures.append(f"{name}: missing bootstrap evidence {missing_bootstrap}")
