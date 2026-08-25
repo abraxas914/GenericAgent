@@ -45,6 +45,22 @@ describe('model-selector session binding', () => {
     expect(formatLabel(profiles, 3, null, false)).toBe('Fallback name');
   });
 
+  it('prefers custom remarks over matching model identifiers', () => {
+    const profiles = [
+      {
+        id: 0,
+        name: 'Production Claude',
+        model: 'anthropic/claude-sonnet-4-6',
+        apibase: 'https://api.anthropic.test',
+        protocol: 'oai',
+        stream: true,
+      },
+    ];
+    const formatLabel = (selectorModule as any).formatModelSelectionLabel;
+
+    expect(formatLabel(profiles, 0, null, false)).toBe('Production Claude');
+  });
+
   it('controlled mode renders current → next and bypasses the Session mutation', () => {
     const profiles = [
       { id: 0, name: 'Primary account', model: 'model-a', apibase: 'https://api.primary.test', protocol: 'oai' as const, stream: true },
