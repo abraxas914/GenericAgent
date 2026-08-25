@@ -49,12 +49,6 @@ function providerName(apibase: string, model?: string): string {
   return 'OTHER';
 }
 
-function profileLabel(name: string): string {
-  const s = String(name || '');
-  const i = s.indexOf('/');
-  return (i >= 0 ? s.slice(i + 1) : s).trim();
-}
-
 function modelShortName(profile: ModelProfile): string {
   // Use the configured name (备注名) directly, without any processing
   // This allows users to distinguish between same models from different providers
