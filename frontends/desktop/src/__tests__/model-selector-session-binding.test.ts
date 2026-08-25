@@ -25,9 +25,9 @@ describe('model-selector session binding', () => {
     ];
     const formatLabel = (selectorModule as any).formatModelSelectionLabel;
 
-    expect(formatLabel(profiles, 1, 0, true)).toBe('model-a → model-b');
-    expect(formatLabel(profiles, 1, 0, false)).toBe('model-b');
-    expect(formatLabel(profiles, 1, 1, true)).toBe('model-b');
+    expect(formatLabel(profiles, 1, 0, true)).toBe('A → B');
+    expect(formatLabel(profiles, 1, 0, false)).toBe('B');
+    expect(formatLabel(profiles, 1, 1, true)).toBe('B');
   });
 
   it('controlled mode renders current → next and bypasses the Session mutation', () => {
@@ -53,7 +53,7 @@ describe('model-selector session binding', () => {
       onSelect: conductorSelect,
     }));
 
-    expect(screen.getByText('model-a → model-b')).toBeTruthy();
+    expect(screen.getByText('A → B')).toBeTruthy();
     fireEvent.click(screen.getByTitle('model-b'));
     fireEvent.click(screen.getByTitle('model-a'));
     expect(conductorSelect).toHaveBeenCalledWith(0);
