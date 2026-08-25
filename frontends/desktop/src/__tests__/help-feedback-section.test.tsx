@@ -107,7 +107,7 @@ describe('HelpFeedbackSection', () => {
 
     expect(rows).toHaveLength(3);
     expect(Array.from(rows).map((row) => within(row as HTMLElement).getByText(
-      /RoundSquisheen|_Ashes_in_the_Snow_|pax1123581321/,
+      /RoundSquisheen|persist0612|pax1123581321/,
     ).textContent)).toEqual(HELP_FEEDBACK_WECHAT_IDS);
     expect(container.querySelectorAll('.ga-help-feedback-wechat-icon')).toHaveLength(3);
   });
@@ -115,7 +115,7 @@ describe('HelpFeedbackSection', () => {
   it('exposes localized display copy and canonical destinations', () => {
     expect(HELP_FEEDBACK_WECHAT_IDS).toEqual([
       'RoundSquisheen',
-      '_Ashes_in_the_Snow_',
+      'persist0612',
       'pax1123581321',
     ]);
     expect(HELP_FEEDBACK_COMMUNITY_URL).toBe('https://github.com/lsdefine/GenericAgent#-社区与支持');
@@ -135,7 +135,7 @@ describe('HelpFeedbackSection', () => {
     await copyHelpFeedbackWechatId(HELP_FEEDBACK_WECHAT_IDS[1], writeText);
 
     expect(writeText).toHaveBeenCalledOnce();
-    expect(writeText).toHaveBeenCalledWith('_Ashes_in_the_Snow_');
+    expect(writeText).toHaveBeenCalledWith('persist0612');
   });
 
   it('propagates clipboard failures for the UI to show an error toast', async () => {

@@ -724,7 +724,22 @@ class AgentManager:
     def update_model_profile(self, profile_id: int, data: dict) -> dict:
         var, existing = self._profile_at(profile_id)
         text = self._mykey_file().read_text(encoding="utf-8")
-        profiles = self._save_mykey_text(self._patch_var_block(text, var, self._build_cfg(data, existing, require_key=False)))
+
+        # Sync mixin llm_nos when name changes to avoid orphan references
+        old_name = str(existing.get("name") or existing.get("model") or "").strip()
+        new_cfg = self._build_cfg(data, existing, require_key=False)
+        new_name = str(new_cfg.get("name") or new_cfg.get("model") or "").strip()
+
+        if old_name != new_name:
+            keys, mk = self._mykey_vars()
+            mvar, mcfg = self._mixin_entry(keys, mk)
+            if mcfg and mvar is not None and old_name in [str(m) for m in (mcfg.get("llm_nos") or [])]:
+                # Replace old name with new name in mixin's llm_nos
+                updated_nos = [new_name if str(m) == old_name else str(m) for m in (mcfg.get("llm_nos") or [])]
+                mcfg = {**mcfg, "llm_nos": updated_nos}
+                text = self._patch_var_block(text, mvar, mcfg)
+
+        profiles = self._save_mykey_text(self._patch_var_block(text, var, new_cfg))
         return {"varName": var, "profileId": profile_id, "profiles": profiles}
 
     def delete_model_profile(self, profile_id: int) -> dict:

@@ -49,21 +49,10 @@ function providerName(apibase: string, model?: string): string {
   return 'OTHER';
 }
 
-function profileLabel(name: string): string {
-  const s = String(name || '');
-  const i = s.indexOf('/');
-  return (i >= 0 ? s.slice(i + 1) : s).trim();
-}
-
 function modelShortName(profile: ModelProfile): string {
-  const name = (profile.name || '').trim();
-  const model = (profile.model || '').trim();
-
-  if (name && name !== model) return profileLabel(name);
-
-  const slash = model.lastIndexOf('/');
-  const modelLabel = slash >= 0 ? model.slice(slash + 1) : model;
-  return modelLabel || profileLabel(name);
+  // Use the configured name (备注名) directly, without any processing
+  // This allows users to distinguish between same models from different providers
+  return profile.name || profile.model || '';
 }
 
 export function formatModelSelectionLabel(

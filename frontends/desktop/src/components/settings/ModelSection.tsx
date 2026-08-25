@@ -16,19 +16,9 @@ function ModelIcon({ model, size = 16 }: { model: string; size?: number }) {
 }
 
 function profileLabel(p: ModelProfile): string {
-  const name = (p.name || '').trim();
-  const model = (p.model || '').trim();
-
-  if (name && name !== model) {
-    const slash = name.indexOf('/');
-    return (slash >= 0 ? name.slice(slash + 1) : name).trim();
-  }
-
-  const modelSlash = model.lastIndexOf('/');
-  if (model) return modelSlash >= 0 ? model.slice(modelSlash + 1) : model;
-
-  const nameSlash = name.indexOf('/');
-  return (nameSlash >= 0 ? name.slice(nameSlash + 1) : name) || '(unnamed)';
+  // Prefer the configured name (备注名) so users can distinguish the same
+  // model served by different providers. Fall back to model ID when unnamed.
+  return (p.name || '').trim() || p.model || '(unnamed)';
 }
 
 function profileTitle(p: ModelProfile): string | undefined {

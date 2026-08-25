@@ -3,7 +3,7 @@ export const HELP_FEEDBACK_TUTORIAL_URL = 'https://datawhalechina.github.io/hell
 
 export const HELP_FEEDBACK_WECHAT_IDS = [
   'RoundSquisheen',
-  '_Ashes_in_the_Snow_',
+  'persist0612',
   'pax1123581321',
 ] as const;
 
