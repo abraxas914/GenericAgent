@@ -56,9 +56,9 @@ function profileLabel(name: string): string {
 }
 
 function modelShortName(profile: ModelProfile): string {
-  const m = profile.model || '';
-  const slash = m.lastIndexOf('/');
-  return slash >= 0 ? m.slice(slash + 1) : m || profileLabel(profile.name);
+  // Use the configured name (备注名) instead of extracting from model name
+  // This allows users to distinguish between same models from different providers
+  return profileLabel(profile.name) || profile.model || '';
 }
 
 export function formatModelSelectionLabel(
