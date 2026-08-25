@@ -56,9 +56,9 @@ function profileLabel(name: string): string {
 }
 
 function modelShortName(profile: ModelProfile): string {
-  // Use the configured name (备注名) instead of extracting from model name
+  // Use the configured name (备注名) directly, without any processing
   // This allows users to distinguish between same models from different providers
-  return profileLabel(profile.name) || profile.model || '';
+  return profile.name || profile.model || '';
 }
 
 export function formatModelSelectionLabel(
