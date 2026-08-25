@@ -89,7 +89,7 @@ export const en: Record<string, string> = {
   'appearance.light': 'Light',
   'appearance.dark': 'Dark',
   'set.noModels': 'No models yet — add one below',
-  'set.current': 'Active',
+  'set.current': 'New chat default',
   'lang.zh': '简体中文',
   'lang.en': 'English',
   'model.name': 'Alias',

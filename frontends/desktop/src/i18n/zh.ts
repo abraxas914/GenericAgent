@@ -89,7 +89,7 @@ export const zh: Record<string, string> = {
   'appearance.light': '浅色',
   'appearance.dark': '深色',
   'set.noModels': '暂无模型，点击下方添加',
-  'set.current': '当前',
+  'set.current': '新会话默认',
   'lang.zh': '简体中文',
   'lang.en': 'English',
   'model.name': '备注名',
