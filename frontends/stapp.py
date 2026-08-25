@@ -284,16 +284,21 @@ def _poll_main_task(max_items=256):
 
 def _render_stat_badge(is_running):
     if 'task_start_ts' not in st.session_state or not hasattr(llmcore, 'STATS'): return
-    end_ts = time.time() if is_running else st.session_state.get('task_end_ts', time.time())
+    now = time.time()
+    end_ts = now if is_running else st.session_state.get('task_end_ts', now)
     secs = max(0, int(end_ts - st.session_state.task_start_ts))
     stats = dict(llmcore.STATS)
     short = lambda n: f'{n / 1000:.0f}k' if n >= 1000 else str(n)
+    _p = []
+    if stats.get('t_start') and stats.get('t_ttft') is not None and stats['t_ttft'] != stats['t_start']:
+        _p.append(f"ttft{stats['t_ttft'] - stats['t_start']:.1f}s")
+    if stats.get('tps'): _p.append(f"{stats['tps']:.0f}t/s")
+    _tail = (' │ ' + '·'.join(_p)) if _p else ''
     usage = ((f"{stats['session']} │ " if stats.get('session') else '') +
              f"{short(stats['ctx'])} chars·{stats['msgs']}msgs │ "
-             f"in {short(stats.get('inp', 0))} toks·cached{short(stats.get('cached', 0))}·out{short(stats.get('out', 0))} │ "
+             f"in {short(stats.get('inp', 0))} toks·cached{short(stats.get('cached', 0))}·out{short(stats.get('out', 0))}{_tail}"
              if 'ctx' in stats else '')
-    st.markdown(f'<div class="ga-stat-badge">{usage}{secs // 60}:{secs % 60:02d}</div>',
-                unsafe_allow_html=True)
+    st.markdown(f'<div class="ga-stat-badge">{usage} │ {secs // 60}:{secs % 60:02d}</div>', unsafe_allow_html=True)
 
 
 if not hasattr(agent, "_ui_messages"): agent._ui_messages = st.session_state.get("messages", [])
@@ -359,6 +364,7 @@ if prompt:
         st.session_state.reply_ts = ""
         st.session_state.current_prompt = ""
         st.session_state.last_reply_time = int(time.time())
+        st.session_state.show_full_history = False
         st.rerun()
     def _slash_missing(name):
         st.session_state.messages.extend([
@@ -379,6 +385,11 @@ if prompt:
         target = sessions[idx][0] if 0 <= idx < len(sessions) else None
         result = handle_frontend_command(agent, cmd)
         history = extract_ui_messages(target) if target and result.startswith('✅') else None
+        if history:
+            for x in history:
+                if x['role'] == 'assistant' and len(x['content']) > 120_000:
+                    m = re.search(r'\**LLM Running \(Turn \d+\) \.\.\.\**', x['content'][-120_000:])
+                    x['content'] = x['content'][-120_000 + m.start():] if m else ''
         tail = [{"role": "assistant", "content": result, "time": ts}]
         if history: st.session_state.messages[:] = history + tail
         else: st.session_state.messages.extend([{"role": "user", "content": cmd, "time": ts}] + tail)
@@ -434,20 +445,20 @@ if prompt:
     with st.chat_message("user"): st.markdown(prompt)
     _start_main_task(prompt)
 
-# Stream hosts only when this session owns the queue.
-# Poll quickly while active; reduce idle renderer churn.
-_stream_fh = None
-if st.session_state.get('display_queue') is not None:
-    with st.chat_message("assistant"):
-        _stream_fh = st.container()
-elif agent.is_running:
+# Stream bubble is owned by the fragment below: a fragment atomically replaces
+# its *own* subtree on every rerun in all Streamlit versions, whereas writing
+# into a container created outside the fragment is version-dependent (pre-1.62
+# appends forever → duplicates; ≥1.62 resets/GCs → disappears). So never hoist
+# the host out of the fragment; paint the full desired state each tick.
+_owns_stream = st.session_state.get('display_queue') is not None
+if not _owns_stream and agent.is_running:
     st.chat_message("assistant").markdown(T("detached_running"))
 
-@st.fragment(run_every=timedelta(seconds=1 if (_stream_fh is not None or agent.is_running or st.session_state.get('loop_enabled')) else 5))
+@st.fragment(run_every=timedelta(seconds=1 if (_owns_stream or agent.is_running or st.session_state.get('loop_enabled')) else 5))
 def _tick():
     """Poll every second while active and every five seconds while idle."""
     # 1) Own stream: drain done, paint all_outputs
-    if _stream_fh is not None:
+    if _owns_stream:
         done = _poll_main_task()
         if done is not None:
             if done:
@@ -466,16 +477,12 @@ def _tick():
         _dq = st.session_state.get("display_queue")
         steps = (list(((agent.all_outputs or [{}])[-1].get("outputs")) or [])
                  if _dq is getattr(agent, "_current_queue", None) else [])
-        # Streamlit ≥1.62: a fragment's outside-container wrapper resets to
-        # index 0 on every fragment rerun and children not re-emitted are GC'd
-        # (see runtime/fragment.py:_reset_outside_wrappers). Incremental appends
-        # don't survive across ticks, so repaint *everything* every tick — frozen
-        # expanders plus the live tail — into the single host container. Always
-        # writing (even when steps is empty) also claims the slot on the initial
-        # run, avoiding "could not reserve a stable position".
         live = re.sub(r'\**LLM Running \(Turn \d+\) \.\.\.\**\s*$', '',
                       (steps[-1] if steps else '') or '').rstrip()
-        with _stream_fh:
+        # Idempotent repaint inside the fragment's own subtree: the whole
+        # bubble (expanders + live tail) is re-emitted from state every tick,
+        # so a rerun can neither drop nor duplicate elements.
+        with st.chat_message("assistant"):
             for i in range(max(0, len(steps) - 1)):
                 body = steps[i] or ''
                 with st.expander(_step_title(body, i), expanded=False): st.markdown(body)

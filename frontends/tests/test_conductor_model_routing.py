@@ -164,6 +164,50 @@ def test_explicit_numeric_worker_model_rejects_out_of_range():
     assert agent.next_llm_calls == []
 
 
+def test_standalone_model_selection_persists_without_mutating_live_client(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"theme":"dark","ui":{"llmNo":0}}', encoding="utf-8")
+    monkeypatch.setattr(conductor, "SETTINGS_PATH", settings_path)
+    agent = FakeAgent(["zero", "one", "two"])
+
+    selected = conductor._set_conductor_llm_no(agent, 2)
+
+    assert selected == 2
+    assert agent.llm_no == 0
+    assert agent.next_llm_calls == []
+    assert conductor._settings_doc() == {
+        "theme": "dark",
+        "ui": {"llmNo": 0},
+        "conductor": {"llmNo": 2},
+    }
+
+
+def test_standalone_model_selection_rejects_unavailable_model(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text('{"theme":"dark"}', encoding="utf-8")
+    monkeypatch.setattr(conductor, "SETTINGS_PATH", settings_path)
+    agent = FakeAgent(["zero", None])
+
+    with pytest.raises(ValueError, match="unavailable"):
+        conductor._set_conductor_llm_no(agent, 1)
+
+    assert conductor._settings_doc() == {"theme": "dark"}
+
+
+def test_standalone_model_selection_applies_at_next_task_boundary(tmp_path, monkeypatch):
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr(conductor, "SETTINGS_PATH", settings_path)
+    agent = FakeAgent(["zero", "one", "two"])
+
+    conductor._set_conductor_llm_no(agent, 2)
+    state = conductor._apply_desktop_model(agent)
+
+    assert agent.next_llm_calls == [2]
+    assert state["configured"] == 2
+    assert state["effective"] == 2
+    assert state["fallbackReason"] is None
+
+
 def test_runtime_model_snapshot_is_broadcast_with_running_state(monkeypatch):
     instance = conductor.Conductor()
     payloads: list[dict] = []

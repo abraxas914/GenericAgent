@@ -1,5 +1,6 @@
 import os, sys, re, time, json, uuid, queue, asyncio, threading, argparse, base64, secrets
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Any, Optional, List
 from contextlib import asynccontextmanager, suppress
 
@@ -7,6 +8,10 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPExcept
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+FRONTENDS_DIR = os.path.dirname(os.path.abspath(__file__))
+if FRONTENDS_DIR not in sys.path: sys.path.insert(0, FRONTENDS_DIR)
+from desktop_settings import DesktopSettingsError, update_settings
 
 def _resolve_ga_root() -> str:
     """Use the external core selected by the package-owned desktop bridge when valid."""
@@ -67,13 +72,26 @@ HOST = args.host
 PORT = args.port
 
 
+SETTINGS_PATH = Path.home() / ".ga_desktop_settings.json"
+
+
 def _settings_doc() -> dict:
     try:
-        from pathlib import Path
-        doc = json.loads((Path.home() / ".ga_desktop_settings.json").read_text(encoding="utf-8"))
+        doc = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
         return doc if isinstance(doc, dict) else {}
     except Exception:
         return {}
+
+
+def _persist_conductor_llm_no(llm_no: int) -> None:
+    def mutate(document: dict) -> None:
+        section = document.get("conductor")
+        if not isinstance(section, dict):
+            section = {}
+            document["conductor"] = section
+        section["llmNo"] = llm_no
+
+    update_settings(SETTINGS_PATH, mutate)
 
 
 def _conductor_llm_no() -> Optional[int]:
@@ -178,6 +196,24 @@ def _apply_desktop_model(agent: "GenericAgent") -> dict:
     print("[conductor] no usable model is available", file=sys.stderr)
     return {"configured": configured, "effective": None,
             "fallbackReason": "no_models", "current": None}
+
+
+def _selected_conductor_llm_no(agent: "GenericAgent") -> int:
+    configured = _conductor_llm_no()
+    return configured if _usable_model(agent, configured) else agent.llm_no
+
+
+def _set_conductor_llm_no(agent: "GenericAgent", value: Any) -> int:
+    """Persist the standalone UI binding without mutating an in-flight client.
+
+    The Conductor loop applies this binding at its existing idle task boundary, so
+    a selection made immediately before sending a message controls that next turn.
+    """
+    no = _parse_model_no(value)
+    if no is None or not _usable_model(agent, no):
+        raise ValueError(f"llm index out of range or unavailable: {value}")
+    _persist_conductor_llm_no(no)
+    return no
 
 
 def _select_llm(agent: "GenericAgent", llm: Any) -> bool:
@@ -800,9 +836,22 @@ async def websocket(ws: WebSocket):
         await ws.send_json({"type": "hello", "subagents": pool.snapshot(), "chat": chat_messages,
                             "log": conductor.log, "running": running,
                             "model": conductor.model_snapshot(),
-                            "llms": conductor.agent.list_llms(), "llm": conductor.agent.llm_no})
+                            "llms": conductor.agent.list_llms(),
+                            "llm": _selected_conductor_llm_no(conductor.agent)})
         while True:
             data = await ws.receive_json()
+            if "llm" in data:
+                try:
+                    llm_no = _set_conductor_llm_no(conductor.agent, data["llm"])
+                except (TypeError, ValueError, OSError, DesktopSettingsError) as error:
+                    await ws.send_json({
+                        "type": "model_error",
+                        "error": str(error),
+                        "llm": _selected_conductor_llm_no(conductor.agent),
+                    })
+                else:
+                    await broadcast({"type": "model_selected", "llm": llm_no})
+                continue
             msg = (data.get("msg") or "").strip()
             if not msg: continue
             add_chat(msg, role="user", files=data.get("files") or [], images=data.get("images") or [])
