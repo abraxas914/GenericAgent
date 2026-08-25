@@ -522,6 +522,14 @@ class Journey:
             short_version, bundle_version = read_macos_bundle_versions(self.package_root)
             self.report["checks"]["packagedVersion"] = short_version
             self.report["checks"]["packagedBundleVersion"] = bundle_version
+        static_dir = self.runtime_root / "app" / "frontends" / "desktop" / "static"
+        compiled_scripts = b"\n".join(
+            path.read_bytes() for path in sorted(static_dir.rglob("*.js")) if path.is_file()
+        )
+        required_entrypoints = (b"data-import-row", b"data-export-row")
+        if not all(marker in compiled_scripts for marker in required_entrypoints):
+            raise JourneyFailure("compiled Desktop UI is missing data backup entrypoints")
+        self.report["checks"]["dataBackupEntrypoints"] = True
         self.report["checks"]["packageShape"] = True
 
     def prepare_external_root(self) -> None:
@@ -634,6 +642,10 @@ class Journey:
         self.report["bootstrap"][scenario] = snapshot
         self.report["identities"][scenario] = identity
         self.report["pids"][-1]["bridge"] = identity["pid"]
+        capabilities = request_json("GET", "/services/capabilities", timeout=5)
+        if capabilities.get("dataBackup") is not True:
+            raise JourneyFailure(f"package bridge did not expose data backup capability: {capabilities}")
+        self.report["checks"]["dataBackupCapabilities"] = capabilities
         conductor = wait_until(
             f"{scenario} owned isolated conductor",
             lambda: verified_owned_conductor(

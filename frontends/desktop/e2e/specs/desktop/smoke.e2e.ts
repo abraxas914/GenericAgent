@@ -47,6 +47,18 @@ describe('GenericAgent native Tauri smoke', () => {
     const identity = await (await fetch(`${context.bridgeBase}/services/identity`)).json() as { ga_root: string };
     assert.ok(pathsReferToSameEntry(identity.ga_root, context.sandboxRoot), 'bridge must run inside the E2E sandbox');
     await chat.waitForBridgeReady();
+    const capabilities = await (await fetch(`${context.bridgeBase}/services/capabilities`)).json() as {
+      dataBackup?: boolean;
+    };
+    assert.equal(capabilities.dataBackup, true, 'bridge must explicitly expose data backup support');
+    await browser.execute(() => window.dispatchEvent(new Event('ga:open-settings')));
+    const importRow = await $('[data-testid="data-import-row"]');
+    const exportRow = await $('[data-testid="data-export-row"]');
+    await importRow.waitForDisplayed({ timeout: 10_000 });
+    await exportRow.waitForDisplayed({ timeout: 10_000 });
+    assert.equal(await importRow.isDisplayed(), true, 'memory and session import must be visible');
+    assert.equal(await exportRow.isDisplayed(), true, 'memory and session export must be visible');
+    await browser.execute(() => window.dispatchEvent(new Event('ga:close-settings')));
     await chat.startNewChat();
     await chat.send('[E2E:normal] native smoke');
     await chat.waitForAssistantText('Harness reply', 60_000);

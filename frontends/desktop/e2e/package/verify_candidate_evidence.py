@@ -12,6 +12,8 @@ from typing import Any
 
 COMMON_CHECKS = (
     "packageShape",
+    "dataBackupCapabilities",
+    "dataBackupEntrypoints",
     "deterministicChat",
     "uploadUnderExternalRoot",
     "isolatedConductorOwnership",

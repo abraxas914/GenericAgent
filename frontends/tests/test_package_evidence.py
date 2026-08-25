@@ -187,12 +187,14 @@ def test_package_shape_rejects_excluded_source_package_json(tmp_path):
         runtime_root / "app" / "agentmain.py",
         runtime_root / "app" / "frontends" / "desktop_bridge.py",
         runtime_root / "app" / "frontends" / "desktop" / "static" / "index.html",
+        runtime_root / "app" / "frontends" / "desktop" / "static" / "assets" / "index.js",
         runtime_root / "python" / "bin" / "python3",
         runtime_root / ".prepared",
         runtime_root / "app" / "frontends" / "desktop" / "package.json",
     ]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}", encoding="utf-8")
+        content = "data-import-row data-export-row" if path.name == "index.js" else "{}"
+        path.write_text(content, encoding="utf-8")
     write_info_plist(package_root)
 
     candidate = object.__new__(journey.Journey)
@@ -210,6 +212,7 @@ def test_package_shape_rejects_excluded_source_package_json(tmp_path):
     assert candidate.report["checks"] == {
         "packagedVersion": "0.2.0",
         "packagedBundleVersion": "0.2.0",
+        "dataBackupEntrypoints": True,
         "packageShape": True,
     }
 
@@ -414,6 +417,8 @@ def test_every_successful_ready_snapshot_records_its_owned_conductor_pid(
                 "pid": 44121,
                 "build_id": "desktop-abc1234",
             }
+        if path == "/services/capabilities":
+            return {"dataBackup": True}
         if path == "/services/panel":
             return stopped_panel(owned_conductor(pid=44122))
         raise AssertionError(path)

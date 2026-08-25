@@ -27,19 +27,70 @@ describe('desktop data backup service', () => {
     expect(backupFilename('en', date)).toBe('GenericAgent-data-backup-2026-08-22-090407.zip');
   });
 
-  it('detects whether the connected core exposes advanced data backup routes', async () => {
-    mockFetch.mockResolvedValueOnce({ status: 405 });
+  it('reads explicit supported and unsupported data backup capabilities', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ dataBackup: true }),
+    });
     await expect(supportsDataBackupApi()).resolves.toBe(true);
     expect(mockFetch).toHaveBeenCalledWith(
-      'http://127.0.0.1:14168/memory/import/inspect',
-      { method: 'HEAD' },
+      'http://127.0.0.1:14168/services/capabilities',
+      expect.objectContaining({ method: 'GET', signal: expect.any(AbortSignal) }),
     );
 
-    mockFetch.mockResolvedValueOnce({ status: 404 });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ dataBackup: false }),
+    });
+    await expect(supportsDataBackupApi()).resolves.toBe(false);
+  });
+
+  it('treats only an explicit 404 as unsupported', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
     await expect(supportsDataBackupApi()).resolves.toBe(false);
 
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    await expect(supportsDataBackupApi()).resolves.toBeNull();
+
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 403 });
+    await expect(supportsDataBackupApi()).resolves.toBeNull();
+  });
+
+  it('keeps backup availability unknown for transport and response failures', async () => {
     mockFetch.mockRejectedValueOnce(new Error('bridge unavailable'));
-    await expect(supportsDataBackupApi()).resolves.toBe(false);
+    await expect(supportsDataBackupApi()).resolves.toBeNull();
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('invalid JSON')),
+    });
+    await expect(supportsDataBackupApi()).resolves.toBeNull();
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ anotherCapability: true }),
+    });
+    await expect(supportsDataBackupApi()).resolves.toBeNull();
+  });
+
+  it('keeps backup availability unknown when capability discovery times out', async () => {
+    vi.useFakeTimers();
+    mockFetch.mockImplementationOnce((_url, options) => new Promise((_resolve, reject) => {
+      (options?.signal as AbortSignal).addEventListener('abort', () => {
+        reject(new DOMException('aborted', 'AbortError'));
+      });
+    }));
+    try {
+      const availability = supportsDataBackupApi();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(availability).resolves.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('inspects a backup before import and sends only its selected path', async () => {

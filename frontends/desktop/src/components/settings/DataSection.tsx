@@ -10,6 +10,7 @@ import {
   supportsDataBackupApi,
   DataBackupError,
   type BackupInspection,
+  type DataBackupAvailability,
   type DataImportResult,
 } from '../../services/dataBackup';
 import { useChatStore } from '../../stores/chat';
@@ -26,11 +27,12 @@ interface OpRowProps {
   btnText: string;
   onClick: () => void;
   disabled?: boolean;
+  testId?: string;
 }
 
-function OpRow({ label, tip, btnText, onClick, disabled }: OpRowProps) {
+function OpRow({ label, tip, btnText, onClick, disabled, testId }: OpRowProps) {
   return (
-    <div className="ga-data-row">
+    <div className="ga-data-row" data-testid={testId}>
       <div className="ga-data-row-info">
         <Tooltip content={tip}>
           <span className="ga-data-row-label" tabIndex={0}>{label}</span>
@@ -66,7 +68,7 @@ export function DataSection() {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<DataImportResult | null>(null);
-  const [dataBackupAvailable, setDataBackupAvailable] = useState(false);
+  const [dataBackupAvailable, setDataBackupAvailable] = useState<DataBackupAvailability>(null);
   const runningSessionCount = useChatStore((state) => {
     const runningIds = new Set(state.runningSessions);
     state.sessions.forEach((session) => {
@@ -285,9 +287,10 @@ export function DataSection() {
         btnText={t('data.exportKeyBtn')}
         onClick={handleExportKey}
       />
-      {tauriAvailable && dataBackupAvailable && (
+      {tauriAvailable && dataBackupAvailable !== false && (
         <>
           <OpRow
+            testId="data-import-row"
             label={t('data.importData')}
             tip={t('data.importDataTip')}
             btnText={importing ? t('data.importing') : t('data.importDataBtn')}
@@ -295,6 +298,7 @@ export function DataSection() {
             disabled={importing || exporting || maintenanceBlocked}
           />
           <OpRow
+            testId="data-export-row"
             label={t('data.exportData')}
             tip={t('data.exportDataTip')}
             btnText={exporting ? t('data.exporting') : t('data.exportDataBtn')}

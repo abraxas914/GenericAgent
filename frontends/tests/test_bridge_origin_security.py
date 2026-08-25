@@ -15,6 +15,7 @@ PROTECTED_PATHS = (
     "/status",
     "/memory/export",
     "/memory/import/inspect",
+    "/services/capabilities",
     "/upload",
     "/upload/raw",
 )
