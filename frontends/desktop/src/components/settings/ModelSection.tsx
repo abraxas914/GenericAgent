@@ -16,12 +16,9 @@ function ModelIcon({ model, size = 16 }: { model: string; size?: number }) {
 }
 
 function profileLabel(p: ModelProfile): string {
-  const m = p.model || '';
-  const slash = m.lastIndexOf('/');
-  if (m) return slash >= 0 ? m.slice(slash + 1) : m;
-  const s = (p.name || '').trim();
-  const i = s.indexOf('/');
-  return (i >= 0 ? s.slice(i + 1) : s) || '(unnamed)';
+  // Prefer the configured name (备注名) so users can distinguish the same
+  // model served by different providers. Fall back to model ID when unnamed.
+  return (p.name || '').trim() || p.model || '(unnamed)';
 }
 
 interface Props {
