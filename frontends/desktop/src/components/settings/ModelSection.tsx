@@ -16,12 +16,26 @@ function ModelIcon({ model, size = 16 }: { model: string; size?: number }) {
 }
 
 function profileLabel(p: ModelProfile): string {
-  const m = p.model || '';
-  const slash = m.lastIndexOf('/');
-  if (m) return slash >= 0 ? m.slice(slash + 1) : m;
-  const s = (p.name || '').trim();
-  const i = s.indexOf('/');
-  return (i >= 0 ? s.slice(i + 1) : s) || '(unnamed)';
+  const name = (p.name || '').trim();
+  const model = (p.model || '').trim();
+
+  if (name && name !== model) {
+    const slash = name.indexOf('/');
+    return (slash >= 0 ? name.slice(slash + 1) : name).trim();
+  }
+
+  const modelSlash = model.lastIndexOf('/');
+  if (model) return modelSlash >= 0 ? model.slice(modelSlash + 1) : model;
+
+  const nameSlash = name.indexOf('/');
+  return (nameSlash >= 0 ? name.slice(nameSlash + 1) : name) || '(unnamed)';
+}
+
+function profileTitle(p: ModelProfile): string | undefined {
+  const model = (p.model || '').trim();
+  if (!model) return undefined;
+
+  return profileLabel(p) === model ? undefined : model;
 }
 
 interface Props {
@@ -164,11 +178,12 @@ export function ModelSection({ onAdd, onEdit }: Props) {
                   {mixin.members.map((memberName, i) => {
                     const memberProfile = natives.find((p) => p.name === memberName);
                     const label = memberProfile ? profileLabel(memberProfile) : memberName;
+                    const title = memberProfile ? profileTitle(memberProfile) : undefined;
                     return (
                       <div key={memberName} className="ga-mixin-member">
                         <span className="ga-mixin-member-rank">{i + 1}</span>
                         <ModelIcon model={memberProfile?.model || ''} size={14} />
-                        <span className="ga-mixin-member-name">{label}</span>
+                        <span className="ga-mixin-member-name" title={title}>{label}</span>
                         <span className="ga-mixin-member-actions">
                           <button
                             type="button"
@@ -218,7 +233,7 @@ export function ModelSection({ onAdd, onEdit }: Props) {
             >
               <div className="ga-model-row-content">
                 <ModelIcon model={profile.model || ''} />
-                <span className="ga-model-name">{profileLabel(profile)}</span>
+                <span className="ga-model-name" title={profileTitle(profile)}>{profileLabel(profile)}</span>
                 {isSelected && <Tag color="green" size="small">{t('set.current')}</Tag>}
                 {profile.inMixin && <Tag size="small">{t('model.inMixin')}</Tag>}
               </div>

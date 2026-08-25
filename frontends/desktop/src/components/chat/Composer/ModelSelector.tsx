@@ -56,9 +56,14 @@ function profileLabel(name: string): string {
 }
 
 function modelShortName(profile: ModelProfile): string {
-  const m = profile.model || '';
-  const slash = m.lastIndexOf('/');
-  return slash >= 0 ? m.slice(slash + 1) : m || profileLabel(profile.name);
+  const name = (profile.name || '').trim();
+  const model = (profile.model || '').trim();
+
+  if (name && name !== model) return profileLabel(name);
+
+  const slash = model.lastIndexOf('/');
+  const modelLabel = slash >= 0 ? model.slice(slash + 1) : model;
+  return modelLabel || profileLabel(name);
 }
 
 export function formatModelSelectionLabel(

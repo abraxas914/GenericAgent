@@ -25,15 +25,46 @@ describe('model-selector session binding', () => {
     ];
     const formatLabel = (selectorModule as any).formatModelSelectionLabel;
 
-    expect(formatLabel(profiles, 1, 0, true)).toBe('model-a → model-b');
-    expect(formatLabel(profiles, 1, 0, false)).toBe('model-b');
-    expect(formatLabel(profiles, 1, 1, true)).toBe('model-b');
+    expect(formatLabel(profiles, 1, 0, true)).toBe('A → B');
+    expect(formatLabel(profiles, 1, 0, false)).toBe('B');
+    expect(formatLabel(profiles, 1, 1, true)).toBe('B');
+  });
+
+  it('falls back to the model short name when no custom remark is set', () => {
+    const profiles = [
+      { id: 0, name: 'vendor/team/model-a', model: 'vendor/team/model-a', apibase: '', protocol: 'oai', stream: true },
+      { id: 1, name: '', model: 'vendor/model-b', apibase: '', protocol: 'oai', stream: true },
+      { id: 2, name: '   ', model: 'model-c', apibase: '', protocol: 'oai', stream: true },
+      { id: 3, name: 'Fallback name', model: '', apibase: '', protocol: 'oai', stream: true },
+    ];
+    const formatLabel = (selectorModule as any).formatModelSelectionLabel;
+
+    expect(formatLabel(profiles, 0, null, false)).toBe('model-a');
+    expect(formatLabel(profiles, 1, null, false)).toBe('model-b');
+    expect(formatLabel(profiles, 2, null, false)).toBe('model-c');
+    expect(formatLabel(profiles, 3, null, false)).toBe('Fallback name');
+  });
+
+  it('prefers custom remarks over matching model identifiers', () => {
+    const profiles = [
+      {
+        id: 0,
+        name: 'Production Claude',
+        model: 'anthropic/claude-sonnet-4-6',
+        apibase: 'https://api.anthropic.test',
+        protocol: 'oai',
+        stream: true,
+      },
+    ];
+    const formatLabel = (selectorModule as any).formatModelSelectionLabel;
+
+    expect(formatLabel(profiles, 0, null, false)).toBe('Production Claude');
   });
 
   it('controlled mode renders current → next and bypasses the Session mutation', () => {
     const profiles = [
-      { id: 0, name: 'A', model: 'model-a', apibase: '', protocol: 'oai' as const, stream: true },
-      { id: 1, name: 'B', model: 'model-b', apibase: '', protocol: 'oai' as const, stream: true },
+      { id: 0, name: 'Primary account', model: 'model-a', apibase: 'https://api.primary.test', protocol: 'oai' as const, stream: true },
+      { id: 1, name: 'Backup account', model: 'model-b', apibase: 'https://api.backup.test', protocol: 'oai' as const, stream: true },
     ];
     const sessionSelect = vi.fn();
     const conductorSelect = vi.fn();
@@ -53,9 +84,15 @@ describe('model-selector session binding', () => {
       onSelect: conductorSelect,
     }));
 
-    expect(screen.getByText('model-a → model-b')).toBeTruthy();
-    fireEvent.click(screen.getByTitle('model-b'));
-    fireEvent.click(screen.getByTitle('model-a'));
+    expect(screen.getByText('Primary account → Backup account')).toBeTruthy();
+    expect(screen.getByTitle('model-b @ https://api.backup.test')).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle('model-b @ https://api.backup.test'));
+    expect(screen.getByText('Primary account')).toBeTruthy();
+    expect(screen.getByText('Backup account')).toBeTruthy();
+    expect(screen.getByTitle('model-a @ https://api.primary.test')).toBeTruthy();
+
+    fireEvent.click(screen.getByTitle('model-a @ https://api.primary.test'));
     expect(conductorSelect).toHaveBeenCalledWith(0);
     expect(sessionSelect).not.toHaveBeenCalled();
   });
