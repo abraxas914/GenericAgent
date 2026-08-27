@@ -23,6 +23,7 @@ HTTP API:
   POST   /services/stop         body: {"id":"frontends/qqapp.py"}
   GET    /services/logs?id=frontends/qqapp.py&tail=200
   GET    /services/panel
+  GET    /services/capabilities
   GET    /services/mykey
   POST   /services/mykey       body: {"content":"..."}
   POST   /services/stop-extras   stop conductor + scheduler (127.0.0.1 only)
@@ -2748,6 +2749,10 @@ async def identity_handler(request):
                     "build_id": os.environ.get("GA_BUILD_ID", "")})
 
 
+async def service_capabilities_handler(request):
+    return json_ok({"dataBackup": True})
+
+
 def _exit_bridge() -> None:
     with contextlib.suppress(Exception):
         services.stop_all_extras()
@@ -2887,6 +2892,7 @@ def create_app():
     app.router.add_post("/services/conductor/model", conductor_model_save_handler)
     app.router.add_post("/services/stop-extras", stop_extras_handler)
     app.router.add_post("/services/start-extras", start_extras_handler)
+    app.router.add_get("/services/capabilities", service_capabilities_handler)
     app.router.add_get("/services/identity", identity_handler)
     app.router.add_post("/services/bridge/exit", bridge_exit_handler)
     if _e2e_control_token() is not None:
