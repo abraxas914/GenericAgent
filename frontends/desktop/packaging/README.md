@@ -16,6 +16,8 @@ The React source, issue tracker, and contribution home is
 recorded in `dist/build-provenance.json`. `frontends/desktop/static/**` remains the independent Desktop v1 and is
 unchanged by Desktop 2.0 packaging.
 
+The submitted package, bundle, qualification, and provenance version for this release is `0.2.1`.
+
 The Semi Design MIT text is tracked as `dist/THIRD_PARTY_NOTICES.txt`. Root attributes force the source notice and
 compiled notice to LF on every platform, and all three package builders verify the locked notice SHA-256 before
 building.

@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 const desktopDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(desktopDir, '..', '..');
 const distDir = path.join(desktopDir, 'dist');
-const expectedVersion = '0.2.0';
-const expectedSourceCommit = '9fe5d69b85cfad8778ace84b6f69bc75f9e0d392';
+const expectedVersion = '0.2.1';
+const expectedSourceCommit = 'e7bfb038b972c7cc5fda7134c777ef2df7ac222d';
 const expectedNoticeSha256 = '2acf865e87e59090121369aac0575467067fdd7999923a70d785a46ceae3330f';
 const noticeAttributeRules = [
   'frontends/desktop/public/THIRD_PARTY_NOTICES.txt text eol=lf',
@@ -141,10 +141,10 @@ async function verifyVersionsRendererAndEntry() {
   for (const sourceBuildKey of ['beforeBuildCommand', 'beforeDevCommand', 'devUrl']) {
     if (sourceBuildKey in tauriConfig.build) fail(`compiled-only Tauri config must not require ${sourceBuildKey}`);
   }
-  if (!/^\[package\][\s\S]*?^name = "ga-desktop"$[\s\S]*?^version = "0\.2\.0"$/m.test(cargoToml)) {
+  if (!/^\[package\][\s\S]*?^name = "ga-desktop"$[\s\S]*?^version = "0\.2\.1"$/m.test(cargoToml)) {
     fail(`Cargo.toml ga-desktop version must be ${expectedVersion}`);
   }
-  if (!/^\[\[package\]\][\s\S]*?^name = "ga-desktop"$\nversion = "0\.2\.0"$/m.test(cargoLock)) {
+  if (!/^\[\[package\]\][\s\S]*?^name = "ga-desktop"$\nversion = "0\.2\.1"$/m.test(cargoLock)) {
     fail(`Cargo.lock ga-desktop version must be ${expectedVersion}`);
   }
 
@@ -351,10 +351,24 @@ async function main() {
   if (forbiddenSource.length > 0) fail(`compiled distribution contains source files: ${forbiddenSource.join(', ')}`);
 
   const searchableFiles = files.filter((file) => /\.(?:html|js|css)$/i.test(file));
+  const searchableContents = [];
   for (const file of searchableFiles) {
     const contents = await readFile(file, 'utf8');
+    searchableContents.push(contents);
     if (/(?:webdriverio|__GA_E2E__|wdio:|sourceMappingURL|webpack:\/\/|\/Users\/)/i.test(contents)) {
       fail(`compiled distribution leaks source/E2E material: ${relativeToDist(file)}`);
+    }
+  }
+  const compiledRenderer = searchableContents.join('\n');
+  for (const marker of [
+    'services/capabilities',
+    'data-import-row',
+    'data-export-row',
+    'get_macos_titlebar_metrics',
+    'titlebar-controls',
+  ]) {
+    if (!compiledRenderer.includes(marker)) {
+      fail(`compiled distribution is missing the v0.2.1 renderer contract: ${marker}`);
     }
   }
 
