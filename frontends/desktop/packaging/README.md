@@ -61,7 +61,7 @@ GitHub Release API。`publish-release` 显式 `needs` 三个平台，且只在 t
 
 `workflow_dispatch` 只运行所选平台（或 all）的候选 artifact 构建。即使未选择的 jobs 是
 `skipped`，发布 job 的事件与三个 `success` 条件也不会成立，因此手工运行不会创建 Release。
-应用 metadata 版本仍为 `0.2.0`；workflow 只消费维护者实际 push 的匹配 tag，不创建、移动或
+应用 metadata 版本为 `0.2.1`；workflow 只消费维护者实际 push 的匹配 tag，不创建、移动或
 改写既有 tag，也不把 `V2.0.0` 等公开命名强行绑定到应用 metadata。
 
 统一 prerelease 必须精确包含以下六个文件：
