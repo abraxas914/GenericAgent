@@ -1,8 +1,10 @@
-import { memo, useState, useRef } from 'react';
+import { memo, useRef } from 'react';
 import { useEnterAnimation } from '../../../../hooks/useEnterAnimation';
 import { useToolTimer } from '../../../../hooks/useToolTimer';
+import { useSegmentDisclosure } from '../../../../stores/thread-view';
 
 interface Props {
+  sessionId: string;
   name: string;
   content: string;
   inFlight: boolean;
@@ -10,8 +12,12 @@ interface Props {
   isStreaming?: boolean;
 }
 
-export const ToolPart = memo(function ToolPart({ name, content, inFlight, segmentKey = '', isStreaming = false }: Props) {
-  const [expanded, setExpanded] = useState(false);
+export const ToolPart = memo(function ToolPart({ sessionId, name, content, inFlight, segmentKey = '', isStreaming = false }: Props) {
+  const { expanded, setExpanded } = useSegmentDisclosure(
+    sessionId,
+    segmentKey,
+    inFlight || isStreaming,
+  );
   const ref = useRef<HTMLDivElement>(null);
   useEnterAnimation(ref, segmentKey, isStreaming);
   const { elapsed, duration } = useToolTimer(segmentKey, inFlight);

@@ -1,11 +1,16 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import type { SendOptions } from '../../../stores/chat';
+import {
+  sessionViewId,
+  useThreadViewStore,
+  type AttachmentFile,
+} from '../../../stores/thread-view';
 import { RichEditorInput, type RichEditorHandle } from './RichEditorInput';
 import { CompletionDrawer } from './CompletionDrawer';
 import { AtRefPopover } from './AtRefPopover';
 import { ContextMenu } from './ContextMenu';
 import { ModelSelector } from './ModelSelector';
-import { AttachmentStrip, type AttachmentFile } from './AttachmentStrip';
+import { AttachmentStrip } from './AttachmentStrip';
 import { SkillPanel } from './SkillPanel';
 import { PrimaryCTA, computeCTAState } from './PrimaryCTA';
 import { StatusStack } from './StatusStack';
@@ -14,6 +19,7 @@ import { uploadFile } from '../../../services/chat';
 import './composer.css';
 
 interface Props {
+  sessionId?: string | null;
   onSend: (text: string, opts?: SendOptions) => void;
   onStop: () => void;
   isGenerating: boolean;
@@ -23,16 +29,27 @@ interface Props {
 }
 
 let fileIdCounter = 0;
+let composerInstanceCounter = 0;
+const EMPTY_ATTACHMENTS: AttachmentFile[] = [];
 
-export function Composer({ onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
+export function Composer({ sessionId, onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
   const internalEditorRef = useRef<RichEditorHandle>(null);
   const editorRef = (externalEditorRef ?? internalEditorRef) as React.RefObject<RichEditorHandle>;
   const composerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const { text: placeholderText } = usePlaceholder();
-  const [plainText, setPlainText] = useState('');
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const [standaloneViewId] = useState(() => `__composer_instance_${++composerInstanceCounter}__`);
+  const viewSessionId = sessionId === undefined ? standaloneViewId : sessionId;
+  const viewId = sessionViewId(viewSessionId);
+  const plainText = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.composerDraft ?? '',
+  );
+  const attachments = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.attachments ?? EMPTY_ATTACHMENTS,
+  );
+  const setComposerDraft = useThreadViewStore((state) => state.setComposerDraft);
+  const updateAttachments = useThreadViewStore((state) => state.updateAttachments);
   const [isDragOver, setIsDragOver] = useState(false);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
@@ -48,6 +65,14 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     return () => observer.disconnect();
   }, []);
 
+  useLayoutEffect(() => {
+    if (editorRef.current?.getText() !== plainText) {
+      editorRef.current?.setText(plainText);
+    }
+    setSlashQuery(null);
+    setAtQuery(null);
+  }, [editorRef, plainText, viewId]);
+
   const processFiles = useCallback((fileList: FileList | File[]) => {
     const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
     const newFiles: AttachmentFile[] = [];
@@ -58,7 +83,7 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
       if (isImage && !tooLarge) {
         const reader = new FileReader();
         reader.onload = (e) => {
-          setAttachments((prev) =>
+          updateAttachments(viewSessionId, (prev) =>
             prev.map((a) => a.id === id ? { ...a, preview: e.target?.result as string, status: 'ready' as const } : a)
           );
         };
@@ -70,18 +95,18 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
           try {
             const dataUrl = e.target?.result as string;
             const serverPath = await uploadFile(file.name, dataUrl);
-            setAttachments((prev) =>
+            updateAttachments(viewSessionId, (prev) =>
               prev.map((a) => a.id === id ? { ...a, path: serverPath, status: 'ready' as const, errorMsg: undefined } : a)
             );
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'upload failed';
-            setAttachments((prev) =>
+            updateAttachments(viewSessionId, (prev) =>
               prev.map((a) => a.id === id ? { ...a, status: 'error' as const, errorMsg } : a)
             );
           }
         };
         reader.onerror = () => {
-          setAttachments((prev) =>
+          updateAttachments(viewSessionId, (prev) =>
             prev.map((a) => a.id === id ? { ...a, status: 'error' as const, errorMsg: 'read failed' } : a)
           );
         };
@@ -97,8 +122,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
         path: (file as File & { path?: string }).path || file.name,
       });
     }
-    setAttachments((prev) => [...prev, ...newFiles]);
-  }, []);
+    updateAttachments(viewSessionId, (prev) => [...prev, ...newFiles]);
+  }, [updateAttachments, viewSessionId]);
 
   const handleSend = useCallback(() => {
     const text = plainText.trim();
@@ -118,9 +143,9 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     }
     onSend(text || '', Object.keys(opts).length > 0 ? opts : undefined);
     editorRef.current?.clear();
-    setPlainText('');
-    setAttachments([]);
-  }, [plainText, attachments, onSend]);
+    setComposerDraft(viewSessionId, '');
+    updateAttachments(viewSessionId, () => []);
+  }, [attachments, editorRef, onSend, plainText, setComposerDraft, updateAttachments, viewSessionId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -133,8 +158,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   );
 
   const handleEditorInput = useCallback((text: string) => {
-    setPlainText(text);
-  }, []);
+    setComposerDraft(viewSessionId, text);
+  }, [setComposerDraft, viewSessionId]);
 
   const handleSlashTrigger = useCallback((query: string) => {
     setSlashQuery(query);
@@ -175,8 +200,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   }, [processFiles]);
 
   const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+    updateAttachments(viewSessionId, (prev) => prev.filter((a) => a.id !== id));
+  }, [updateAttachments, viewSessionId]);
 
   const handleSkillSelect = useCallback((id: string, prompt: string) => {
     editorRef.current?.setSkillChip(id, prompt);

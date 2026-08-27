@@ -1,18 +1,9 @@
 import { useCallback } from 'react';
+import type { AttachmentFile } from '../../../stores/thread-view';
+
+export type { AttachmentFile } from '../../../stores/thread-view';
 
 export type AttachmentStatus = 'uploading' | 'ready' | 'error';
-
-export interface AttachmentFile {
-  id: string;
-  name: string;
-  size: number;
-  type: 'image' | 'file' | 'url';
-  status: AttachmentStatus;
-  preview?: string;
-  path?: string;
-  url?: string;
-  errorMsg?: string;
-}
 
 interface Props {
   files: AttachmentFile[];

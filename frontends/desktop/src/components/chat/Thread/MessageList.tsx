@@ -8,6 +8,7 @@ import { InlineError } from './InlineError';
 const RENDER_BUDGET = 300;
 
 interface Props {
+  sessionId: string;
   messages: Message[];
   isRunning: boolean;
   budgetMultiplier: number;
@@ -23,6 +24,7 @@ function getGroupPartCount(group: ThreadGroup): number {
 }
 
 export const MessageList = memo(function MessageList({
+  sessionId,
   messages,
   isRunning,
   budgetMultiplier,
@@ -85,7 +87,8 @@ export const MessageList = memo(function MessageList({
         if (group.kind === 'turn') {
           return (
             <TurnPair
-              key={group.assistantMsg.id}
+              key={`${sessionId}:${group.assistantMsg.id}`}
+              sessionId={sessionId}
               userMsg={group.userMsg}
               assistantMsg={group.assistantMsg}
               isStreaming={isRunning && globalIndex === groups.length - 1}
@@ -94,16 +97,16 @@ export const MessageList = memo(function MessageList({
         }
         if (group.msg.role === 'user') {
           return (
-            <div key={group.msg.id} data-slot="aui_turn-pair">
+            <div key={`${sessionId}:${group.msg.id}`} data-slot="aui_turn-pair">
               <UserMessage content={group.msg.content} msgId={group.msg.id} images={group.msg.images} files={group.msg.files} />
             </div>
           );
         }
         if (group.msg.role === 'error') {
-          return <InlineError key={group.msg.id} error={group.msg.content} msgId={group.msg.id} />;
+          return <InlineError key={`${sessionId}:${group.msg.id}`} error={group.msg.content} msgId={group.msg.id} />;
         }
         return (
-          <div key={group.msg.id} data-slot="standalone-message" data-status={group.msg.status}>
+          <div key={`${sessionId}:${group.msg.id}`} data-slot="standalone-message" data-status={group.msg.status}>
             {group.msg.content}
           </div>
         );
