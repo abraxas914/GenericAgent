@@ -5,12 +5,13 @@ import { CompletionDrawer } from './CompletionDrawer';
 import { AtRefPopover } from './AtRefPopover';
 import { ContextMenu } from './ContextMenu';
 import { ModelSelector } from './ModelSelector';
-import { AttachmentStrip, type AttachmentFile } from './AttachmentStrip';
+import { AttachmentStrip } from './AttachmentStrip';
 import { SkillPanel } from './SkillPanel';
 import { PrimaryCTA, computeCTAState } from './PrimaryCTA';
 import { StatusStack } from './StatusStack';
 import { usePlaceholder } from './usePlaceholder';
-import { uploadFile } from '../../../services/chat';
+import { useI18n } from '../../../i18n';
+import { candidatesFromDataTransfer, isFileDrag, useAttachmentIngestion } from './useAttachmentIngestion';
 import './composer.css';
 
 interface Props {
@@ -22,17 +23,24 @@ interface Props {
   modelControl?: React.ReactNode | null;
 }
 
-let fileIdCounter = 0;
-
 export function Composer({ onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
   const internalEditorRef = useRef<RichEditorHandle>(null);
   const editorRef = (externalEditorRef ?? internalEditorRef) as React.RefObject<RichEditorHandle>;
   const composerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
   const { text: placeholderText } = usePlaceholder();
+  const { t } = useI18n();
   const [plainText, setPlainText] = useState('');
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const {
+    attachments,
+    ingestCandidates,
+    ingestFiles,
+    removeAttachment,
+    retryAttachment,
+    clearAttachments,
+  } = useAttachmentIngestion({ t });
   const [isDragOver, setIsDragOver] = useState(false);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
@@ -46,58 +54,6 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
-
-  const processFiles = useCallback((fileList: FileList | File[]) => {
-    const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
-    const newFiles: AttachmentFile[] = [];
-    for (const file of Array.from(fileList)) {
-      const id = `att-${++fileIdCounter}`;
-      const isImage = file.type.startsWith('image/') && file.type !== 'image/svg+xml';
-      const tooLarge = file.size > MAX_SIZE;
-      if (isImage && !tooLarge) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          setAttachments((prev) =>
-            prev.map((a) => a.id === id ? { ...a, preview: e.target?.result as string, status: 'ready' as const } : a)
-          );
-        };
-        reader.readAsDataURL(file);
-      } else if (!isImage && !tooLarge) {
-        // Upload file to bridge to get absolute disk path (agent reads via file_read tool)
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          try {
-            const dataUrl = e.target?.result as string;
-            const serverPath = await uploadFile(file.name, dataUrl);
-            setAttachments((prev) =>
-              prev.map((a) => a.id === id ? { ...a, path: serverPath, status: 'ready' as const, errorMsg: undefined } : a)
-            );
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : 'upload failed';
-            setAttachments((prev) =>
-              prev.map((a) => a.id === id ? { ...a, status: 'error' as const, errorMsg } : a)
-            );
-          }
-        };
-        reader.onerror = () => {
-          setAttachments((prev) =>
-            prev.map((a) => a.id === id ? { ...a, status: 'error' as const, errorMsg: 'read failed' } : a)
-          );
-        };
-        reader.readAsDataURL(file);
-      }
-      newFiles.push({
-        id,
-        name: file.name,
-        size: file.size,
-        type: isImage ? 'image' : 'file',
-        status: tooLarge ? 'error' : 'uploading',
-        errorMsg: tooLarge ? 'File too large (max 50 MB)' : undefined,
-        path: (file as File & { path?: string }).path || file.name,
-      });
-    }
-    setAttachments((prev) => [...prev, ...newFiles]);
   }, []);
 
   const handleSend = useCallback(() => {
@@ -119,8 +75,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     onSend(text || '', Object.keys(opts).length > 0 ? opts : undefined);
     editorRef.current?.clear();
     setPlainText('');
-    setAttachments([]);
-  }, [plainText, attachments, onSend]);
+    clearAttachments();
+  }, [plainText, attachments, onSend, clearAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -171,12 +127,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   }, []);
 
   const handlePasteFiles = useCallback((files: File[]) => {
-    processFiles(files);
-  }, [processFiles]);
-
-  const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+    ingestFiles(files);
+  }, [ingestFiles]);
 
   const handleSkillSelect = useCallback((id: string, prompt: string) => {
     editorRef.current?.setSkillChip(id, prompt);
@@ -199,54 +151,67 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
         if (imageType) {
           const blob = await item.getType(imageType);
           const file = new File([blob], 'clipboard-image.png', { type: imageType });
-          processFiles([file]);
+          ingestFiles([file]);
           return;
         }
       }
     } catch { /* clipboard permission denied — silently ignore */ }
-  }, [processFiles]);
+  }, [ingestFiles]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFiles(e.target.files);
+      ingestFiles(e.target.files);
     }
     e.target.value = '';
-  }, [processFiles]);
+  }, [ingestFiles]);
+
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer.types)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOver(true);
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer.types)) return;
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (dragDepthRef.current === 0) dragDepthRef.current = 1;
     setIsDragOver(true);
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragDepthRef.current === 0) return;
     e.preventDefault();
-    setIsDragOver(false);
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragOver(false);
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer.types)) return;
     e.preventDefault();
+    dragDepthRef.current = 0;
     setIsDragOver(false);
-    if (e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
-  }, [processFiles]);
+    ingestCandidates(candidatesFromDataTransfer(e.dataTransfer));
+  }, [ingestCandidates]);
 
   const hasContent = plainText.trim().length > 0 || attachments.length > 0;
-  const hasPendingUploads = attachments.some((a) => a.status === 'uploading');
-  const ctaState = computeCTAState(isGenerating, hasContent, hasPendingUploads);
+  const hasBlockingAttachments = attachments.some((a) => a.status !== 'ready');
+  const ctaState = computeCTAState(isGenerating, hasContent, hasBlockingAttachments);
 
   return (
     <div
       ref={composerRef}
       data-slot="composer-root"
+      onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
-      {isDragOver && <div data-slot="composer-drop-overlay">Drop files here</div>}
+      {isDragOver && <div data-slot="composer-drop-overlay">{t('upload.dropHint')}</div>}
       <div data-slot="composer-surface">
         {!hideStatusStack && <StatusStack />}
-        <AttachmentStrip files={attachments} onRemove={handleRemoveAttachment} />
+        <AttachmentStrip files={attachments} onRemove={removeAttachment} onRetry={retryAttachment} />
         <CompletionDrawer
           visible={slashQuery !== null}
           query={slashQuery || ''}
