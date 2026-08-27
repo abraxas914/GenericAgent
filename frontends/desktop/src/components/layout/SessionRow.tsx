@@ -112,6 +112,7 @@ export function SessionRow({
   return (
     <div
       className={`ga-session-item${isActive ? ' active' : ''}`}
+      data-session-id={session.id}
       onClick={renaming || menuOpen ? undefined : onClick}
     >
       <span className="ga-session-content">

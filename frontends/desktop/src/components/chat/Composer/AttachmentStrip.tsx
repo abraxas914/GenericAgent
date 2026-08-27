@@ -1,21 +1,10 @@
 import { useCallback } from 'react';
 import { useI18n } from '../../../i18n';
+import type { AttachmentFile } from '../../../stores/thread-view';
+
+export type { AttachmentFile } from '../../../stores/thread-view';
 
 export type AttachmentStatus = 'uploading' | 'ready' | 'error';
-
-export interface AttachmentFile {
-  id: string;
-  name: string;
-  size: number;
-  type: 'image' | 'file' | 'url';
-  status: AttachmentStatus;
-  preview?: string;
-  path?: string;
-  url?: string;
-  errorMsg?: string;
-  retryable?: boolean;
-}
-
 interface Props {
   files: AttachmentFile[];
   onRemove: (id: string) => void;

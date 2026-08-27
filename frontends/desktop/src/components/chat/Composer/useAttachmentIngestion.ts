@@ -1,6 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef } from 'react';
 import { uploadFile } from '../../../services/chat';
-import type { AttachmentFile } from './AttachmentStrip';
+import type { AttachmentFile } from '../../../stores/thread-view';
 
 export const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
 
@@ -14,6 +14,8 @@ export interface AttachmentCandidate {
 
 interface Options {
   t: Translate;
+  attachments: AttachmentFile[];
+  updateAttachments: (updater: (attachments: AttachmentFile[]) => AttachmentFile[]) => void;
 }
 
 interface AttachmentJob {
@@ -80,8 +82,7 @@ export function candidatesFromDataTransfer(dataTransfer: DataTransfer): Attachme
   return candidates.length > 0 ? candidates : files.map((file) => ({ file }));
 }
 
-export function useAttachmentIngestion({ t }: Options) {
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+export function useAttachmentIngestion({ t, attachments, updateAttachments }: Options) {
   const sourcesRef = useRef(new Map<string, File>());
   const attemptsRef = useRef(new Map<string, number>());
 
@@ -91,8 +92,8 @@ export function useAttachmentIngestion({ t }: Options) {
 
   const updateCurrent = useCallback((id: string, attempt: number, update: (item: AttachmentFile) => AttachmentFile) => {
     if (!isCurrent(id, attempt)) return;
-    setAttachments((current) => current.map((item) => item.id === id ? update(item) : item));
-  }, [isCurrent]);
+    updateAttachments((current) => current.map((item) => item.id === id ? update(item) : item));
+  }, [isCurrent, updateAttachments]);
 
   const runJob = useCallback(async ({ id, file, isImage }: AttachmentJob) => {
     const attempt = (attemptsRef.current.get(id) || 0) + 1;
@@ -180,9 +181,9 @@ export function useAttachmentIngestion({ t }: Options) {
     }
 
     if (next.length === 0) return;
-    setAttachments((current) => [...current, ...next]);
+    updateAttachments((current) => [...current, ...next]);
     jobs.forEach((job) => { void runJob(job); });
-  }, [runJob, t]);
+  }, [runJob, t, updateAttachments]);
 
   const ingestFiles = useCallback((files: FileList | File[]) => {
     ingestCandidates(Array.from(files).map((file) => ({ file })));
@@ -191,23 +192,25 @@ export function useAttachmentIngestion({ t }: Options) {
   const removeAttachment = useCallback((id: string) => {
     sourcesRef.current.delete(id);
     attemptsRef.current.delete(id);
-    setAttachments((current) => current.filter((item) => item.id !== id));
-  }, []);
+    updateAttachments((current) => current.filter((item) => item.id !== id));
+  }, [updateAttachments]);
 
   const retryAttachment = useCallback((id: string) => {
     const file = sourcesRef.current.get(id);
     if (!file) return;
-    setAttachments((current) => current.map((item) => item.id === id
+    updateAttachments((current) => current.map((item) => item.id === id
       ? { ...item, status: 'uploading', errorMsg: undefined, retryable: undefined }
       : item));
     void runJob({ id, file, isImage: isPreviewableImage(file) });
-  }, [runJob]);
+  }, [runJob, updateAttachments]);
 
   const clearAttachments = useCallback(() => {
-    sourcesRef.current.clear();
-    attemptsRef.current.clear();
-    setAttachments([]);
-  }, []);
+    attachments.forEach(({ id }) => {
+      sourcesRef.current.delete(id);
+      attemptsRef.current.delete(id);
+    });
+    updateAttachments(() => []);
+  }, [attachments, updateAttachments]);
 
   return {
     attachments,

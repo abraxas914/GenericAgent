@@ -1,5 +1,10 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import type { SendOptions } from '../../../stores/chat';
+import {
+  sessionViewId,
+  useThreadViewStore,
+  type AttachmentFile,
+} from '../../../stores/thread-view';
 import { RichEditorInput, type RichEditorHandle } from './RichEditorInput';
 import { CompletionDrawer } from './CompletionDrawer';
 import { AtRefPopover } from './AtRefPopover';
@@ -15,6 +20,7 @@ import { candidatesFromDataTransfer, isFileDrag, useAttachmentIngestion } from '
 import './composer.css';
 
 interface Props {
+  sessionId?: string | null;
   onSend: (text: string, opts?: SendOptions) => void;
   onStop: () => void;
   isGenerating: boolean;
@@ -23,7 +29,10 @@ interface Props {
   modelControl?: React.ReactNode | null;
 }
 
-export function Composer({ onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
+let composerInstanceCounter = 0;
+const EMPTY_ATTACHMENTS: AttachmentFile[] = [];
+
+export function Composer({ sessionId, onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
   const internalEditorRef = useRef<RichEditorHandle>(null);
   const editorRef = (externalEditorRef ?? internalEditorRef) as React.RefObject<RichEditorHandle>;
   const composerRef = useRef<HTMLDivElement>(null);
@@ -32,15 +41,34 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   const dragDepthRef = useRef(0);
   const { text: placeholderText } = usePlaceholder();
   const { t } = useI18n();
-  const [plainText, setPlainText] = useState('');
+  const [standaloneViewId] = useState(() => `__composer_instance_${++composerInstanceCounter}__`);
+  const viewSessionId = sessionId === undefined ? standaloneViewId : sessionId;
+  const viewId = sessionViewId(viewSessionId);
+  const plainText = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.composerDraft ?? '',
+  );
+  const attachments = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.attachments ?? EMPTY_ATTACHMENTS,
+  );
+  const setComposerDraft = useThreadViewStore((state) => state.setComposerDraft);
+  const updateAttachments = useThreadViewStore((state) => state.updateAttachments);
+  const updateViewAttachments = useCallback(
+    (updater: (current: AttachmentFile[]) => AttachmentFile[]) => {
+      updateAttachments(viewSessionId, updater);
+    },
+    [updateAttachments, viewSessionId],
+  );
   const {
-    attachments,
     ingestCandidates,
     ingestFiles,
     removeAttachment,
     retryAttachment,
     clearAttachments,
-  } = useAttachmentIngestion({ t });
+  } = useAttachmentIngestion({
+    t,
+    attachments,
+    updateAttachments: updateViewAttachments,
+  });
   const [isDragOver, setIsDragOver] = useState(false);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
@@ -56,6 +84,13 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     return () => observer.disconnect();
   }, []);
 
+  useLayoutEffect(() => {
+    if (editorRef.current?.getText() !== plainText) {
+      editorRef.current?.setText(plainText);
+    }
+    setSlashQuery(null);
+    setAtQuery(null);
+  }, [editorRef, plainText, viewId]);
   const handleSend = useCallback(() => {
     const text = plainText.trim();
     if (!text && attachments.length === 0) return;
@@ -74,9 +109,9 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     }
     onSend(text || '', Object.keys(opts).length > 0 ? opts : undefined);
     editorRef.current?.clear();
-    setPlainText('');
     clearAttachments();
-  }, [plainText, attachments, onSend, clearAttachments]);
+    setComposerDraft(viewSessionId, '');
+  }, [attachments, clearAttachments, editorRef, onSend, plainText, setComposerDraft, viewSessionId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -89,8 +124,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   );
 
   const handleEditorInput = useCallback((text: string) => {
-    setPlainText(text);
-  }, []);
+    setComposerDraft(viewSessionId, text);
+  }, [setComposerDraft, viewSessionId]);
 
   const handleSlashTrigger = useCallback((query: string) => {
     setSlashQuery(query);
