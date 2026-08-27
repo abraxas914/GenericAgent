@@ -28,7 +28,7 @@ const PACKAGING_DIR = path.join(DESKTOP_ROOT, 'packaging');
 let pass = 0;
 let fail = 0;
 const warnings = [];
-const RELEASE_VERSION = '0.2.0';
+const RELEASE_VERSION = '0.2.1';
 
 function ok(msg) { console.log(`  ✓ ${msg}`); pass++; }
 function bad(msg) { console.error(`  ✗ ${msg}`); fail++; }

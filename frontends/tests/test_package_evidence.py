@@ -64,7 +64,7 @@ def complete_report(platform: str = "linux"):
     }
     return {
         "expectedCommit": "abc1234",
-        "releaseVersion": "0.2.0",
+        "releaseVersion": "0.2.1",
         "artifact": {"sha256": "f" * 64},
         "environment": {"isolatedConductorPort": isolated_port},
         "success": True,
@@ -130,8 +130,8 @@ def write_info_plist(root: Path, **overrides):
     contents = root / "Contents"
     contents.mkdir(parents=True, exist_ok=True)
     values = {
-        "CFBundleShortVersionString": "0.2.0",
-        "CFBundleVersion": "0.2.0",
+        "CFBundleShortVersionString": "0.2.1",
+        "CFBundleVersion": "0.2.1",
         **overrides,
     }
     with (contents / "Info.plist").open("wb") as stream:
@@ -140,11 +140,11 @@ def write_info_plist(root: Path, **overrides):
 
 def test_macos_package_version_comes_from_both_native_bundle_keys(tmp_path):
     write_info_plist(tmp_path)
-    assert journey.read_macos_bundle_versions(tmp_path) == ("0.2.0", "0.2.0")
+    assert journey.read_macos_bundle_versions(tmp_path) == ("0.2.1", "0.2.1")
 
 
 @pytest.mark.parametrize("key", ["CFBundleShortVersionString", "CFBundleVersion"])
-@pytest.mark.parametrize("value", ["0.2.1", 200])
+@pytest.mark.parametrize("value", ["0.2.0", 200])
 def test_macos_package_version_rejects_wrong_or_non_string_keys(tmp_path, key, value):
     write_info_plist(tmp_path, **{key: value})
     with pytest.raises(journey.JourneyFailure, match=key):
@@ -187,12 +187,14 @@ def test_package_shape_rejects_excluded_source_package_json(tmp_path):
         runtime_root / "app" / "agentmain.py",
         runtime_root / "app" / "frontends" / "desktop_bridge.py",
         runtime_root / "app" / "frontends" / "desktop" / "static" / "index.html",
+        runtime_root / "app" / "frontends" / "desktop" / "static" / "assets" / "index.js",
         runtime_root / "python" / "bin" / "python3",
         runtime_root / ".prepared",
         runtime_root / "app" / "frontends" / "desktop" / "package.json",
     ]:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("{}", encoding="utf-8")
+        content = "data-import-row data-export-row" if path.name == "index.js" else "{}"
+        path.write_text(content, encoding="utf-8")
     write_info_plist(package_root)
 
     candidate = object.__new__(journey.Journey)
@@ -208,8 +210,9 @@ def test_package_shape_rejects_excluded_source_package_json(tmp_path):
     (runtime_root / "app" / "frontends" / "desktop" / "package.json").unlink()
     candidate.check_package_shape()
     assert candidate.report["checks"] == {
-        "packagedVersion": "0.2.0",
-        "packagedBundleVersion": "0.2.0",
+        "packagedVersion": "0.2.1",
+        "packagedBundleVersion": "0.2.1",
+        "dataBackupEntrypoints": True,
         "packageShape": True,
     }
 
@@ -414,6 +417,8 @@ def test_every_successful_ready_snapshot_records_its_owned_conductor_pid(
                 "pid": 44121,
                 "build_id": "desktop-abc1234",
             }
+        if path == "/services/capabilities":
+            return {"dataBackup": True}
         if path == "/services/panel":
             return stopped_panel(owned_conductor(pid=44122))
         raise AssertionError(path)

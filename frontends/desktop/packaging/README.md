@@ -61,7 +61,7 @@ GitHub Release API。`publish-release` 显式 `needs` 三个平台，且只在 t
 
 `workflow_dispatch` 只运行所选平台（或 all）的候选 artifact 构建。即使未选择的 jobs 是
 `skipped`，发布 job 的事件与三个 `success` 条件也不会成立，因此手工运行不会创建 Release。
-应用 metadata 版本仍为 `0.2.0`；workflow 只消费维护者实际 push 的匹配 tag，不创建、移动或
+应用 metadata 版本为 `0.2.1`；workflow 只消费维护者实际 push 的匹配 tag，不创建、移动或
 改写既有 tag，也不把 `V2.0.0` 等公开命名强行绑定到应用 metadata。
 
 统一 prerelease 必须精确包含以下六个文件：
@@ -93,8 +93,9 @@ GitHub Release API。`publish-release` 显式 `needs` 三个平台，且只在 t
 - Python runtime 的 32 个直接/传递依赖全部在 `python-runtime-requirements.txt` 使用 `==`；
   wheel 下载强制 `--only-binary=:all:`。因此离线准备不需要 `setuptools`/`wheel`，二者不再
   放入 wheelhouse。macOS 的 `ds-store==1.3.3` 与 `mac-alias==2.2.3` 另行使用 wheel hash 锁。
-- runner label 使用 `windows-2025`、`ubuntu-24.04`、`macos-15`。GitHub 当前的
-  `macos-15` 标准 runner 是 Apple silicon；workflow 仍以 `uname -m == arm64` 硬断言，
+- runner label 使用 `windows-2025`、`ubuntu-24.04`、`macos-26`。macOS workflow 固定
+  `DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer`，并在构建前硬断言
+  Xcode `26.5`、build `17F42`、macOS SDK `26.5` 与 `arm64`；任何不匹配都会立即失败。
   PBS 与最终 DMG 名称也明确为 `aarch64`。
 
 这里不声称 bit-for-bit reproducible，仍有以下明确风险：GitHub runner label 内的 image

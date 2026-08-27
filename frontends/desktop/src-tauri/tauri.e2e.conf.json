@@ -11,7 +11,11 @@
           "identifier": "e2e",
           "description": "Test-only WebdriverIO capability",
           "windows": ["main", "setup"],
-          "permissions": ["wdio:default"]
+          "permissions": [
+            "wdio:default",
+            "core:event:allow-emit",
+            "allow-capture-macos-window-screenshot"
+          ]
         }
       ]
     }

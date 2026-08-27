@@ -117,6 +117,28 @@ describe('DataSection maintenance boundary', () => {
     expect(mocks.fetchServices).toHaveBeenCalledOnce();
   });
 
+  it('shows backup entrypoints when the bridge reports support', async () => {
+    render(<DataSection />);
+    expect(screen.getByTestId('data-import-row')).toBeTruthy();
+    expect(screen.getByTestId('data-export-row')).toBeTruthy();
+  });
+
+  it('keeps backup entrypoints visible while capability support is unknown', async () => {
+    mocks.supportsDataBackupApi.mockResolvedValue(null);
+    render(<DataSection />);
+    expect(screen.getByTestId('data-import-row')).toBeTruthy();
+    expect(screen.getByTestId('data-export-row')).toBeTruthy();
+    await waitFor(() => expect(mocks.supportsDataBackupApi).toHaveBeenCalledOnce());
+    expect(screen.getByTestId('data-import-row')).toBeTruthy();
+  });
+
+  it('hides backup entrypoints only when the bridge explicitly reports unsupported', async () => {
+    mocks.supportsDataBackupApi.mockResolvedValue(false);
+    render(<DataSection />);
+    await waitFor(() => expect(screen.queryByTestId('data-import-row')).toBeNull());
+    expect(screen.queryByTestId('data-export-row')).toBeNull();
+  });
+
   it('shows exact result statistics, backup path, and recovery guidance', async () => {
     const result = {
       memoryCopied: 3,

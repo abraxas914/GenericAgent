@@ -39,7 +39,7 @@ BRIDGE_HOST = "127.0.0.1"
 DEFAULT_BRIDGE_PORT = 14168
 BRIDGE_PORT = DEFAULT_BRIDGE_PORT
 BRIDGE_BASE = f"http://{BRIDGE_HOST}:{BRIDGE_PORT}"
-RELEASE_VERSION = "0.2.0"
+RELEASE_VERSION = "0.2.1"
 CONDUCTOR_SERVICE_ID = "frontends/conductor.py"
 DEFAULT_CONDUCTOR_PORT = 8900
 E2E_CONDUCTOR_PORT_ENV = "GA_DESKTOP_E2E_CONDUCTOR_PORT"
@@ -495,7 +495,10 @@ class Journey:
             },
             "macos": {
                 "gatekeeperOrOpenAnyway": "pending",
-                "trafficLightsAndWindowFocus": "pending",
+                "trafficLightsFocusedExpanded": "pending",
+                "trafficLightsUnfocusedExpanded": "pending",
+                "trafficLightsFocusedCollapsed": "pending",
+                "trafficLightsUnfocusedCollapsed": "pending",
                 "retryButtonAfterPortRelease": "pending",
             },
         }
@@ -522,6 +525,14 @@ class Journey:
             short_version, bundle_version = read_macos_bundle_versions(self.package_root)
             self.report["checks"]["packagedVersion"] = short_version
             self.report["checks"]["packagedBundleVersion"] = bundle_version
+        static_dir = self.runtime_root / "app" / "frontends" / "desktop" / "static"
+        compiled_scripts = b"\n".join(
+            path.read_bytes() for path in sorted(static_dir.rglob("*.js")) if path.is_file()
+        )
+        required_entrypoints = (b"data-import-row", b"data-export-row")
+        if not all(marker in compiled_scripts for marker in required_entrypoints):
+            raise JourneyFailure("compiled Desktop UI is missing data backup entrypoints")
+        self.report["checks"]["dataBackupEntrypoints"] = True
         self.report["checks"]["packageShape"] = True
 
     def prepare_external_root(self) -> None:
@@ -634,6 +645,10 @@ class Journey:
         self.report["bootstrap"][scenario] = snapshot
         self.report["identities"][scenario] = identity
         self.report["pids"][-1]["bridge"] = identity["pid"]
+        capabilities = request_json("GET", "/services/capabilities", timeout=5)
+        if capabilities.get("dataBackup") is not True:
+            raise JourneyFailure(f"package bridge did not expose data backup capability: {capabilities}")
+        self.report["checks"]["dataBackupCapabilities"] = capabilities
         conductor = wait_until(
             f"{scenario} owned isolated conductor",
             lambda: verified_owned_conductor(

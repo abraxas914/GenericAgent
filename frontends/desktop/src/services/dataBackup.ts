@@ -34,6 +34,8 @@ export interface DataExportResult {
   content: BackupContentCounts;
 }
 
+export type DataBackupAvailability = true | false | null;
+
 export class DataBackupError extends Error {
   readonly code: string | null;
   readonly runningSessions: string[];
@@ -66,14 +68,29 @@ async function postJson<T>(path: string, body: Record<string, unknown>): Promise
   return data as T;
 }
 
-export async function supportsDataBackupApi(): Promise<boolean> {
+export async function supportsDataBackupApi(): Promise<DataBackupAvailability> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), 3_000);
   try {
-    // The bridge answers 405 when this POST-only route exists and 404 on older cores.
-    // HEAD is side-effect free and avoids probing with an invalid import request.
-    const response = await fetch(`${BRIDGE_BASE}/memory/import/inspect`, { method: 'HEAD' });
-    return response.status !== 404;
+    const response = await fetch(`${BRIDGE_BASE}/services/capabilities`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    if (response.status === 404) return false;
+    if (!response.ok) return null;
+    const payload: unknown = await response.json();
+    if (
+      typeof payload !== 'object'
+      || payload === null
+      || typeof (payload as { dataBackup?: unknown }).dataBackup !== 'boolean'
+    ) {
+      return null;
+    }
+    return (payload as { dataBackup: boolean }).dataBackup;
   } catch {
-    return false;
+    return null;
+  } finally {
+    globalThis.clearTimeout(timeout);
   }
 }
 

@@ -34,7 +34,10 @@ function pythonPath(repoRoot: string): string {
 
 async function run(): Promise<void> {
   const mode = argument('mode') === 'desktop' ? 'desktop' : 'browser';
-  const suite = argument('suite') === 'full' ? 'full' : 'smoke';
+  const requestedSuite = argument('suite');
+  const suite = requestedSuite === 'full' || requestedSuite === 'chrome'
+    ? requestedSuite
+    : 'smoke';
   const desktopRoot = resolve(process.cwd());
   const repoRoot = resolve(desktopRoot, '..', '..');
   const harness = new DesktopE2EHarness({
@@ -42,6 +45,7 @@ async function run(): Promise<void> {
     desktopRoot,
     pythonPath: pythonPath(repoRoot),
     application: process.env.GA_E2E_APPLICATION,
+    preserveEvidence: mode === 'desktop' && suite === 'chrome',
   });
   let exitCode = 1;
   try {

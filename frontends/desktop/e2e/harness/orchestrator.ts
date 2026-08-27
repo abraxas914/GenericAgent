@@ -16,6 +16,7 @@ interface StartOptions {
   desktopRoot: string;
   pythonPath: string;
   application?: string;
+  preserveEvidence?: boolean;
 }
 
 interface ManagedProcess {
@@ -145,7 +146,7 @@ export class DesktopE2EHarness {
     }
     const sandbox = this.sandbox;
     this.sandbox = null;
-    if (sandbox && !this.failed) {
+    if (sandbox && !this.failed && !this.options.preserveEvidence) {
       await cleanupSandbox(sandbox.root);
     } else if (sandbox) {
       const artifactRoot = resolve(
@@ -154,8 +155,12 @@ export class DesktopE2EHarness {
       );
       await mkdir(dirname(artifactRoot), { recursive: true });
       await cp(sandbox.reports, artifactRoot, { recursive: true });
-      process.stderr.write(`E2E report copied to ${artifactRoot}\n`);
-      process.stderr.write(`E2E failure evidence preserved at ${sandbox.root}\n`);
+      process.stderr.write(`E2E evidence copied to ${artifactRoot}\n`);
+      if (this.failed) {
+        process.stderr.write(`E2E failure evidence preserved at ${sandbox.root}\n`);
+      } else {
+        await cleanupSandbox(sandbox.root);
+      }
     }
   }
 

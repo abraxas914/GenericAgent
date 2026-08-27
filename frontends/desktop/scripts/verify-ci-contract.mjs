@@ -92,6 +92,7 @@ const requiredScripts = [
   'test:packaging',
   'e2e:browser',
   'e2e:desktop',
+  'e2e:desktop:chrome',
   'e2e:desktop:full',
   'e2e:canary',
   'tauri',
@@ -172,6 +173,7 @@ for (const workflowPath of workflowPaths) {
 }
 
 const releaseWorkflow = readText('.github/workflows/desktop-release-package.yml', repoRoot);
+const qualityWorkflow = readText('.github/workflows/desktop-ci.yml', repoRoot);
 function workflowJob(workflow, name) {
   const header = new RegExp(`^  ${name}:\\s*$`, 'm');
   const match = header.exec(workflow);
@@ -626,6 +628,7 @@ check(
 );
 
 const macJobWorkflow = buildJobWorkflows['build-macos'];
+const macTitlebarJobWorkflow = workflowJob(qualityWorkflow, 'macos-titlebar-geometry');
 const postDmgScript = readText('scripts/post-dmg.sh');
 const macInstallScript = readText('packaging/scripts/macos/install_macos.sh');
 const linuxInstallScript = readText('packaging/scripts/linux/install_linux.sh');
@@ -633,11 +636,25 @@ const windowsInstallScript = readText('packaging/scripts/windows/install_windows
 const settingsMergeHelper = readText('packaging/scripts/merge_desktop_settings.py');
 const settingsStorage = readText('../desktop_settings.py');
 check(
-  macJobWorkflow.includes('runs-on: macos-15')
+  macJobWorkflow.includes('runs-on: macos-26')
+    && macJobWorkflow.includes('DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer')
+    && macJobWorkflow.includes('"Xcode 26.5"')
+    && macJobWorkflow.includes('"Build version 17F42"')
+    && macJobWorkflow.includes('--show-sdk-version)" = "26.5"')
     && macJobWorkflow.includes('test "$(uname -m)" = arm64')
     && macJobWorkflow.includes('aarch64-apple-darwin-install_only.tar.gz')
     && !macJobWorkflow.includes('x86_64-apple-darwin'),
-  'macOS packaging uses the explicit arm64 runner and runtime with an architecture assertion',
+  'macOS packaging pins macos-26, Xcode 26.5 build 17F42, SDK 26.5, and arm64',
+);
+check(
+  macTitlebarJobWorkflow.includes('runs-on: macos-26')
+    && macTitlebarJobWorkflow.includes('DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer')
+    && macTitlebarJobWorkflow.includes('"Xcode 26.5"')
+    && macTitlebarJobWorkflow.includes('"Build version 17F42"')
+    && macTitlebarJobWorkflow.includes('--show-sdk-version)" = "26.5"')
+    && macTitlebarJobWorkflow.includes('npm run e2e:desktop:chrome')
+    && macTitlebarJobWorkflow.includes('if-no-files-found: error'),
+  'macOS titlebar geometry E2E uses the pinned toolchain and requires screenshot evidence',
 );
 check(
   /pip install --require-hashes --only-binary=:all:\s+--requirement frontends\/desktop\/packaging\/dmg-build-requirements\.txt/.test(macJobWorkflow),
@@ -743,6 +760,7 @@ const requiredFiles = [
   'e2e/run.ts',
   'e2e/wdio.browser.conf.ts',
   'e2e/wdio.desktop.conf.ts',
+  'e2e/specs/desktop/macos-chrome.e2e.ts',
   'e2e/package/real_package_journey.py',
   'e2e/package/verify_candidate_evidence.py',
   'e2e/windows/Invoke-WindowsUserJourney.ps1',
@@ -754,6 +772,21 @@ const requiredFiles = [
 for (const relativePath of requiredFiles) {
   check(fs.existsSync(path.join(desktopRoot, relativePath)), `required E2E file exists: ${relativePath}`);
 }
+
+const macosChromeE2E = readText('e2e/specs/desktop/macos-chrome.e2e.ts');
+const e2eRunner = readText('e2e/run.ts');
+const e2eOrchestrator = readText('e2e/harness/orchestrator.ts');
+check(
+  macosChromeE2E.includes('current.controlCenterY <= 38')
+    && macosChromeE2E.includes('current.trafficLightCenterY <= 38')
+    && macosChromeE2E.includes("invoke('capture_macos_window_screenshot'")
+    && ['expanded', 'collapsed', 'resized', 'scale-change'].every(
+      (state) => macosChromeE2E.includes(`macos-titlebar-${state}`),
+    )
+    && e2eRunner.includes("preserveEvidence: mode === 'desktop' && suite === 'chrome'")
+    && e2eOrchestrator.includes('!this.options.preserveEvidence'),
+  'macOS chrome E2E cannot pass below the titlebar and preserves four native-window screenshots',
+);
 
 const realPackageJourney = readText('e2e/package/real_package_journey.py');
 const desktopBridge = readText('../desktop_bridge.py');
