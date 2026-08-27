@@ -93,8 +93,9 @@ GitHub Release API。`publish-release` 显式 `needs` 三个平台，且只在 t
 - Python runtime 的 32 个直接/传递依赖全部在 `python-runtime-requirements.txt` 使用 `==`；
   wheel 下载强制 `--only-binary=:all:`。因此离线准备不需要 `setuptools`/`wheel`，二者不再
   放入 wheelhouse。macOS 的 `ds-store==1.3.3` 与 `mac-alias==2.2.3` 另行使用 wheel hash 锁。
-- runner label 使用 `windows-2025`、`ubuntu-24.04`、`macos-15`。GitHub 当前的
-  `macos-15` 标准 runner 是 Apple silicon；workflow 仍以 `uname -m == arm64` 硬断言，
+- runner label 使用 `windows-2025`、`ubuntu-24.04`、`macos-26`。macOS workflow 固定
+  `DEVELOPER_DIR=/Applications/Xcode_26.5.app/Contents/Developer`，并在构建前硬断言
+  Xcode `26.5`、build `17F42`、macOS SDK `26.5` 与 `arm64`；任何不匹配都会立即失败。
   PBS 与最终 DMG 名称也明确为 `aarch64`。
 
 这里不声称 bit-for-bit reproducible，仍有以下明确风险：GitHub runner label 内的 image

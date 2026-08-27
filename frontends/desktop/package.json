@@ -20,6 +20,7 @@
     "test:all": "vitest run && node scripts/assert-dist-built.mjs",
     "e2e:browser": "tsx e2e/run.ts --mode=browser",
     "e2e:desktop": "tsx e2e/run.ts --mode=desktop",
+    "e2e:desktop:chrome": "tsx e2e/run.ts --mode=desktop --suite=chrome",
     "e2e:desktop:full": "tsx e2e/run.ts --mode=desktop --suite=full",
     "e2e:canary": "tsx e2e/canary.ts",
     "e2e:doctor": "tsx e2e/doctor.ts",

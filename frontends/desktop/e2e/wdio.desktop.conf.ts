@@ -8,10 +8,16 @@ if (!context.application) throw new Error('Desktop E2E context is missing applic
 const e2eRoot = dirname(fileURLToPath(import.meta.url));
 const smokeSpec = join(e2eRoot, 'specs', 'desktop', 'smoke.e2e.ts');
 const fullSpec = join(e2eRoot, 'specs', 'desktop', 'full.e2e.ts');
+const chromeSpec = join(e2eRoot, 'specs', 'desktop', 'macos-chrome.e2e.ts');
+const specs = process.env.GA_E2E_SUITE === 'full'
+  ? [smokeSpec, fullSpec]
+  : process.env.GA_E2E_SUITE === 'chrome'
+    ? [chromeSpec]
+    : [smokeSpec];
 
 export const config: WebdriverIO.Config = {
   runner: 'local',
-  specs: process.env.GA_E2E_SUITE === 'full' ? [smokeSpec, fullSpec] : [smokeSpec],
+  specs,
   maxInstances: 1,
   logLevel: 'error',
   bail: 0,

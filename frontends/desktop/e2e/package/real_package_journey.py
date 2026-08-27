@@ -495,7 +495,10 @@ class Journey:
             },
             "macos": {
                 "gatekeeperOrOpenAnyway": "pending",
-                "trafficLightsAndWindowFocus": "pending",
+                "trafficLightsFocusedExpanded": "pending",
+                "trafficLightsUnfocusedExpanded": "pending",
+                "trafficLightsFocusedCollapsed": "pending",
+                "trafficLightsUnfocusedCollapsed": "pending",
                 "retryButtonAfterPortRelease": "pending",
             },
         }

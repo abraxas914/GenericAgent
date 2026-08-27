@@ -221,3 +221,49 @@ jobs:
           path: frontends/desktop/e2e-results
           if-no-files-found: warn
           retention-days: 7
+
+  macos-titlebar-geometry:
+    name: macOS native titlebar geometry
+    needs: [contract-preflight, node-contracts, python-tests, rust-contracts]
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+      - name: Verify pinned macOS build environment
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version | sed -n '1p')" = "Xcode 26.5"
+          test "$(xcodebuild -version | sed -n '2p')" = "Build version 17F42"
+          test "$(xcrun --sdk macosx --show-sdk-version)" = "26.5"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontends/desktop/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: frontends/desktop/e2e/requirements.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: frontends/desktop/src-tauri -> target
+      - name: Install locked desktop dependencies
+        working-directory: frontends/desktop
+        run: npm ci
+      - name: Install bridge runtime
+        run: python -m pip install -r frontends/desktop/e2e/requirements.txt
+      - name: Build and verify native macOS chrome geometry
+        working-directory: frontends/desktop
+        run: npm run e2e:desktop:chrome
+      - name: Upload full-window geometry evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-titlebar-geometry-${{ github.run_id }}
+          path: frontends/desktop/e2e-results
+          if-no-files-found: error
+          retention-days: 14
