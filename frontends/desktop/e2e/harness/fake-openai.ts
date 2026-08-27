@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-export type FakeScenario = 'normal' | 'http500' | 'disconnect' | 'two-call-hang';
+export type FakeScenario = 'normal' | 'http500' | 'disconnect' | 'hold' | 'two-call-hang';
 
 export interface FakeTranscriptEntry {
   path: string;
@@ -81,6 +81,11 @@ export class FakeOpenAI {
       request.socket.destroy();
       return;
     }
+    if (scenario === 'hold') {
+      this.heldResponses.add(response);
+      response.on('close', () => this.heldResponses.delete(response));
+      return;
+    }
     if (scenario === 'two-call-hang' && call > 1) {
       this.heldResponses.add(response);
       response.on('close', () => this.heldResponses.delete(response));
@@ -97,6 +102,7 @@ export class FakeOpenAI {
     const raw = JSON.stringify(body);
     if (raw.includes('[E2E:http500]')) return 'http500';
     if (raw.includes('[E2E:disconnect]')) return 'disconnect';
+    if (raw.includes('[E2E:hold]')) return 'hold';
     if (raw.includes('[E2E:two-call-hang]')) return 'two-call-hang';
     return 'normal';
   }

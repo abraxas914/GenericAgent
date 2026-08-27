@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { join } from 'node:path';
 import { ChatPage } from '../../pages/ChatPage';
 import { UsagePage } from '../../pages/UsagePage';
 import { controlRequest, loadE2EContext } from '../../harness/context';
@@ -98,5 +99,59 @@ describe('GenericAgent critical desktop loops in browser mode', () => {
     await chat.waitUntilReady();
     await usage.open();
     await usage.waitForTotal('219');
+  });
+
+  it('keeps two running sessions isolated through 20 switches', async () => {
+    const promptA = '[E2E:hold] concurrent session A';
+    const promptB = '[E2E:hold] concurrent session B';
+
+    await chat.startNewChat();
+    await chat.send(promptA);
+    await browser.waitUntil(async () => await $$('.ga-status-dot.working').length === 1, {
+      timeout: 20_000,
+      interval: 100,
+      timeoutMsg: 'Session A did not enter running state',
+    });
+    const sessionA = await $('.ga-session-item.active').getAttribute('data-session-id');
+    assert.ok(sessionA, 'Session A has no stable sidebar id');
+
+    await chat.startNewChat();
+    await chat.send(promptB);
+    await browser.waitUntil(async () => await $$('.ga-status-dot.working').length === 2, {
+      timeout: 20_000,
+      interval: 100,
+      timeoutMsg: 'Both sessions did not remain running',
+    });
+    const sessionB = await $('.ga-session-item.active').getAttribute('data-session-id');
+    assert.ok(sessionB, 'Session B has no stable sidebar id');
+    assert.notEqual(sessionA, sessionB);
+
+    for (let index = 0; index < 20; index++) {
+      const expectedId = index % 2 === 0 ? sessionA : sessionB;
+      const expectedPrompt = index % 2 === 0 ? promptA : promptB;
+      const otherPrompt = index % 2 === 0 ? promptB : promptA;
+      await $(`.ga-session-item[data-session-id="${expectedId}"]`).click();
+      await browser.waitUntil(async () => {
+        const activeId = await $('.ga-session-item.active').getAttribute('data-session-id');
+        const threadText = await $('[data-slot="aui_thread-viewport"]').getText();
+        return activeId === expectedId && threadText.includes(expectedPrompt) && !threadText.includes(otherPrompt);
+      }, {
+        timeout: 5_000,
+        interval: 50,
+        timeoutMsg: `Session projection crossed buckets on switch ${index + 1}`,
+      });
+      assert.equal(await $$('.ga-status-dot.working').length, 2);
+    }
+
+    await browser.saveScreenshot(join(context.reports, 'concurrent-session-switching.png'));
+    await controlRequest('/fake/release-held', { method: 'POST', body: '{}' });
+    await chat.waitForAssistantText('Harness resumed');
+    await $(`.ga-session-item[data-session-id="${sessionA}"]`).click();
+    await chat.waitForAssistantText('Harness resumed');
+    await browser.waitUntil(async () => await $$('.ga-status-dot.working').length === 0, {
+      timeout: 20_000,
+      interval: 100,
+      timeoutMsg: 'Concurrent sessions did not settle independently',
+    });
   });
 });

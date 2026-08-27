@@ -45,7 +45,9 @@ async function run(): Promise<void> {
     desktopRoot,
     pythonPath: pythonPath(repoRoot),
     application: process.env.GA_E2E_APPLICATION,
-    preserveEvidence: mode === 'desktop' && suite === 'chrome',
+    preserveEvidence:
+      process.env.GA_E2E_PRESERVE_EVIDENCE === '1' ||
+      (mode === 'desktop' && suite === 'chrome'),
   });
   let exitCode = 1;
   try {

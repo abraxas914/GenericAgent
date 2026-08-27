@@ -3,6 +3,7 @@ import React, { forwardRef, useImperativeHandle, useState } from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Composer } from '../components/chat/Composer';
+import { useThreadViewStore } from '../stores/thread-view';
 
 const { uploadFileMock } = vi.hoisted(() => ({ uploadFileMock: vi.fn() }));
 
@@ -128,6 +129,7 @@ describe('Composer attachment lifecycle', () => {
 
   beforeEach(() => {
     uploadFileMock.mockReset();
+    useThreadViewStore.setState({ viewBySessionId: {} });
     globalThis.ResizeObserver = class {
       observe() {}
       disconnect() {}
@@ -175,5 +177,27 @@ describe('Composer attachment lifecycle', () => {
     await waitFor(() => {
       expect(screen.getByTitle('upload failed')).not.toBeNull();
     });
+  });
+
+  it('restores drafts and attachments when switching between sessions', async () => {
+    globalThis.FileReader = IdleFileReader as unknown as typeof FileReader;
+    const props = { onSend: vi.fn(), onStop: vi.fn(), isGenerating: false };
+    const { rerender } = render(<Composer {...props} sessionId="A" />);
+
+    fireEvent.change(screen.getByLabelText('Composer input'), { target: { value: 'draft A' } });
+    const fileInput = document.querySelector('input[type="file"]:not([accept])') as HTMLInputElement;
+    fireEvent.change(fileInput, {
+      target: { files: [new File(['hello'], 'a.txt', { type: 'text/plain' })] },
+    });
+    await waitFor(() => expect(screen.getByText('a.txt')).not.toBeNull());
+
+    rerender(<Composer {...props} sessionId="B" />);
+    expect((screen.getByLabelText('Composer input') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.queryByText('a.txt')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Composer input'), { target: { value: 'draft B' } });
+
+    rerender(<Composer {...props} sessionId="A" />);
+    expect((screen.getByLabelText('Composer input') as HTMLTextAreaElement).value).toBe('draft A');
+    expect(screen.getByText('a.txt')).not.toBeNull();
   });
 });
