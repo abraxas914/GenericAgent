@@ -249,11 +249,15 @@ async function verifyReleaseContract() {
     fail('Windows packaging must convert RUNNER_TEMP with cygpath before POSIX tools use it');
   }
   const macos = workflowJob(workflow, 'build-macos');
-  if (!macos.includes('runs-on: macos-15')
+  if (!macos.includes('runs-on: macos-26')
+      || !macos.includes('DEVELOPER_DIR: /Applications/Xcode_26.5.app/Contents/Developer')
       || !macos.includes('test "$(uname -m)" = arm64')
+      || !macos.includes('test "$(xcodebuild -version | sed -n \'1p\')" = "Xcode 26.5"')
+      || !macos.includes('test "$(xcodebuild -version | sed -n \'2p\')" = "Build version 17F42"')
+      || !macos.includes('test "$(xcrun --sdk macosx --show-sdk-version)" = "26.5"')
       || !workflow.includes('MACOS_PACKAGING_PYTHON_VERSION: "3.12.10"')
       || !workflow.includes('PBS_PYTHON_VERSION: "3.12.14"')) {
-    fail('macOS packaging must use the pinned arm64 host and separate Python inputs');
+    fail('macOS packaging must pin macos-26, Xcode 26.5 build 17F42, SDK 26.5, arm64, and separate Python inputs');
   }
   const linux = workflowJob(workflow, 'build-linux');
   if (!linux.includes('runs-on: ubuntu-22.04')
