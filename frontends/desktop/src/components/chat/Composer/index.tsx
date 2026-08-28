@@ -11,7 +11,19 @@ import { PrimaryCTA, computeCTAState } from './PrimaryCTA';
 import { StatusStack } from './StatusStack';
 import { usePlaceholder } from './usePlaceholder';
 import { uploadFile, statDroppedPath } from '../../../services/chat';
+import { useSettingsStore } from '../../../stores/settings';
+import { useChatStore } from '../../../stores/chat';
 import './composer.css';
+
+// Mixin 后端不支持图片 vision(桌面端 base64 注入会撞 MixinSession 只读保护)。
+// 发送前判定当前绑定模型是否 Mixin,若是则图片降级为磁盘路径文本。
+function currentModelIsMixin(): boolean {
+  const { modelProfiles, defaultModelNo, liveModel } = useSettingsStore.getState();
+  const sessionModelNo = useChatStore.getState().sessionModelNo;
+  const no = sessionModelNo ?? defaultModelNo;
+  if (modelProfiles[no]?.kind === 'mixin') return true;
+  return !!liveModel?.isMixin;
+}
 
 interface Props {
   onSend: (text: string, opts?: SendOptions) => void;
@@ -144,10 +156,20 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     if (files.length > 0) {
       opts.files = files.map((f) => ({ name: f.name, path: f.path || f.name, size: f.size }));
     }
+    // Mixin 不能看图:把图片降级为磁盘路径文本追加到 prompt,不走 base64 注入。
+    let outText = text;
     if (readyImages.length > 0) {
-      opts.images = readyImages.map((f) => ({ name: f.name, path: f.path || f.name, base64: f.preview! }));
+      if (currentModelIsMixin()) {
+        const pathLines = readyImages
+          .map((f) => f.path && f.path !== f.name ? `[图片: ${f.path}]` : null)
+          .filter(Boolean)
+          .join('\n');
+        if (pathLines) outText = outText ? `${outText}\n\n${pathLines}` : pathLines;
+      } else {
+        opts.images = readyImages.map((f) => ({ name: f.name, path: f.path || f.name, base64: f.preview! }));
+      }
     }
-    onSend(text || '', Object.keys(opts).length > 0 ? opts : undefined);
+    onSend(outText || '', Object.keys(opts).length > 0 ? opts : undefined);
     editorRef.current?.clear();
     setPlainText('');
     setAttachments([]);

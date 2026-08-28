@@ -44,9 +44,17 @@ vi.mock('../components/chat/Composer/StatusStack', () => ({
   StatusStack: () => null,
 }));
 
-vi.mock('../stores/settings', () => ({
-  useSettingsStore: (selector: (state: { lang: 'en' | 'zh' }) => unknown) => selector({ lang: 'en' }),
-}));
+vi.mock('../stores/settings', () => {
+  const useSettingsStore = (selector: (state: { lang: 'en' | 'zh' }) => unknown) => selector({ lang: 'en' });
+  useSettingsStore.getState = () => ({ modelProfiles: [], defaultModelNo: 0, liveModel: null });
+  return { useSettingsStore };
+});
+
+vi.mock('../stores/chat', () => {
+  const useChatStore = (selector: (state: { sessionModelNo: number | null }) => unknown) => selector({ sessionModelNo: null });
+  useChatStore.getState = () => ({ sessionModelNo: null });
+  return { useChatStore };
+});
 
 vi.mock('../components/chat/Composer/RichEditorInput', () => {
   const RichEditorInput = forwardRef(function MockRichEditorInput(
