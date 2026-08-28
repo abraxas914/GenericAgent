@@ -4,6 +4,7 @@ import type { SessionInfo } from '../../services/chat';
 import { useChatStore } from '../../stores/chat';
 import { useI18n } from '../../i18n';
 import { Codicon } from '../../lib/icons';
+import { LiveDuration } from './LiveDuration';
 
 function formatAge(dateVal?: number | string): string {
   if (!dateVal) return '';
@@ -33,6 +34,7 @@ export function SessionRow({
   const renameSession = useChatStore((s) => s.renameSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const pinSession = useChatStore((s) => s.pinSession);
+  const turnStartedAt = useChatStore((s) => s.turnStarts[session.id]);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -140,7 +142,13 @@ export function SessionRow({
               <Codicon name="pinned" size="0.875rem" />
             </span>
           )}
-          <span className="ga-session-age">{formatAge(session.updatedAt)}</span>
+          {isWorking && turnStartedAt ? (
+            <span className="ga-session-age ga-session-duration">
+              <LiveDuration since={turnStartedAt} />
+            </span>
+          ) : (
+            <span className="ga-session-age">{formatAge(session.updatedAt)}</span>
+          )}
           <span
             className={`ga-session-actions${menuOpen ? ' menu-open' : ''}`}
             onClick={(e) => e.stopPropagation()}

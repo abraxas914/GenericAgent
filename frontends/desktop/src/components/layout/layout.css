@@ -348,6 +348,20 @@
   opacity: 1;
 }
 
+/* Running turn duration: always visible (not hover-gated) and accented, so the
+   sidebar shows how long each session has been working. */
+.ga-session-age.ga-session-duration {
+  opacity: 1;
+  color: var(--ui-accent, var(--ui-text-secondary));
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hide the live duration while the row's action menu is hovered/open to avoid
+   overlapping the kebab button. */
+.ga-session-item:hover .ga-session-age.ga-session-duration {
+  opacity: 0;
+}
+
 .ga-session-actions {
   position: absolute;
   right: 4px;

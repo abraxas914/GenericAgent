@@ -16,12 +16,14 @@ interface Message {
 }
 
 function normalizeMessage(msg: Record<string, unknown>, status: MessageStatus = 'completed'): Message {
+  // Mirrors services/chat.ts: bridge timestamps are Unix seconds, UI wants ms.
+  const rawTs = (msg.createdAt as number) ?? (msg.ts as number);
   const m: Message = {
     id: String(msg.id),
     role: msg.role as Message['role'],
     content: (msg.content as string) || '',
     status: (msg.status as MessageStatus) ?? status,
-    createdAt: (msg.createdAt as number) ?? (msg.ts as number),
+    createdAt: typeof rawTs === 'number' ? Math.round(rawTs * 1000) : undefined,
   };
   if (Array.isArray(msg.turn_segs)) m.turn_segs = msg.turn_segs as string[];
   if (Array.isArray(msg.images) && msg.images.length > 0) m.images = msg.images as { name: string; path: string }[];
@@ -37,13 +39,28 @@ describe('normalizeMessage', () => {
     expect(m.role).toBe('user');
     expect(m.content).toBe('hi');
     expect(m.status).toBe('completed');
-    expect(m.createdAt).toBe(1000);
+    expect(m.createdAt).toBe(1000000);  // server seconds → ms
   });
 
   it('uses createdAt over ts when both present', () => {
     const raw = { id: 1, role: 'assistant', content: '', createdAt: 2000, ts: 1000 };
     const m = normalizeMessage(raw);
-    expect(m.createdAt).toBe(2000);
+    expect(m.createdAt).toBe(2000000);  // server seconds → ms
+  });
+
+  it('scales Unix-second timestamps to milliseconds so durations are correct', () => {
+    // Regression: bridge sends time.time() (seconds). If left unscaled, elapsed
+    // time computed against Date.now() (ms) is ~1000x off and the turn timer is
+    // wrong. A realistic epoch-seconds value must come back as epoch-ms.
+    const raw = { id: 7, role: 'user', content: 'x', ts: 1_700_000_000 };
+    const m = normalizeMessage(raw);
+    expect(m.createdAt).toBe(1_700_000_000_000);
+  });
+
+  it('leaves createdAt undefined when no timestamp is present', () => {
+    const raw = { id: 8, role: 'user', content: 'x' };
+    const m = normalizeMessage(raw);
+    expect(m.createdAt).toBeUndefined();
   });
 
   it('preserves status from raw if present', () => {
@@ -138,3 +155,33 @@ describe('sendPrompt body construction', () => {
     expect(filesMeta).toEqual([]);
   });
 });
+
+describe('sendPrompt image upload priority', () => {
+  it('prefers uploading base64 when present instead of raw disk path', () => {
+    // Regression: native-drop images arrive with both a local absolute path
+    // (C:\...) and a base64 preview. Using the raw path directly means the
+    // server stores an un-servable location — /upload/raw rejects it with 403
+    // and thumbnails break after send. Always upload base64 when available.
+    interface Image { name: string; path: string; base64?: string }
+    const images: Image[] = [
+      { name: 'dropped.png', path: 'C:\\Users\\...\\dropped.png', base64: 'data:image/png;base64,ABC' },
+      { name: 'pasted.jpg', path: 'pasted.jpg', base64: 'data:image/jpeg;base64,XYZ' },
+    ];
+
+    const prioritized = images.map(img => {
+      const dataUrl = img.base64 || (img.path?.startsWith('data:') ? img.path : undefined);
+      if (dataUrl) return { hasBase64: true, shouldUpload: true };
+      if (img.path && !img.path.startsWith('data:') && img.path !== img.name) {
+        return { hasBase64: false, shouldUpload: false };
+      }
+      return { hasBase64: false, shouldUpload: false };
+    });
+
+    // Both have base64 → both upload (no raw C:\ path kept)
+    expect(prioritized).toEqual([
+      { hasBase64: true, shouldUpload: true },
+      { hasBase64: true, shouldUpload: true },
+    ]);
+  });
+});
+

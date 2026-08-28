@@ -48,12 +48,16 @@ function mockDelay(ms: number): Promise<void> {
 // --- API functions ---
 
 function normalizeMessage(msg: Record<string, unknown>, status: MessageStatus = 'completed'): Message {
+  // Bridge timestamps (`ts`, `createdAt`) are Unix seconds (Python time.time()).
+  // The UI works in milliseconds (Date.now(), LiveDuration), so scale up. Local
+  // optimistic messages are already ms and never pass through here.
+  const rawTs = (msg.createdAt as number) ?? (msg.ts as number);
   const m: Message = {
     id: String(msg.id),
     role: msg.role as Message['role'],
     content: (msg.content as string) || '',
     status: (msg.status as MessageStatus) ?? status,
-    createdAt: (msg.createdAt as number) ?? (msg.ts as number),
+    createdAt: typeof rawTs === 'number' ? Math.round(rawTs * 1000) : undefined,
   };
   if (Array.isArray(msg.turn_segs)) {
     m.turn_segs = msg.turn_segs as string[];
@@ -168,18 +172,20 @@ export async function sendPrompt(
 
   const filesMeta = (files || []).map((f) => ({ name: f.name, path: f.path, size: f.size }));
 
-  // Upload images that only have base64 (pasted/dropped) to get file paths
+  // Upload images to the bridge so they land under desktop_uploads/, whose files
+  // /upload/raw can serve back into the message bubble. Whenever we have base64
+  // (paste, file-picker, or a native drop preview) we upload — a raw disk path
+  // like C:\Users\... would be rejected by /upload/raw's path whitelist and the
+  // thumbnail would break after send. Only fall back to a bare path when there
+  // is no base64 to upload (should not happen for real images).
   const imageMetas: { name: string; path: string }[] = [];
   for (const img of images || []) {
-    const hasRealPath = img.path && !img.path.startsWith('data:') && img.path !== img.name;
-    if (hasRealPath) {
+    const dataUrl = img.base64 || (img.path?.startsWith('data:') ? img.path : undefined);
+    if (dataUrl) {
+      const path = await uploadImage(sessionId, img.name, dataUrl);
+      imageMetas.push({ name: img.name, path });
+    } else if (img.path && !img.path.startsWith('data:') && img.path !== img.name) {
       imageMetas.push({ name: img.name, path: img.path });
-    } else {
-      const dataUrl = img.base64 || (img.path?.startsWith('data:') ? img.path : undefined);
-      if (dataUrl) {
-        const path = await uploadImage(sessionId, img.name, dataUrl);
-        imageMetas.push({ name: img.name, path });
-      }
     }
   }
 

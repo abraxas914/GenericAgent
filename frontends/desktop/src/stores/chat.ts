@@ -23,6 +23,7 @@ interface ChatState {
   sessions: SessionInfo[];
   runningSessions: Set<string>;
   turnStartedAt: number | null;
+  turnStarts: Record<string, number>;
   pendingQueue: QueuedMessage[];
   sessionModelNo: number | null;
 
@@ -83,18 +84,21 @@ export const useChatStore = create<ChatState>((set, get) => {
 
   function setTurnStart(sessionId: string, ts: number) {
     turnStartMap.set(sessionId, ts);
-    const { activeSessionId } = get();
-    if (sessionId === activeSessionId) {
-      set({ turnStartedAt: ts });
-    }
+    set((s) => {
+      const patch: Partial<ChatState> = { turnStarts: { ...s.turnStarts, [sessionId]: ts } };
+      if (sessionId === s.activeSessionId) patch.turnStartedAt = ts;
+      return patch;
+    });
   }
 
   function clearTurnStart(sessionId: string) {
     turnStartMap.delete(sessionId);
-    const { activeSessionId } = get();
-    if (sessionId === activeSessionId) {
-      set({ turnStartedAt: null });
-    }
+    set((s) => {
+      const { [sessionId]: _drop, ...rest } = s.turnStarts;
+      const patch: Partial<ChatState> = { turnStarts: rest };
+      if (sessionId === s.activeSessionId) patch.turnStartedAt = null;
+      return patch;
+    });
   }
 
   function flushPartial() {
@@ -238,11 +242,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     sessions: [],
     runningSessions: new Set(),
     turnStartedAt: null,
+    turnStarts: {},
     pendingQueue: [],
     sessionModelNo: null,
 
     async newSession() {
-      set({ activeSessionId: null, messages: [], status: 'idle', turnStartedAt: null, pendingQueue: [], sessionModelNo: null });
+      set({ activeSessionId: null, messages: [], status: 'idle', turnStartedAt: null, turnStarts: {}, pendingQueue: [], sessionModelNo: null });
     },
 
     async sendMessage(text: string, opts?: SendOptions) {
@@ -323,7 +328,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         set({ activeSessionId: null, messages: [], status: 'idle', turnStartedAt: null });
       }
       turnStartMap.delete(id);
-      set((s) => ({ sessions: s.sessions.filter((ss) => ss.id !== id) }));
+      set((s) => {
+        const { [id]: _drop, ...rest } = s.turnStarts;
+        return { sessions: s.sessions.filter((ss) => ss.id !== id), turnStarts: rest };
+      });
       try { await apiDeleteSession(id); } catch {}
     },
 
