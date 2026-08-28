@@ -16,13 +16,14 @@ import { useChatStore } from '../../../stores/chat';
 import './composer.css';
 
 // Mixin 后端不支持图片 vision(桌面端 base64 注入会撞 MixinSession 只读保护)。
-// 发送前判定当前绑定模型是否 Mixin,若是则图片降级为磁盘路径文本。
+// 发送前判定“当前会话绑定的模型”是否 Mixin,若是则图片降级为磁盘路径文本。
+// 只信 modelProfiles(绑定态,权威):sessionModelNo 优先,回退 defaultModelNo。
+// 不用 liveModel.isMixin —— 它是全局运行态、跨会话残留且滞后,会把非 Mixin 会话误判。
 function currentModelIsMixin(): boolean {
-  const { modelProfiles, defaultModelNo, liveModel } = useSettingsStore.getState();
+  const { modelProfiles, defaultModelNo } = useSettingsStore.getState();
   const sessionModelNo = useChatStore.getState().sessionModelNo;
   const no = sessionModelNo ?? defaultModelNo;
-  if (modelProfiles[no]?.kind === 'mixin') return true;
-  return !!liveModel?.isMixin;
+  return modelProfiles[no]?.kind === 'mixin';
 }
 
 interface Props {
