@@ -3,7 +3,7 @@
   "product": "GenericAgent React Desktop 2.0",
   "version": "0.2.1",
   "sourceRepository": "https://github.com/abraxas914/GenericAgent",
-  "sourceCommit": "e7bfb038b972c7cc5fda7134c777ef2df7ac222d",
+  "sourceCommit": "4a67226e18cb003db1210357ea4a283774773acc",
   "generatedAssetCount": 98,
-  "generatedManifestSha256": "7e7f8c59fe84a5d1a49e6b7a4014aa320d3b1c458af7afeb2f78075946e153bc"
+  "generatedManifestSha256": "06cbee59e1d232982095bb3966d7b23621b1aa785a6c7e90d82d66dedc5af7ed"
 }
