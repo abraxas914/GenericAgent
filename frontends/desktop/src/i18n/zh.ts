@@ -433,7 +433,7 @@ export const zh: Record<string, string> = {
   'data.importDataError': '导入失败',
   'data.importDataInvalid': '无法读取此备份或数据文件夹',
   'data.importSourceTitle': '选择导入来源',
-  'data.importSourceDescription': '可以直接导入本应用生成的备份文件，也可以从旧数据文件夹迁移。',
+  'data.importSourceDescription': '可以直接导入本应用生成的备份文件（.zip），也可以从旧数据文件夹迁移。旧数据文件夹应选择GenericAgent根目录（包含 temp/desktop_sessions 等子文件夹）。',
   'data.importBackupBtn': '选择备份文件',
   'data.importFolderBtn': '选择旧数据文件夹',
   'data.importBackupPickerTitle': '选择数据备份',

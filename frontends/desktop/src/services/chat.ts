@@ -12,6 +12,7 @@ export interface Message {
   turn_segs?: string[];
   images?: { name: string; path: string }[];
   files?: { name: string; path: string; size?: number }[];
+  executionMs?: number;
 }
 
 export interface SessionInfo {
@@ -67,6 +68,10 @@ function normalizeMessage(msg: Record<string, unknown>, status: MessageStatus = 
   }
   if (Array.isArray(msg.files) && msg.files.length > 0) {
     m.files = msg.files as { name: string; path: string; size?: number }[];
+  }
+  // executionMs is already in milliseconds (bridge computes it at turn end).
+  if (typeof msg.executionMs === 'number') {
+    m.executionMs = msg.executionMs;
   }
   return m;
 }

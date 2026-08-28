@@ -1022,7 +1022,9 @@ class AgentManager:
             sess.cancel_requested = False
             sess.active_turn_id = turn_id
             sess.last_error = ""
-            sess.partial = {"id": sess.msg_seq + 1, "role": "assistant", "content": "", "ts": time.time(), "partial": True,
+            _turn_start = time.time()
+            sess.partial = {"id": sess.msg_seq + 1, "role": "assistant", "content": "", "ts": _turn_start, "partial": True,
+                            "turn_started": _turn_start,  # stable turn-start clock (ts gets bumped on each stream chunk)
                             "curr_turn": 0, "turn_segs": []}  # turn_segs[i]=第i轮全文(权威结构化,前端按轮渲染);content保留双轮兜底
             image_paths = [m["path"] for m in (image_metas or []) if m.get("path")]
             t = threading.Thread(
@@ -1212,16 +1214,19 @@ class AgentManager:
             with self.lock:
                 if sess.active_turn_id != turn_id:
                     return
+                turn_started = sess.partial.get("turn_started") if sess.partial else None
                 sess.partial = None
                 full = strip_final_info_marker(full)
                 import plan_state
                 plan_state.sync_plan_path_from_text(sess, full, sess.cwd or self.ga_root)
                 # 轨道2: 落库时带结构化全量轮(权威turn_segs),前端按轮渲染;content保留兜底
                 _final_segs = normalize_final_turn_segs(full, done_outputs)
+                msg_extra = {}
                 if _final_segs:
-                    self.add_message(sess, "assistant", full, turn_segs=_final_segs)
-                else:
-                    self.add_message(sess, "assistant", full)
+                    msg_extra["turn_segs"] = _final_segs
+                if turn_started:
+                    msg_extra["executionMs"] = round((time.time() - turn_started) * 1000)
+                self.add_message(sess, "assistant", full, **msg_extra)
                 try: sess.llm_history = json.loads(json.dumps(agent.llmclient.backend.history, ensure_ascii=False, default=str))
                 except Exception: pass
                 sess.running_llm_no = None

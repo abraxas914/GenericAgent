@@ -7,17 +7,9 @@
   gap: 0.25rem;
   padding-right: var(--message-text-indent);
   padding-left: var(--message-text-indent);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease-out;
 }
 
-[data-slot="aui_assistant-message-root"]:hover [data-slot="assistant-action-bar"],
-[data-slot="aui_assistant-message-root"]:focus-within [data-slot="assistant-action-bar"] {
-  opacity: 1;
-  pointer-events: auto;
-}
-
+/* The copy button is reveal-on-hover; the duration label below stays visible. */
 [data-slot="action-bar-btn"] {
   display: grid;
   width: 1.5rem;
@@ -28,10 +20,27 @@
   background: none;
   color: var(--semi-color-text-2);
   cursor: pointer;
-  transition: color 0.1s, background 0.1s;
+  opacity: 0;
+  pointer-events: none;
+  transition: color 0.1s, background 0.1s, opacity 120ms ease-out;
+}
+
+[data-slot="aui_assistant-message-root"]:hover [data-slot="action-bar-btn"],
+[data-slot="aui_assistant-message-root"]:focus-within [data-slot="action-bar-btn"] {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 [data-slot="action-bar-btn"]:hover {
   background: var(--semi-color-fill-1);
   color: var(--semi-color-text-0);
+}
+
+/* Turn duration — always visible, sits beside the copy button. */
+[data-slot="action-bar-duration"] {
+  font-size: 0.75rem;
+  line-height: 1;
+  color: var(--semi-color-text-2);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
 }

@@ -13,6 +13,7 @@ interface Message {
   turn_segs?: string[];
   images?: { name: string; path: string }[];
   files?: { name: string; path: string; size?: number }[];
+  executionMs?: number;
 }
 
 function normalizeMessage(msg: Record<string, unknown>, status: MessageStatus = 'completed'): Message {
@@ -28,6 +29,8 @@ function normalizeMessage(msg: Record<string, unknown>, status: MessageStatus = 
   if (Array.isArray(msg.turn_segs)) m.turn_segs = msg.turn_segs as string[];
   if (Array.isArray(msg.images) && msg.images.length > 0) m.images = msg.images as { name: string; path: string }[];
   if (Array.isArray(msg.files) && msg.files.length > 0) m.files = msg.files as { name: string; path: string; size?: number }[];
+  // executionMs is already in milliseconds (bridge computes it at turn end).
+  if (typeof msg.executionMs === 'number') m.executionMs = msg.executionMs;
   return m;
 }
 
@@ -115,6 +118,12 @@ describe('normalizeMessage', () => {
     const raw = { id: 999, role: 'user', content: '' };
     const m = normalizeMessage(raw);
     expect(m.id).toBe('999');
+  });
+
+  it('passes through executionMs as-is when present (already in milliseconds)', () => {
+    const raw = { id: 1, role: 'assistant', content: 'done', executionMs: 3456 };
+    const m = normalizeMessage(raw);
+    expect(m.executionMs).toBe(3456);
   });
 });
 

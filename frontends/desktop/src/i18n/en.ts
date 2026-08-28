@@ -433,7 +433,7 @@ export const en: Record<string, string> = {
   'data.importDataError': 'Import failed',
   'data.importDataInvalid': 'This backup or data folder could not be read',
   'data.importSourceTitle': 'Choose an import source',
-  'data.importSourceDescription': 'Import a backup created by this app, or migrate from an older data folder.',
+  'data.importSourceDescription': 'Import a backup created by this app (.zip), or migrate from an older data folder. For a folder, pick the GenericAgent root directory (the one containing temp/desktop_sessions).',
   'data.importBackupBtn': 'Choose backup file',
   'data.importFolderBtn': 'Choose older data folder',
   'data.importBackupPickerTitle': 'Choose a data backup',

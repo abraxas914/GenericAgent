@@ -3,9 +3,18 @@ import './AssistantActionBar.css';
 
 interface Props {
   getMessageText: () => string;
+  executionMs?: number;
 }
 
-export const AssistantActionBar = memo(function AssistantActionBar({ getMessageText }: Props) {
+function formatDuration(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return `${min}m ${sec}s`;
+}
+
+export const AssistantActionBar = memo(function AssistantActionBar({ getMessageText, executionMs }: Props) {
   const [copied, setCopied] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -39,6 +48,11 @@ export const AssistantActionBar = memo(function AssistantActionBar({ getMessageT
           </svg>
         )}
       </button>
+      {typeof executionMs === 'number' && executionMs > 0 && (
+        <span data-slot="action-bar-duration" title="本轮用时">
+          {formatDuration(executionMs)}
+        </span>
+      )}
     </div>
   );
 });

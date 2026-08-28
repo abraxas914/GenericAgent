@@ -39,7 +39,7 @@ export const AssistantMessage = memo(function AssistantMessage({ message, isStre
       data-streaming={isStreaming || undefined}
     >
       <MessageParts segments={segments} isStreaming={isStreaming} messageId={String(message.id)} />
-      <AssistantActionBar getMessageText={getMessageText} />
+      <AssistantActionBar getMessageText={getMessageText} executionMs={message.executionMs} />
     </div>
   );
 });
