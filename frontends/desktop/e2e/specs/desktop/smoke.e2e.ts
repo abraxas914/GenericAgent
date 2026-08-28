@@ -41,6 +41,28 @@ async function waitForIdentity(expectedRoot: string): Promise<{ ga_root: string;
   return identity;
 }
 
+async function waitForSettingsRow(testId: string): Promise<void> {
+  await browser.waitUntil(async () => browser.execute((id) => {
+    const row = document.querySelector<HTMLElement>(`[data-testid="${id}"]`);
+    const body = row?.closest<HTMLElement>('.semi-modal-body');
+    if (!row || !body) return false;
+    row.scrollIntoView({ block: 'center' });
+    const rowRect = row.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const style = getComputedStyle(row);
+    return style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && rowRect.width > 0
+      && rowRect.height > 0
+      && rowRect.top >= bodyRect.top
+      && rowRect.bottom <= bodyRect.bottom;
+  }, testId), {
+    timeout: 10_000,
+    interval: 100,
+    timeoutMsg: `Settings row ${testId} did not become visible inside the modal`,
+  });
+}
+
 describe('GenericAgent native Tauri smoke', () => {
   it('boots in the isolated sandbox and completes chat plus usage UI', async () => {
     await chat.switchToMainAndWait();
@@ -54,10 +76,11 @@ describe('GenericAgent native Tauri smoke', () => {
     await browser.execute(() => window.dispatchEvent(new Event('ga:open-settings')));
     const importRow = await $('[data-testid="data-import-row"]');
     const exportRow = await $('[data-testid="data-export-row"]');
-    await importRow.waitForDisplayed({ timeout: 10_000 });
-    await exportRow.waitForDisplayed({ timeout: 10_000 });
-    assert.equal(await importRow.isDisplayed(), true, 'memory and session import must be visible');
-    assert.equal(await exportRow.isDisplayed(), true, 'memory and session export must be visible');
+    await importRow.waitForExist({ timeout: 10_000 });
+    await waitForSettingsRow('data-import-row');
+    await waitForSettingsRow('data-export-row');
+    assert.equal(await importRow.isExisting(), true, 'memory and session import must be rendered');
+    assert.equal(await exportRow.isExisting(), true, 'memory and session export must be rendered');
     await browser.execute(() => window.dispatchEvent(new Event('ga:close-settings')));
     await chat.startNewChat();
     await chat.send('[E2E:normal] native smoke');
