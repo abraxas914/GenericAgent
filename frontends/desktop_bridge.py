@@ -1957,6 +1957,29 @@ def _allowed_request_origins() -> Set[str]:
     return origins
 
 
+# Read-only GET endpoints that are meant to be loaded as browser subresources
+# (<img>/<video>/<audio>/font). Cross-origin resource loads never carry an
+# Origin header but do set Sec-Fetch-Site: cross-site, so the generic CSRF guard
+# below would 403 them. These endpoints have no side effects and are confined to
+# a whitelisted directory, so a cross-site *resource* GET/HEAD is safe to allow.
+_RESOURCE_GET_PATHS = frozenset({"/upload/raw"})
+_RESOURCE_FETCH_DESTS = frozenset({"image", "video", "audio", "font"})
+
+
+def _is_safe_cross_site_resource_get(request) -> bool:
+    """True for a no-side-effect subresource GET the desktop webview issues for
+    a message-bubble thumbnail (bridge origin differs from the tauri app origin,
+    so the <img> request is cross-site and carries no Origin header)."""
+    if request.method not in ("GET", "HEAD"):
+        return False
+    if request.path not in _RESOURCE_GET_PATHS:
+        return False
+    dest = request.headers.get("Sec-Fetch-Dest", "").strip().lower()
+    # Only genuine subresource loads — never a cross-site top-level navigation
+    # (Sec-Fetch-Dest: document) — are exempted.
+    return dest in _RESOURCE_FETCH_DESTS
+
+
 def _request_origin_error(request) -> Optional[str]:
     origin = request.headers.get("Origin")
     if origin is not None:
@@ -1964,6 +1987,8 @@ def _request_origin_error(request) -> Optional[str]:
             return "request origin is not allowed"
         return None
     if request.headers.get("Sec-Fetch-Site", "").strip().lower() == "cross-site":
+        if _is_safe_cross_site_resource_get(request):
+            return None
         return "cross-site request without an Origin header is not allowed"
     return None
 
