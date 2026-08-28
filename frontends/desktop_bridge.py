@@ -2415,6 +2415,49 @@ async def upload_handler(request):
     return json_ok({"ok": True, "path": str(fpath)})
 
 
+# Max bytes we will base64 back to the webview for an image preview. Larger
+# images (and all non-images) skip the read: the agent opens them by path.
+_DROP_PREVIEW_MAX = 50 * 1024 * 1024
+
+
+async def drop_stat_handler(request):
+    """Inspect a path dropped onto the window via Tauri's native drag-drop.
+
+    Body: {path: "<abs path>", preview: <bool>}
+    Native drops give absolute paths (not File objects), so the client asks the
+    bridge what the path is. Returns is_dir + size for every path; when preview
+    is truthy and the target is a readable image under the size cap, also returns
+    a base64 data payload so the composer can render a thumbnail. Files and
+    folders otherwise travel to the agent by path alone (it reads via file_read
+    / os.walk), so no bytes cross the wire for them.
+    """
+    import mimetypes
+    data = await read_json(request)
+    raw = (data.get("path") or "").strip()
+    want_preview = bool(data.get("preview"))
+    if not raw:
+        return json_ok({"ok": False, "error": "missing path"})
+    try:
+        target = Path(raw)
+        st = target.stat()
+    except FileNotFoundError:
+        return json_ok({"ok": False, "error": "not found"})
+    except OSError as e:
+        return json_ok({"ok": False, "error": str(e)})
+    is_dir = target.is_dir()
+    size = 0 if is_dir else st.st_size
+    result = {"ok": True, "is_dir": is_dir, "size": size, "name": target.name}
+    if want_preview and not is_dir and size <= _DROP_PREVIEW_MAX:
+        ctype = mimetypes.guess_type(target.name)[0] or ""
+        if ctype.startswith("image/") and ctype != "image/svg+xml":
+            try:
+                encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+                result["preview"] = f"data:{ctype};base64,{encoded}"
+            except OSError:
+                pass
+    return json_ok(result)
+
+
 async def upload_delete_handler(request):
     """Delete a previously-uploaded file. Path must live under _WEB_UPLOAD_DIR."""
     data = await read_json(request)
@@ -2875,6 +2918,7 @@ def create_app():
     app.router.add_post("/upload", upload_handler)
     app.router.add_delete("/upload", upload_delete_handler)
     app.router.add_get("/upload/raw", upload_raw_handler)
+    app.router.add_post("/drop/stat", drop_stat_handler)
     app.router.add_get("/token-stats", token_stats_handler)
     app.router.add_get("/token-history", get_token_history_handler)
     app.router.add_get("/subscription-portal", subscription_portal_handler)

@@ -105,6 +105,35 @@ export async function uploadFile(name: string, dataUrl: string): Promise<string>
   return data.path;
 }
 
+export interface DropStat {
+  isDir: boolean;
+  size: number;
+  name: string;
+  preview?: string;
+}
+
+/**
+ * Inspect a path dropped onto the window via Tauri's native drag-drop.
+ * Native drops carry absolute paths (not File objects), so the bridge tells us
+ * whether the path is a folder or file and — for images when `preview` is set —
+ * returns a base64 data URL for the thumbnail. Files/folders otherwise go to the
+ * agent by path (read via file_read / os.walk); no bytes cross for them.
+ */
+export async function statDroppedPath(path: string, preview: boolean): Promise<DropStat | null> {
+  try {
+    const res = await fetch(`${BRIDGE_BASE}/drop/stat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path, preview }),
+    });
+    const data = await res.json();
+    if (!data.ok) return null;
+    return { isDir: !!data.is_dir, size: data.size ?? 0, name: data.name ?? path, preview: data.preview };
+  } catch {
+    return null;
+  }
+}
+
 export async function sendPrompt(
   sessionId: string,
   prompt: string,

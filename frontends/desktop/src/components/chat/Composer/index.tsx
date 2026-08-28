@@ -10,7 +10,7 @@ import { SkillPanel } from './SkillPanel';
 import { PrimaryCTA, computeCTAState } from './PrimaryCTA';
 import { StatusStack } from './StatusStack';
 import { usePlaceholder } from './usePlaceholder';
-import { uploadFile } from '../../../services/chat';
+import { uploadFile, statDroppedPath } from '../../../services/chat';
 import './composer.css';
 
 interface Props {
@@ -98,6 +98,37 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
       });
     }
     setAttachments((prev) => [...prev, ...newFiles]);
+  }, []);
+
+  // Native Tauri drops give absolute paths, not File objects. We ask the bridge
+  // what each path is: folders and files travel to the agent by path (read via
+  // file_read / os.walk — no upload), images come back with a base64 preview so
+  // the thumbnail renders. This is the drag-drop counterpart to processFiles,
+  // which still serves paste and the file picker.
+  const processDroppedPaths = useCallback((paths: string[]) => {
+    for (const path of paths) {
+      const id = `att-${++fileIdCounter}`;
+      const name = path.split(/[\\/]/).pop() || path;
+      const looksImage = /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(name);
+      setAttachments((prev) => [...prev, {
+        id, name, size: 0,
+        type: looksImage ? 'image' : 'file',
+        status: 'uploading',
+        path,
+      }]);
+      statDroppedPath(path, looksImage).then((stat) => {
+        setAttachments((prev) => prev.map((a) => {
+          if (a.id !== id) return a;
+          if (!stat) return { ...a, status: 'error', errorMsg: 'read failed' };
+          // Image with a preview → image attachment; anything else (folder,
+          // regular file, oversized image) → file-by-path for the agent.
+          if (looksImage && stat.preview) {
+            return { ...a, type: 'image', preview: stat.preview, size: stat.size, status: 'ready' };
+          }
+          return { ...a, type: 'file', size: stat.size, status: 'ready' };
+        }));
+      });
+    }
   }, []);
 
   const handleSend = useCallback(() => {
@@ -213,23 +244,35 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     e.target.value = '';
   }, [processFiles]);
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(true);
-  }, []);
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    if (e.dataTransfer.files.length > 0) {
-      processFiles(e.dataTransfer.files);
-    }
-  }, [processFiles]);
+  // Tauri's native drag-drop (dragDropEnabled: true) is what yields absolute
+  // paths; it fires at the window, replacing HTML5 drop. Subscribe once and keep
+  // the drop overlay in sync with enter/over/leave/drop payloads.
+  useEffect(() => {
+    const webview = (window as unknown as {
+      __TAURI__?: { webview?: { getCurrentWebview?: () => {
+        onDragDropEvent: (h: (e: { payload: { type: string; paths?: string[] } }) => void) => Promise<() => void>;
+      } } };
+    }).__TAURI__?.webview?.getCurrentWebview?.();
+    if (!webview) return; // non-Tauri (web/dev/tests): drag-drop is a no-op
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    webview.onDragDropEvent((e) => {
+      const kind = e.payload.type;
+      if (kind === 'enter' || kind === 'over') {
+        setIsDragOver(true);
+      } else if (kind === 'leave') {
+        setIsDragOver(false);
+      } else if (kind === 'drop') {
+        setIsDragOver(false);
+        if (e.payload.paths && e.payload.paths.length > 0) {
+          processDroppedPaths(e.payload.paths);
+        }
+      }
+    }).then((fn) => {
+      if (cancelled) fn(); else unlisten = fn;
+    });
+    return () => { cancelled = true; unlisten?.(); };
+  }, [processDroppedPaths]);
 
   const hasContent = plainText.trim().length > 0 || attachments.length > 0;
   const hasPendingUploads = attachments.some((a) => a.status === 'uploading');
@@ -239,9 +282,6 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     <div
       ref={composerRef}
       data-slot="composer-root"
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
     >
       {isDragOver && <div data-slot="composer-drop-overlay">Drop files here</div>}
       <div data-slot="composer-surface">

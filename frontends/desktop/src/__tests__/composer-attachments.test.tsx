@@ -4,10 +4,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Composer } from '../components/chat/Composer';
 
-const { uploadFileMock } = vi.hoisted(() => ({ uploadFileMock: vi.fn() }));
+const { uploadFileMock, statDroppedPathMock } = vi.hoisted(() => ({
+  uploadFileMock: vi.fn(),
+  statDroppedPathMock: vi.fn(),
+}));
 
 vi.mock('../services/chat', () => ({
   uploadFile: uploadFileMock,
+  statDroppedPath: statDroppedPathMock,
 }));
 
 vi.mock('../components/chat/Composer/usePlaceholder', () => ({
@@ -126,8 +130,26 @@ describe('Composer attachment lifecycle', () => {
   const originalFileReader = globalThis.FileReader;
   const originalResizeObserver = globalThis.ResizeObserver;
 
+  // Install a fake Tauri webview whose onDragDropEvent handler we can fire by
+  // hand, mirroring native drag-drop (dragDropEnabled: true).
+  function installFakeTauriDrop(): { fire: (type: string, paths?: string[]) => void } {
+    let handler: ((e: { payload: { type: string; paths?: string[] } }) => void) | null = null;
+    (window as unknown as { __TAURI__: unknown }).__TAURI__ = {
+      webview: {
+        getCurrentWebview: () => ({
+          onDragDropEvent: (h: (e: { payload: { type: string; paths?: string[] } }) => void) => {
+            handler = h;
+            return Promise.resolve(() => { handler = null; });
+          },
+        }),
+      },
+    };
+    return { fire: (type, paths) => handler?.({ payload: { type, paths } }) };
+  }
+
   beforeEach(() => {
     uploadFileMock.mockReset();
+    statDroppedPathMock.mockReset();
     globalThis.ResizeObserver = class {
       observe() {}
       disconnect() {}
@@ -138,6 +160,7 @@ describe('Composer attachment lifecycle', () => {
   afterEach(() => {
     globalThis.FileReader = originalFileReader;
     globalThis.ResizeObserver = originalResizeObserver;
+    delete (window as unknown as { __TAURI__?: unknown }).__TAURI__;
   });
 
   it('disables the CTA while a non-image file is still uploading', async () => {
@@ -175,5 +198,42 @@ describe('Composer attachment lifecycle', () => {
     await waitFor(() => {
       expect(screen.getByTitle('upload failed')).not.toBeNull();
     });
+  });
+
+  it('accepts a dropped folder as a path attachment without uploading', async () => {
+    statDroppedPathMock.mockResolvedValueOnce({ isDir: true, size: 0, name: 'project' });
+    const fake = installFakeTauriDrop();
+
+    render(<Composer onSend={vi.fn()} onStop={vi.fn()} isGenerating={false} />);
+    await waitFor(() => expect(statDroppedPathMock).toBeDefined());
+
+    fake.fire('drop', ['C:\\Users\\me\\project']);
+
+    await waitFor(() => {
+      expect(screen.getByText('project')).not.toBeNull();
+    });
+    // Dropped paths never go through the upload endpoint.
+    expect(uploadFileMock).not.toHaveBeenCalled();
+    expect(statDroppedPathMock).toHaveBeenCalledWith('C:\\Users\\me\\project', false);
+  });
+
+  it('renders a preview for a dropped image path', async () => {
+    statDroppedPathMock.mockResolvedValueOnce({
+      isDir: false, size: 1234, name: 'shot.png',
+      preview: 'data:image/png;base64,AAAA',
+    });
+    const fake = installFakeTauriDrop();
+
+    render(<Composer onSend={vi.fn()} onStop={vi.fn()} isGenerating={false} />);
+    await waitFor(() => expect(statDroppedPathMock).toBeDefined());
+
+    fake.fire('drop', ['/home/me/shot.png']);
+
+    await waitFor(() => {
+      const img = document.querySelector('img[alt="shot.png"]') as HTMLImageElement | null;
+      expect(img?.src).toBe('data:image/png;base64,AAAA');
+    });
+    expect(statDroppedPathMock).toHaveBeenCalledWith('/home/me/shot.png', true);
+    expect(uploadFileMock).not.toHaveBeenCalled();
   });
 });
