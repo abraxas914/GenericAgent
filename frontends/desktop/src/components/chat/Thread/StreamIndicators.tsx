@@ -1,4 +1,5 @@
 import { memo, useState, useEffect, useRef } from 'react';
+import { useChatStore } from '../../../stores/chat';
 
 function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -9,12 +10,17 @@ function formatElapsed(ms: number): string {
 
 export const ResponseLoadingIndicator = memo(function ResponseLoadingIndicator() {
   const [elapsed, setElapsed] = useState(0);
-  const startRef = useRef(Date.now());
+  // 起点优先用 store 的 turnStartedAt(跨会话切换可恢复);切走再切回时组件会重新
+  // mount,若用组件本地 Date.now() 会导致计时从 0 重新开始。仅在 store 无起点时回退本地时间。
+  const turnStartedAt = useChatStore((s) => s.turnStartedAt);
+  const localStartRef = useRef(Date.now());
+  const start = turnStartedAt ?? localStartRef.current;
 
   useEffect(() => {
-    const id = setInterval(() => setElapsed(Date.now() - startRef.current), 1000);
+    setElapsed(Date.now() - start);
+    const id = setInterval(() => setElapsed(Date.now() - start), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [start]);
 
   return (
     <div data-slot="stream-indicator">
