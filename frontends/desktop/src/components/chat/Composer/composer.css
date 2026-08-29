@@ -776,6 +776,10 @@
   flex-shrink: 0;
 }
 
+span[data-slot="attachment-error-badge"] {
+  cursor: default;
+}
+
 [data-slot="attachment-file-chip"][data-status="error"] {
   border-color: var(--semi-color-danger, #f53f3f);
 }

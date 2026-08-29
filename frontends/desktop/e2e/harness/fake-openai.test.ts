@@ -68,4 +68,23 @@ describe('FakeOpenAI', () => {
     });
     await expect(server.waitForScenarioRequests('two-call-hang', 1, 25)).resolves.toBeUndefined();
   });
+
+  it('holds concurrent responses until the harness releases them together', async () => {
+    const server = new FakeOpenAI();
+    servers.push(server);
+    const baseUrl = await server.start();
+    const request = (label: string) => fetch(`${baseUrl}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages: [{ role: 'user', content: `[E2E:hold] ${label}` }] }),
+    }).then((response) => response.text());
+
+    const first = request('A');
+    const second = request('B');
+    await server.waitForScenarioRequests('hold', 2);
+    server.releaseHeld();
+
+    await expect(first).resolves.toContain('Harness resumed');
+    await expect(second).resolves.toContain('Harness resumed');
+  });
 });

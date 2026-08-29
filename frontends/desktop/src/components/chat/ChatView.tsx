@@ -14,6 +14,7 @@ export function ChatView() {
   const bridgeStatus = useBridgeStatus();
   const status = useChatStore((s) => s.status);
   const messages = useChatStore((s) => s.messages);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
   const sendMessage = useChatStore((s) => s.sendMessage);
   const cancel = useChatStore((s) => s.cancel);
   const composerEditorRef = useRef<RichEditorHandle>(null);
@@ -45,6 +46,7 @@ export function ChatView() {
         <Thread />
       )}
       <Composer
+        sessionId={activeSessionId}
         onSend={handleSend}
         onStop={cancel}
         isGenerating={status === 'running'}
