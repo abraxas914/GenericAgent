@@ -238,6 +238,8 @@ and persist the result into its own memory.
 
 ## 🧠 Architecture
 
+> Desktop maintainers: see the [Desktop session-state architecture](docs/architecture/desktop-session-state-management.md) and its [executable code spec](.trellis/spec/desktop/frontend/session-state.md).
+
 GenericAgent accomplishes complex tasks through **Layered Memory × Minimal Toolset × Autonomous Execution Loop**, continuously accumulating experience during execution.
 
 ### 1️⃣ Layered Memory System
@@ -611,6 +613,8 @@ GenericAgent 支持 Telegram、Discord、微信、QQ、飞书 / Lark、企业微
 ---
 
 ## 🧠 架构设计
+
+> Desktop 维护者请先阅读[会话状态管理架构](docs/architecture/desktop-session-state-management.md)及其[可执行代码规范](.trellis/spec/desktop/frontend/session-state.md)。
 
 GenericAgent 通过 **分层记忆 × 最小工具集 × 自主执行循环** 完成复杂任务，并在执行过程中持续积累经验。
 
