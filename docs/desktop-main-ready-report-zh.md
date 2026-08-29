@@ -16,6 +16,7 @@
 - 原功能基线：`e7bfb038b972c7cc5fda7134c777ef2df7ac222d`。
 - 旧联合集成：`b5f3716128df9f8760d3a38e70d25a7c32d6ae8d`。
 - main-ready 候选：`codex/desktop-next-phase-main-ready`。
+- 已同步 upstream：`origin/main@7ad2162`。
 
 候选从 `abraxas/main@4a67226` 创建，未直接移动或改写 `main`。
 
@@ -53,7 +54,6 @@
 
 ## 尚待门禁
 
-- 将当前 upstream `origin/main` 的新增提交同步到候选。
 - Rust/Tauri 检查和 GitHub 三平台 runner。
 - runner 产出的 macOS/Windows 真包执行 transcript 展开、离开、返回测试。
 - macOS Finder 与 Windows Explorer 拖拽截图或录像证据。
