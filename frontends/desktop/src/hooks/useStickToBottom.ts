@@ -2,11 +2,26 @@ import { useRef, useState, useCallback, useEffect } from 'react';
 
 const BOTTOM_THRESHOLD = 24;
 
-export function useStickToBottom() {
+interface StickToBottomOptions {
+  followingTail?: boolean;
+  onScrollStateChange?: (scrollTop: number, followingTail: boolean) => void;
+}
+
+export function useStickToBottom({
+  followingTail = true,
+  onScrollStateChange,
+}: StickToBottomOptions = {}) {
   const scrollRef = useRef<HTMLDivElement>(null!);
-  const [isAtBottom, setIsAtBottom] = useState(true);
-  const stickingRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(followingTail);
+  const stickingRef = useRef(followingTail);
   const rafRef = useRef<number>(0);
+  const onScrollStateChangeRef = useRef(onScrollStateChange);
+  onScrollStateChangeRef.current = onScrollStateChange;
+
+  useEffect(() => {
+    stickingRef.current = followingTail;
+    setIsAtBottom(followingTail);
+  }, [followingTail]);
 
   const checkBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -14,6 +29,7 @@ export function useStickToBottom() {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD;
     setIsAtBottom(atBottom);
     stickingRef.current = atBottom;
+    onScrollStateChangeRef.current?.(el.scrollTop, atBottom);
   }, []);
 
   const scrollToBottom = useCallback((behavior: 'instant' | 'smooth' = 'instant') => {
@@ -26,10 +42,14 @@ export function useStickToBottom() {
     }
     stickingRef.current = true;
     setIsAtBottom(true);
+    onScrollStateChangeRef.current?.(el.scrollTop, true);
   }, []);
 
-  const stopScroll = useCallback(() => {
+  const stopScroll = useCallback((notify = true) => {
     stickingRef.current = false;
+    setIsAtBottom(false);
+    const el = scrollRef.current;
+    if (notify && el) onScrollStateChangeRef.current?.(el.scrollTop, false);
   }, []);
 
   useEffect(() => {
@@ -78,36 +98,51 @@ function jumpScroll(el: HTMLElement, targetTop: number, duration: number) {
 export function useSessionScrollStability(
   scrollRef: React.RefObject<HTMLDivElement>,
   scrollToBottom: (b?: 'instant') => void,
-  stopScroll: () => void,
+  stopScroll: (notify?: boolean) => void,
   sessionKey: string | null,
+  followingTail: boolean,
+  scrollTop: number | null,
 ) {
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || !sessionKey) return;
 
-    stopScroll();
-    el.scrollTop = el.scrollHeight;
+    stopScroll(false);
+    const restore = () => {
+      el.scrollTop = followingTail ? el.scrollHeight : (scrollTop ?? 0);
+    };
+    restore();
 
     let stableFrames = 0;
     let lastHeight = el.scrollHeight;
     let frame = 0;
+    let rafId = 0;
+    let cancelled = false;
 
     function check() {
-      if (!el) return;
+      if (!el || cancelled) return;
       frame++;
       if (el.scrollHeight === lastHeight) {
         stableFrames++;
       } else {
         stableFrames = 0;
         lastHeight = el.scrollHeight;
-        el.scrollTop = el.scrollHeight;
+        restore();
       }
       if (stableFrames >= 5 || frame >= 90) {
-        scrollToBottom('instant');
+        if (followingTail) scrollToBottom('instant');
+        else {
+          restore();
+          stopScroll(false);
+        }
         return;
       }
-      requestAnimationFrame(check);
+      rafId = requestAnimationFrame(check);
     }
-    requestAnimationFrame(check);
+    rafId = requestAnimationFrame(check);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
   }, [sessionKey, scrollRef, scrollToBottom, stopScroll]);
 }

@@ -258,6 +258,10 @@ export class DesktopE2EHarness {
         await this.restartBridge(true);
         jsonResponse(response, 200, { ok: true }); return;
       }
+      if (request.method === 'POST' && url.pathname === '/fake/release-held') {
+        this.fake.releaseHeld();
+        jsonResponse(response, 200, { ok: true }); return;
+      }
       if (request.method === 'POST' && url.pathname === '/bridge/kill-external') {
         if (this.options.mode !== 'desktop') {
           jsonResponse(response, 400, { error: 'desktop mode only' }); return;

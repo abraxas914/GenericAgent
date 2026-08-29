@@ -33,6 +33,7 @@ export function CollabComposer() {
   return (
     <div className="collab-composer-wrap" data-slot="collab-composer" data-disabled={disabled || undefined}>
       <Composer
+        sessionId="__collab_composer__"
         onSend={handleSend}
         onStop={handleStop}
         isGenerating={conductorTyping}

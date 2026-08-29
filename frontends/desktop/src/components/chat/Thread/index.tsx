@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import { useChatStore } from '../../../stores/chat';
+import { sessionViewId, useThreadViewStore } from '../../../stores/thread-view';
 import { useStickToBottom, useSessionScrollStability } from '../../../hooks/useStickToBottom';
 import { ThreadContent } from './ThreadContent';
 import { MessageList } from './MessageList';
@@ -7,16 +8,40 @@ import { UserTurnRail } from './UserTurnRail';
 import './thread.css';
 
 export function Thread() {
-  const { messages, status, activeSessionId } = useChatStore();
-  const { scrollRef, isAtBottom, scrollToBottom, stopScroll } = useStickToBottom();
-  const [budgetMultiplier, setBudgetMultiplier] = useState(1);
+  const messages = useChatStore((state) => state.messages);
+  const status = useChatStore((state) => state.status);
+  const activeSessionId = useChatStore((state) => state.activeSessionId);
+  const viewId = sessionViewId(activeSessionId);
+  const budgetMultiplier = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.renderBudgetMultiplier ?? 1,
+  );
+  const followingTail = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.followingTail ?? true,
+  );
+  const scrollAnchor = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.scrollAnchor ?? null,
+  );
+  const setRenderBudget = useThreadViewStore((state) => state.setRenderBudget);
+  const setScrollState = useThreadViewStore((state) => state.setScrollState);
+  const handleScrollStateChange = useCallback((scrollTop: number, isFollowing: boolean) => {
+    setScrollState(activeSessionId, { scrollTop }, isFollowing);
+  }, [activeSessionId, setScrollState]);
+  const { scrollRef, isAtBottom, scrollToBottom, stopScroll } = useStickToBottom({
+    followingTail,
+    onScrollStateChange: handleScrollStateChange,
+  });
   const pendingJumpRef = useRef<string | null>(null);
 
-  useSessionScrollStability(scrollRef, scrollToBottom, stopScroll, activeSessionId);
+  useSessionScrollStability(
+    scrollRef,
+    scrollToBottom,
+    stopScroll,
+    activeSessionId,
+    followingTail,
+    scrollAnchor?.scrollTop ?? null,
+  );
 
-  // Reset budget when session changes
   useEffect(() => {
-    setBudgetMultiplier(1);
     pendingJumpRef.current = null;
   }, [activeSessionId]);
 
@@ -42,8 +67,8 @@ export function Thread() {
   }, [budgetMultiplier, scrollRef]);
 
   const expandAllMessages = useCallback(() => {
-    setBudgetMultiplier(Infinity);
-  }, []);
+    setRenderBudget(activeSessionId, Infinity);
+  }, [activeSessionId, setRenderBudget]);
 
   const requestJumpToCollapsed = useCallback((msgId: string) => {
     pendingJumpRef.current = msgId;
@@ -55,8 +80,8 @@ export function Thread() {
     if (viewport) {
       // MessageList will restore scroll via its own layout effect
     }
-    setBudgetMultiplier(m => m + 1);
-  }, [scrollRef]);
+    setRenderBudget(activeSessionId, budgetMultiplier + 1);
+  }, [activeSessionId, budgetMultiplier, scrollRef, setRenderBudget]);
 
   return (
     <div data-slot="thread-root">
@@ -67,6 +92,7 @@ export function Thread() {
       >
         <ThreadContent>
           <MessageList
+            sessionId={activeSessionId ?? ''}
             messages={messages}
             isRunning={status === 'running'}
             budgetMultiplier={budgetMultiplier}

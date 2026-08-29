@@ -1,24 +1,29 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
+import { useRef, useState, useCallback, useEffect, useLayoutEffect } from 'react';
 import type { SendOptions } from '../../../stores/chat';
+import {
+  sessionViewId,
+  useThreadViewStore,
+  type AttachmentFile,
+} from '../../../stores/thread-view';
 import { RichEditorInput, type RichEditorHandle } from './RichEditorInput';
 import { CompletionDrawer } from './CompletionDrawer';
 import { AtRefPopover } from './AtRefPopover';
 import { ContextMenu } from './ContextMenu';
 import { ModelSelector } from './ModelSelector';
-import { AttachmentStrip, type AttachmentFile } from './AttachmentStrip';
+import { AttachmentStrip } from './AttachmentStrip';
 import { SkillPanel } from './SkillPanel';
 import { PrimaryCTA, computeCTAState } from './PrimaryCTA';
 import { StatusStack } from './StatusStack';
 import { usePlaceholder } from './usePlaceholder';
-import { uploadFile, statDroppedPath } from '../../../services/chat';
+import { useI18n } from '../../../i18n';
+import { candidatesFromDataTransfer, isFileDrag, useAttachmentIngestion } from './useAttachmentIngestion';
+import { statDroppedPath } from '../../../services/chat';
 import { useSettingsStore } from '../../../stores/settings';
 import { useChatStore } from '../../../stores/chat';
 import './composer.css';
 
-// Mixin 后端不支持图片 vision(桌面端 base64 注入会撞 MixinSession 只读保护)。
-// 发送前判定“当前会话绑定的模型”是否 Mixin,若是则图片降级为磁盘路径文本。
-// 只信 modelProfiles(绑定态,权威):sessionModelNo 优先,回退 defaultModelNo。
-// 不用 liveModel.isMixin —— 它是全局运行态、跨会话残留且滞后,会把非 Mixin 会话误判。
+// Mixin cannot consume the desktop image payload. Use the authoritative
+// session/default profile binding and degrade native image paths to prompt text.
 function currentModelIsMixin(): boolean {
   const { modelProfiles, defaultModelNo } = useSettingsStore.getState();
   const sessionModelNo = useChatStore.getState().sessionModelNo;
@@ -27,6 +32,7 @@ function currentModelIsMixin(): boolean {
 }
 
 interface Props {
+  sessionId?: string | null;
   onSend: (text: string, opts?: SendOptions) => void;
   onStop: () => void;
   isGenerating: boolean;
@@ -35,17 +41,96 @@ interface Props {
   modelControl?: React.ReactNode | null;
 }
 
-let fileIdCounter = 0;
+let composerInstanceCounter = 0;
+let nativeAttachmentIdCounter = 0;
+const EMPTY_ATTACHMENTS: AttachmentFile[] = [];
 
-export function Composer({ onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
+export function Composer({ sessionId, onSend, onStop, isGenerating, editorRef: externalEditorRef, hideStatusStack, modelControl }: Props) {
   const internalEditorRef = useRef<RichEditorHandle>(null);
   const editorRef = (externalEditorRef ?? internalEditorRef) as React.RefObject<RichEditorHandle>;
   const composerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const dragDepthRef = useRef(0);
   const { text: placeholderText } = usePlaceholder();
-  const [plainText, setPlainText] = useState('');
-  const [attachments, setAttachments] = useState<AttachmentFile[]>([]);
+  const { t } = useI18n();
+  const [standaloneViewId] = useState(() => `__composer_instance_${++composerInstanceCounter}__`);
+  const viewSessionId = sessionId === undefined ? standaloneViewId : sessionId;
+  const viewId = sessionViewId(viewSessionId);
+  const plainText = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.composerDraft ?? '',
+  );
+  const attachments = useThreadViewStore(
+    (state) => state.viewBySessionId[viewId]?.attachments ?? EMPTY_ATTACHMENTS,
+  );
+  const setComposerDraft = useThreadViewStore((state) => state.setComposerDraft);
+  const updateAttachments = useThreadViewStore((state) => state.updateAttachments);
+  const updateViewAttachments = useCallback(
+    (updater: (current: AttachmentFile[]) => AttachmentFile[]) => {
+      updateAttachments(viewSessionId, updater);
+    },
+    [updateAttachments, viewSessionId],
+  );
+  const {
+    ingestCandidates,
+    ingestFiles,
+    removeAttachment,
+    retryAttachment,
+    clearAttachments,
+  } = useAttachmentIngestion({
+    t,
+    attachments,
+    updateAttachments: updateViewAttachments,
+  });
+
+  const processDroppedPaths = useCallback((paths: string[]) => {
+    for (const path of paths) {
+      const id = `att-native-${++nativeAttachmentIdCounter}`;
+      const fallbackName = path.split(/[\\/]/).pop() || path;
+      const looksImage = /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(fallbackName);
+      updateViewAttachments((current) => [...current, {
+        id,
+        name: fallbackName,
+        size: 0,
+        type: looksImage ? 'image' : 'file',
+        status: 'uploading',
+        path,
+      }]);
+
+      void statDroppedPath(path, looksImage).then((stat) => {
+        updateViewAttachments((current) => current.map((item) => {
+          if (item.id !== id) return item;
+          if (!stat) {
+            return {
+              ...item,
+              status: 'error',
+              errorMsg: t('upload.readFailed'),
+              retryable: false,
+            };
+          }
+          if (looksImage && stat.preview) {
+            return {
+              ...item,
+              name: stat.name,
+              size: stat.size,
+              type: 'image',
+              preview: stat.preview,
+              status: 'ready',
+              errorMsg: undefined,
+            };
+          }
+          return {
+            ...item,
+            name: stat.name,
+            size: stat.size,
+            type: 'file',
+            status: 'ready',
+            errorMsg: undefined,
+          };
+        }));
+      });
+    }
+  }, [t, updateViewAttachments]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [slashQuery, setSlashQuery] = useState<string | null>(null);
   const [atQuery, setAtQuery] = useState<string | null>(null);
@@ -61,89 +146,13 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     return () => observer.disconnect();
   }, []);
 
-  const processFiles = useCallback((fileList: FileList | File[]) => {
-    const MAX_SIZE = 50 * 1024 * 1024; // 50 MB
-    const newFiles: AttachmentFile[] = [];
-    for (const file of Array.from(fileList)) {
-      const id = `att-${++fileIdCounter}`;
-      const isImage = file.type.startsWith('image/') && file.type !== 'image/svg+xml';
-      const tooLarge = file.size > MAX_SIZE;
-      if (isImage && !tooLarge) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          setAttachments((prev) =>
-            prev.map((a) => a.id === id ? { ...a, preview: e.target?.result as string, status: 'ready' as const } : a)
-          );
-        };
-        reader.readAsDataURL(file);
-      } else if (!isImage && !tooLarge) {
-        // Upload file to bridge to get absolute disk path (agent reads via file_read tool)
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          try {
-            const dataUrl = e.target?.result as string;
-            const serverPath = await uploadFile(file.name, dataUrl);
-            setAttachments((prev) =>
-              prev.map((a) => a.id === id ? { ...a, path: serverPath, status: 'ready' as const, errorMsg: undefined } : a)
-            );
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : 'upload failed';
-            setAttachments((prev) =>
-              prev.map((a) => a.id === id ? { ...a, status: 'error' as const, errorMsg } : a)
-            );
-          }
-        };
-        reader.onerror = () => {
-          setAttachments((prev) =>
-            prev.map((a) => a.id === id ? { ...a, status: 'error' as const, errorMsg: 'read failed' } : a)
-          );
-        };
-        reader.readAsDataURL(file);
-      }
-      newFiles.push({
-        id,
-        name: file.name,
-        size: file.size,
-        type: isImage ? 'image' : 'file',
-        status: tooLarge ? 'error' : 'uploading',
-        errorMsg: tooLarge ? 'File too large (max 50 MB)' : undefined,
-        path: (file as File & { path?: string }).path || file.name,
-      });
+  useLayoutEffect(() => {
+    if (editorRef.current?.getText() !== plainText) {
+      editorRef.current?.setText(plainText);
     }
-    setAttachments((prev) => [...prev, ...newFiles]);
-  }, []);
-
-  // Native Tauri drops give absolute paths, not File objects. We ask the bridge
-  // what each path is: folders and files travel to the agent by path (read via
-  // file_read / os.walk — no upload), images come back with a base64 preview so
-  // the thumbnail renders. This is the drag-drop counterpart to processFiles,
-  // which still serves paste and the file picker.
-  const processDroppedPaths = useCallback((paths: string[]) => {
-    for (const path of paths) {
-      const id = `att-${++fileIdCounter}`;
-      const name = path.split(/[\\/]/).pop() || path;
-      const looksImage = /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(name);
-      setAttachments((prev) => [...prev, {
-        id, name, size: 0,
-        type: looksImage ? 'image' : 'file',
-        status: 'uploading',
-        path,
-      }]);
-      statDroppedPath(path, looksImage).then((stat) => {
-        setAttachments((prev) => prev.map((a) => {
-          if (a.id !== id) return a;
-          if (!stat) return { ...a, status: 'error', errorMsg: 'read failed' };
-          // Image with a preview → image attachment; anything else (folder,
-          // regular file, oversized image) → file-by-path for the agent.
-          if (looksImage && stat.preview) {
-            return { ...a, type: 'image', preview: stat.preview, size: stat.size, status: 'ready' };
-          }
-          return { ...a, type: 'file', size: stat.size, status: 'ready' };
-        }));
-      });
-    }
-  }, []);
-
+    setSlashQuery(null);
+    setAtQuery(null);
+  }, [editorRef, plainText, viewId]);
   const handleSend = useCallback(() => {
     const text = plainText.trim();
     if (!text && attachments.length === 0) return;
@@ -157,7 +166,6 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     if (files.length > 0) {
       opts.files = files.map((f) => ({ name: f.name, path: f.path || f.name, size: f.size }));
     }
-    // Mixin 不能看图:把图片降级为磁盘路径文本追加到 prompt,不走 base64 注入。
     let outText = text;
     if (readyImages.length > 0) {
       if (currentModelIsMixin()) {
@@ -172,9 +180,9 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
     }
     onSend(outText || '', Object.keys(opts).length > 0 ? opts : undefined);
     editorRef.current?.clear();
-    setPlainText('');
-    setAttachments([]);
-  }, [plainText, attachments, onSend]);
+    clearAttachments();
+    setComposerDraft(viewSessionId, '');
+  }, [attachments, clearAttachments, editorRef, onSend, plainText, setComposerDraft, viewSessionId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -187,8 +195,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   );
 
   const handleEditorInput = useCallback((text: string) => {
-    setPlainText(text);
-  }, []);
+    setComposerDraft(viewSessionId, text);
+  }, [setComposerDraft, viewSessionId]);
 
   const handleSlashTrigger = useCallback((query: string) => {
     setSlashQuery(query);
@@ -225,12 +233,8 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
   }, []);
 
   const handlePasteFiles = useCallback((files: File[]) => {
-    processFiles(files);
-  }, [processFiles]);
-
-  const handleRemoveAttachment = useCallback((id: string) => {
-    setAttachments((prev) => prev.filter((a) => a.id !== id));
-  }, []);
+    ingestFiles(files);
+  }, [ingestFiles]);
 
   const handleSkillSelect = useCallback((id: string, prompt: string) => {
     editorRef.current?.setSkillChip(id, prompt);
@@ -253,63 +257,100 @@ export function Composer({ onSend, onStop, isGenerating, editorRef: externalEdit
         if (imageType) {
           const blob = await item.getType(imageType);
           const file = new File([blob], 'clipboard-image.png', { type: imageType });
-          processFiles([file]);
+          ingestFiles([file]);
           return;
         }
       }
     } catch { /* clipboard permission denied — silently ignore */ }
-  }, [processFiles]);
+  }, [ingestFiles]);
 
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      processFiles(e.target.files);
+      ingestFiles(e.target.files);
     }
     e.target.value = '';
-  }, [processFiles]);
+  }, [ingestFiles]);
 
-  // Tauri's native drag-drop (dragDropEnabled: true) is what yields absolute
-  // paths; it fires at the window, replacing HTML5 drop. Subscribe once and keep
-  // the drop overlay in sync with enter/over/leave/drop payloads.
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer.types)) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer.types)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    if (dragDepthRef.current === 0) dragDepthRef.current = 1;
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (dragDepthRef.current === 0) return;
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    if (!isFileDrag(e.dataTransfer.types)) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDragOver(false);
+    ingestCandidates(candidatesFromDataTransfer(e.dataTransfer));
+  }, [ingestCandidates]);
+
+  // Packaged Tauri windows expose absolute paths through native drag/drop.
+  // Keep the DOM handlers above for browser/dev tests; Tauri intercepts native
+  // file drops, so the two paths do not process the same event twice.
   useEffect(() => {
     const webview = (window as unknown as {
       __TAURI__?: { webview?: { getCurrentWebview?: () => {
-        onDragDropEvent: (h: (e: { payload: { type: string; paths?: string[] } }) => void) => Promise<() => void>;
+        onDragDropEvent: (handler: (event: { payload: { type: string; paths?: string[] } }) => void) => Promise<() => void>;
       } } };
     }).__TAURI__?.webview?.getCurrentWebview?.();
-    if (!webview) return; // non-Tauri (web/dev/tests): drag-drop is a no-op
+    if (!webview) return;
+
     let unlisten: (() => void) | undefined;
     let cancelled = false;
-    webview.onDragDropEvent((e) => {
-      const kind = e.payload.type;
+    webview.onDragDropEvent((event) => {
+      const kind = event.payload.type;
       if (kind === 'enter' || kind === 'over') {
         setIsDragOver(true);
       } else if (kind === 'leave') {
         setIsDragOver(false);
       } else if (kind === 'drop') {
         setIsDragOver(false);
-        if (e.payload.paths && e.payload.paths.length > 0) {
-          processDroppedPaths(e.payload.paths);
-        }
+        if (event.payload.paths?.length) processDroppedPaths(event.payload.paths);
       }
-    }).then((fn) => {
-      if (cancelled) fn(); else unlisten = fn;
+    }).then((cleanup) => {
+      if (cancelled) cleanup();
+      else unlisten = cleanup;
     });
-    return () => { cancelled = true; unlisten?.(); };
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, [processDroppedPaths]);
 
   const hasContent = plainText.trim().length > 0 || attachments.length > 0;
-  const hasPendingUploads = attachments.some((a) => a.status === 'uploading');
-  const ctaState = computeCTAState(isGenerating, hasContent, hasPendingUploads);
+  const hasBlockingAttachments = attachments.some((a) => a.status !== 'ready');
+  const ctaState = computeCTAState(isGenerating, hasContent, hasBlockingAttachments);
 
   return (
     <div
       ref={composerRef}
       data-slot="composer-root"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
-      {isDragOver && <div data-slot="composer-drop-overlay">Drop files here</div>}
+      {isDragOver && <div data-slot="composer-drop-overlay">{t('upload.dropHint')}</div>}
       <div data-slot="composer-surface">
         {!hideStatusStack && <StatusStack />}
-        <AttachmentStrip files={attachments} onRemove={handleRemoveAttachment} />
+        <AttachmentStrip files={attachments} onRemove={removeAttachment} onRetry={retryAttachment} />
         <CompletionDrawer
           visible={slashQuery !== null}
           query={slashQuery || ''}

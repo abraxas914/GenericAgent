@@ -42,6 +42,8 @@ Failed runs retain their sentinel sandbox and copy redacted reports to `frontend
 
 Set `GA_E2E_PYTHON` when automatic Python discovery cannot find a runtime with `aiohttp`. Set `GA_E2E_ARTIFACT_DIR` to change the stable report-copy destination. `GA_E2E_APPLICATION` may point to an already-built binary only when that binary was compiled with the same `VITE_BRIDGE_BASE`; normal use should let `e2e:desktop` build it after allocating ports.
 
+Set `GA_E2E_PRESERVE_EVIDENCE=1` to copy successful-run reports and screenshots into `e2e-results/` as well as failed-run evidence.
+
 ## Validation topology
 
 - Pull requests: TypeScript, Vitest, Python ledger/process contracts, Rust production/E2E feature tests, production isolation, browser E2E, and Linux native Tauri smoke.

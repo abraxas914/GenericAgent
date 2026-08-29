@@ -1,19 +1,10 @@
 import { useCallback } from 'react';
+import { useI18n } from '../../../i18n';
+import type { AttachmentFile } from '../../../stores/thread-view';
+
+export type { AttachmentFile } from '../../../stores/thread-view';
 
 export type AttachmentStatus = 'uploading' | 'ready' | 'error';
-
-export interface AttachmentFile {
-  id: string;
-  name: string;
-  size: number;
-  type: 'image' | 'file' | 'url';
-  status: AttachmentStatus;
-  preview?: string;
-  path?: string;
-  url?: string;
-  errorMsg?: string;
-}
-
 interface Props {
   files: AttachmentFile[];
   onRemove: (id: string) => void;
@@ -55,6 +46,7 @@ function hostname(url: string): string {
 }
 
 export function AttachmentStrip({ files, onRemove, onRetry }: Props) {
+  const { t } = useI18n();
   const handleRemove = useCallback((id: string) => (e: React.MouseEvent) => {
     e.stopPropagation();
     onRemove(id);
@@ -64,6 +56,23 @@ export function AttachmentStrip({ files, onRemove, onRetry }: Props) {
     e.stopPropagation();
     onRetry?.(id);
   }, [onRetry]);
+
+  const renderErrorBadge = (file: AttachmentFile) => {
+    const error = file.errorMsg || t('upload.failed');
+    if (file.retryable && onRetry) {
+      return (
+        <button
+          data-slot="attachment-error-badge"
+          onClick={handleRetry(file.id)}
+          title={`${t('upload.retryTitle')}: ${error}`}
+          aria-label={t('upload.retryTitle')}
+        >
+          !
+        </button>
+      );
+    }
+    return <span data-slot="attachment-error-badge" title={error} role="img" aria-label={error}>!</span>;
+  };
 
   if (files.length === 0) return null;
 
@@ -75,12 +84,8 @@ export function AttachmentStrip({ files, onRemove, onRetry }: Props) {
             <div key={f.id} data-slot="attachment-thumb" data-status={f.status}>
               <img src={f.preview} alt={f.name} />
               {f.status === 'uploading' && <span data-slot="attachment-spinner" />}
-              {f.status === 'error' && (
-                <button data-slot="attachment-error-badge" onClick={handleRetry(f.id)} title={f.errorMsg || 'Error'}>!</button>
-              )}
-              {f.status !== 'uploading' && (
-                <button data-slot="attachment-remove" onClick={handleRemove(f.id)} aria-label="Remove">×</button>
-              )}
+              {f.status === 'error' && renderErrorBadge(f)}
+              <button data-slot="attachment-remove" onClick={handleRemove(f.id)} aria-label={t('upload.removeTitle')}>×</button>
             </div>
           );
         }
@@ -91,7 +96,7 @@ export function AttachmentStrip({ files, onRemove, onRetry }: Props) {
               <span data-slot="attachment-file-meta">
                 <span data-slot="attachment-file-name">{f.url ? hostname(f.url) : f.name}</span>
               </span>
-              <button data-slot="attachment-remove" onClick={handleRemove(f.id)} aria-label="Remove">×</button>
+              <button data-slot="attachment-remove" onClick={handleRemove(f.id)} aria-label={t('upload.removeTitle')}>×</button>
             </div>
           );
         }
@@ -101,7 +106,7 @@ export function AttachmentStrip({ files, onRemove, onRetry }: Props) {
             {f.status === 'uploading' ? (
               <span data-slot="attachment-spinner" />
             ) : f.status === 'error' ? (
-              <button data-slot="attachment-error-badge" onClick={handleRetry(f.id)} title={f.errorMsg || 'Error'}>!</button>
+              renderErrorBadge(f)
             ) : (
               <span data-slot="attachment-file-icon" style={{ color: icon.color }}>{icon.char}</span>
             )}
@@ -114,9 +119,7 @@ export function AttachmentStrip({ files, onRemove, onRetry }: Props) {
                 <span data-slot="attachment-file-size">{fmtSize(f.size)}</span>
               )}
             </span>
-            {f.status !== 'uploading' && (
-              <button data-slot="attachment-remove" onClick={handleRemove(f.id)} aria-label="Remove">×</button>
-            )}
+            <button data-slot="attachment-remove" onClick={handleRemove(f.id)} aria-label={t('upload.removeTitle')}>×</button>
           </div>
         );
       })}

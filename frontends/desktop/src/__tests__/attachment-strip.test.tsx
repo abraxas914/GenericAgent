@@ -20,7 +20,7 @@ describe('AttachmentStrip', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('renders an uploading file with spinner and no remove button', () => {
+  it('renders an uploading file with spinner and a remove button', () => {
     const { container } = render(
       <AttachmentStrip
         files={[file({ status: 'uploading' })]}
@@ -31,7 +31,7 @@ describe('AttachmentStrip', () => {
     expect(screen.getByText('notes.txt')).not.toBeNull();
     expect(screen.getByText('1.5 KB')).not.toBeNull();
     expect(container.querySelector('[data-slot="attachment-spinner"]')).not.toBeNull();
-    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+    expect(screen.getByRole('button', { name: /Remove|移除/ })).not.toBeNull();
   });
 
   it('renders an error file with retry badge, error text, and removable control', () => {
@@ -39,7 +39,7 @@ describe('AttachmentStrip', () => {
     const onRetry = vi.fn();
     const { container } = render(
       <AttachmentStrip
-        files={[file({ status: 'error', errorMsg: 'upload failed' })]}
+        files={[file({ status: 'error', errorMsg: 'upload failed', retryable: true })]}
         onRemove={onRemove}
         onRetry={onRetry}
       />,
@@ -48,11 +48,11 @@ describe('AttachmentStrip', () => {
     expect(screen.getByText('notes.txt')).not.toBeNull();
     expect(screen.getByText('upload failed')).not.toBeNull();
 
-    const retry = screen.getByTitle('upload failed');
+    const retry = screen.getByRole('button', { name: /Retry upload|重试上传/ });
     fireEvent.click(retry);
     expect(onRetry).toHaveBeenCalledWith('file-1');
 
-    const remove = screen.getByRole('button', { name: 'Remove' });
+    const remove = screen.getByRole('button', { name: /Remove|移除/ });
     fireEvent.click(remove);
     expect(onRemove).toHaveBeenCalledWith('file-1');
 
@@ -80,6 +80,6 @@ describe('AttachmentStrip', () => {
 
     const image = screen.getByAltText('diagram.png') as HTMLImageElement;
     expect(image.getAttribute('src')).toBe('data:image/png;base64,AAAA');
-    expect(screen.getByRole('button', { name: 'Remove' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: /Remove|移除/ })).not.toBeNull();
   });
 });

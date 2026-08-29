@@ -1,38 +1,36 @@
-import { memo, useState, useRef, useCallback, useEffect } from 'react';
+import { memo, useRef, useCallback, useEffect } from 'react';
+import { useSegmentDisclosure } from '../../../../stores/thread-view';
 
 interface Props {
+  sessionId: string;
+  segmentKey: string;
   content: string;
   isStreaming: boolean;
 }
 
-export const ThinkingPart = memo(function ThinkingPart({ content, isStreaming }: Props) {
-  const [userPinned, setUserPinned] = useState<boolean | null>(null);
+export const ThinkingPart = memo(function ThinkingPart({ sessionId, segmentKey, content, isStreaming }: Props) {
+  const { expanded, setExpanded } = useSegmentDisclosure(sessionId, segmentKey, isStreaming);
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  const isOpen = userPinned !== null ? userPinned : isStreaming;
-
-  const handleToggle = useCallback(() => {
-    setUserPinned((prev) => {
-      if (prev === null) return !isStreaming;
-      return !prev;
-    });
-  }, [isStreaming]);
+  const handleToggle = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    setExpanded(!expanded);
+  }, [expanded, setExpanded]);
 
   useEffect(() => {
-    if (isStreaming && isOpen && bodyRef.current) {
+    if (isStreaming && expanded && bodyRef.current) {
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
     }
-  }, [content, isStreaming, isOpen]);
+  }, [content, expanded, isStreaming]);
 
   if (!content.trim()) return null;
 
   return (
     <details
       data-slot="aui_thinking-disclosure"
-      open={isOpen}
-      onToggle={handleToggle}
+      open={expanded}
     >
-      <summary data-slot="thinking-summary">
+      <summary data-slot="thinking-summary" onClick={handleToggle}>
         <span className={isStreaming ? 'thinking-shimmer' : ''}>Thinking</span>
       </summary>
       <div

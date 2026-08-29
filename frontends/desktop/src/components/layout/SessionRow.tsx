@@ -34,7 +34,7 @@ export function SessionRow({
   const renameSession = useChatStore((s) => s.renameSession);
   const deleteSession = useChatStore((s) => s.deleteSession);
   const pinSession = useChatStore((s) => s.pinSession);
-  const turnStartedAt = useChatStore((s) => s.turnStarts[session.id]);
+  const turnStartedAt = useChatStore((s) => s.sessionsById[session.id]?.turnStartedAt ?? null);
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -114,6 +114,7 @@ export function SessionRow({
   return (
     <div
       className={`ga-session-item${isActive ? ' active' : ''}`}
+      data-session-id={session.id}
       onClick={renaming || menuOpen ? undefined : onClick}
     >
       <span className="ga-session-content">
