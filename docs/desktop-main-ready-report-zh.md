@@ -49,12 +49,14 @@
 | E2E 类型 | `npm run test:e2e-types` 通过 |
 | CI 契约 | `npm run test:ci-contract` 通过 |
 | Python bridge | 274 个测试通过 |
+| Rust/Tauri | 23 个测试通过 |
+| 包装契约 | 81 项通过、0 项失败；本机无 PowerShell，跳过其解析器检查 |
 
 全量前端测试需要本机 loopback 权限；受限沙箱中的 `listen EPERM` 属于测试环境限制，允许回环网络后全部通过。
 
 ## 尚待门禁
 
-- Rust/Tauri 检查和 GitHub 三平台 runner。
+- GitHub PR CI 和三平台真包 runner。
 - runner 产出的 macOS/Windows 真包执行 transcript 展开、离开、返回测试。
 - macOS Finder 与 Windows Explorer 拖拽截图或录像证据。
 - 所有门禁通过后，才通过 PR 合入 fork `main`。
