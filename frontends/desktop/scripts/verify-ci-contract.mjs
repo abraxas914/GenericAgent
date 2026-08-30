@@ -174,6 +174,11 @@ for (const workflowPath of workflowPaths) {
 
 const releaseWorkflow = readText('.github/workflows/desktop-release-package.yml', repoRoot);
 const qualityWorkflow = readText('.github/workflows/desktop-ci.yml', repoRoot);
+const trackedLocalOnlyBoundary = `test -z "$(git ls-files -- '.agents/**' '.codex/**' '.trellis/**' ':(exclude).trellis/spec/*.md' ':(exclude).trellis/spec/**/*.md')"`;
+check(
+  qualityWorkflow.includes(trackedLocalOnlyBoundary),
+  'quality workflow allows tracked Trellis Markdown specs while rejecting local agent/runtime files',
+);
 function workflowJob(workflow, name) {
   const header = new RegExp(`^  ${name}:\\s*$`, 'm');
   const match = header.exec(workflow);

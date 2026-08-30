@@ -66,6 +66,10 @@ fork 的 `frontends/desktop/.gitignore` 将 `dist/` 定义为生成目录。#787
 macOS 上以 `cargo clippy --all-targets --all-features -- -D warnings` 检查时发现标题栏指标与截图
 命令各有一个 `needless_return`。将两个 cfg 分支改为尾表达式；返回值、错误传播和平台条件均不变。
 
+首次 fork PR preflight 还暴露出旧 CI 边界把整个 `.trellis/**` 视为本地临时目录，而 #37 已正式
+跟踪 `.trellis/spec/**/*.md`。边界现改为只允许 Trellis 规范 Markdown，继续拒绝 `.agents/**`、
+`.codex/**` 以及 `.trellis` 下其他运行时文件；`verify-ci-contract.mjs` 同步锁定这条规则。
+
 ## 验证结果
 
 | 层级 | 结果 |
