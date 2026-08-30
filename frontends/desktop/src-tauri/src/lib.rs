@@ -2809,14 +2809,14 @@ async fn get_macos_titlebar_metrics(
                 let _ = sender.send(measure_macos_titlebar_metrics(&webview));
             })
             .map_err(|error| format!("cannot schedule macOS titlebar measurement: {error}"))?;
-        return tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             receiver
                 .recv_timeout(Duration::from_secs(1))
                 .map_err(|_| "macOS titlebar measurement timed out".to_string())?
                 .map(Some)
         })
         .await
-        .map_err(|error| format!("macOS titlebar measurement task failed: {error}"))?;
+        .map_err(|error| format!("macOS titlebar measurement task failed: {error}"))?
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -2881,13 +2881,13 @@ async fn capture_macos_window_screenshot(
                 let _ = sender.send(result);
             })
             .map_err(|error| format!("cannot schedule macOS window screenshot: {error}"))?;
-        return tauri::async_runtime::spawn_blocking(move || {
+        tauri::async_runtime::spawn_blocking(move || {
             receiver
                 .recv_timeout(Duration::from_secs(3))
                 .map_err(|_| "macOS window screenshot timed out".to_string())?
         })
         .await
-        .map_err(|error| format!("macOS window screenshot task failed: {error}"))?;
+        .map_err(|error| format!("macOS window screenshot task failed: {error}"))?
     }
 
     #[cfg(not(target_os = "macos"))]
