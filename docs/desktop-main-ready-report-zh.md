@@ -2,6 +2,9 @@
 
 日期：2026-08-29
 
+> 2026-08-30 已继续集成 upstream #787。能力对照、compiled dist 边界与最新验证结果见
+> [upstream #787 fork 集成报告](desktop-upstream-787-integration-report-zh.md)。
+
 ## 目标
 
 在不改写既有功能分支、不修改版本号、不重建已跟踪 compiled dist 的前提下，将以下工作整理为可合入 fork `main` 的候选：
