@@ -1,15 +1,23 @@
-"""Unit tests for desktop_bridge.py upload/path-safety logic.
+"""Tests for desktop_bridge.py upload limits and path-safety logic.
 
-Follows the existing bridge testing strategy: replicate pure upload/path logic
-without importing the whole desktop_bridge module (which starts services).
+Path-only cases retain their lightweight mirrors; upload-limit cases exercise
+the production decoder and real aiohttp handler.
 Run: pytest frontends/tests/test_bridge_uploads.py -v
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import re
 from pathlib import Path
+
+import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestClient, TestServer
+
+from frontends.tests.test_bridge_sessions import _mod as bridge
 
 
 # Mirrors desktop_bridge._safe_session_dir
@@ -27,15 +35,6 @@ def _session_upload_dir(upload_root: Path, sid: str) -> Path:
 def _build_upload_path(upload_root: Path, sid: str, name: str, token: str) -> Path:
     safe_name = (name or "file").strip().replace("/", "_").replace("\\", "_") or "file"
     return _session_upload_dir(upload_root, sid) / f"{token}__{safe_name}"
-
-
-# Mirrors upload_handler decode logic.
-def _decode_upload_data(data_url: str) -> bytes:
-    if "," in data_url:
-        b64 = data_url.split(",", 1)[1]
-    else:
-        b64 = data_url
-    return base64.b64decode(b64)
 
 
 # Mirrors upload_delete_handler path whitelist.
@@ -100,15 +99,98 @@ class TestUploadPathConstruction:
 
 
 class TestUploadDecode:
+    def test_server_limit_matches_composer_contract(self):
+        assert bridge.MAX_UPLOAD_BYTES == 50 * 1024 * 1024
+
     def test_decodes_data_url_payload(self):
         payload = "hello,world".encode("utf-8")
         data_url = "data:text/plain;base64," + base64.b64encode(payload).decode("ascii")
-        assert _decode_upload_data(data_url) == payload
+        assert bridge._decode_upload_data(data_url, max_bytes=len(payload)) == payload
 
     def test_decodes_raw_base64_payload(self):
         payload = b"abc123"
         raw = base64.b64encode(payload).decode("ascii")
-        assert _decode_upload_data(raw) == payload
+        assert bridge._decode_upload_data(raw, max_bytes=len(payload)) == payload
+
+    def test_rejects_payload_above_exact_decoded_limit(self):
+        encoded = base64.b64encode(b"abcd").decode("ascii")
+        with pytest.raises(bridge._UploadTooLarge):
+            bridge._decode_upload_data(encoded, max_bytes=3)
+
+    def test_rejects_invalid_base64(self):
+        with pytest.raises(ValueError):
+            bridge._decode_upload_data("not base64!", max_bytes=1024)
+
+
+def test_upload_handler_enforces_decoded_and_request_body_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    upload_root = tmp_path / "desktop_uploads"
+    monkeypatch.setattr(bridge, "_WEB_UPLOAD_DIR", upload_root)
+    monkeypatch.setattr(bridge, "MAX_UPLOAD_BYTES", 3)
+    monkeypatch.setattr(bridge, "_MAX_UPLOAD_REQUEST_BYTES", 1024)
+    monkeypatch.setattr(bridge.manager, "mutation", lambda: contextlib.nullcontext())
+
+    async def scenario():
+        app = web.Application(client_max_size=2048)
+        app.router.add_post("/upload", bridge.upload_handler)
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            accepted = await client.post(
+                "/upload",
+                json={
+                    "name": "three.bin",
+                    "dataUrl": base64.b64encode(b"abc").decode("ascii"),
+                    "sid": "size-test",
+                },
+            )
+            assert accepted.status == 200
+            accepted_data = await accepted.json()
+            assert accepted_data["ok"] is True
+            assert Path(accepted_data["path"]).read_bytes() == b"abc"
+
+            oversized = await client.post(
+                "/upload",
+                json={
+                    "name": "four.bin",
+                    "dataUrl": base64.b64encode(b"abcd").decode("ascii"),
+                    "sid": "size-test",
+                },
+            )
+            assert oversized.status == 413
+            assert await oversized.json() == {
+                "ok": False,
+                "code": "file_too_large",
+                "error": "file exceeds 50 MB limit",
+            }
+            assert len(list(upload_root.rglob("*__four.bin"))) == 0
+
+            monkeypatch.setattr(bridge, "_MAX_UPLOAD_REQUEST_BYTES", 8)
+            body_limited = await client.post(
+                "/upload",
+                json={"name": "tiny.bin", "dataUrl": "YQ==", "sid": "size-test"},
+            )
+            assert body_limited.status == 413
+            assert (await body_limited.json())["code"] == "file_too_large"
+            assert len(list(upload_root.rglob("*__tiny.bin"))) == 0
+
+            async def chunked_body():
+                yield b'{"name":'
+                yield b'"chunked.bin","dataUrl":"YQ=="}'
+
+            chunked_limited = await client.post(
+                "/upload",
+                data=chunked_body(),
+                headers={"Content-Type": "application/json"},
+            )
+            assert chunked_limited.status == 413
+            assert (await chunked_limited.json())["code"] == "file_too_large"
+            assert len(list(upload_root.rglob("*__chunked.bin"))) == 0
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
 
 
 class TestUploadPathSafety:
