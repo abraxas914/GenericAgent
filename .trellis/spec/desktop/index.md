@@ -8,6 +8,10 @@ Desktop 由 React Webview、Tauri host 与 Python bridge 组成。跨层变更�
 - [Session state management](frontend/session-state.md)
 - [Desktop maintainability](frontend/maintainability.md)
 
+## Cross-layer security
+
+- [Desktop transport security](transport-security.md)
+
 ## Architecture rationale
 
 - `docs/architecture/desktop-session-state-management.md`

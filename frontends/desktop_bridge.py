@@ -1943,16 +1943,33 @@ def _valid_port(value: str, default: int) -> int:
     return port if 1 <= port <= 65535 else default
 
 
+_DESKTOP_DEV_ORIGIN_ENV = "GA_DESKTOP_DEV_ORIGIN"
+_DESKTOP_DEV_ORIGIN_RE = re.compile(
+    r"http://(?:localhost|127\.0\.0\.1):([0-9]{1,5})\Z"
+)
+
+
+def _configured_desktop_dev_origin() -> Optional[str]:
+    origin = os.environ.get(_DESKTOP_DEV_ORIGIN_ENV, "")
+    match = _DESKTOP_DEV_ORIGIN_RE.fullmatch(origin)
+    if match is None:
+        return None
+    port = int(match.group(1))
+    return origin if 1 <= port <= 65535 else None
+
+
 def _allowed_request_origins() -> Set[str]:
     bridge_port = _valid_port(os.environ.get("BRIDGE_PORT", "14168"), 14168)
     origins = {
         "tauri://localhost",
         "http://tauri.localhost",
-        "http://localhost:5173",
         f"http://127.0.0.1:{bridge_port}",
         f"http://localhost:{bridge_port}",
         f"http://[::1]:{bridge_port}",
     }
+    dev_origin = _configured_desktop_dev_origin()
+    if dev_origin is not None:
+        origins.add(dev_origin)
     if os.environ.get("GA_E2E") == "1":
         vite_port = os.environ.get("VITE_PORT", "")
         if re.fullmatch(r"[0-9]{1,5}", vite_port or ""):

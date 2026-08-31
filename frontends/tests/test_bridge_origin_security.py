@@ -21,6 +21,11 @@ PROTECTED_PATHS = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clear_desktop_dev_origin(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("GA_DESKTOP_DEV_ORIGIN", raising=False)
+
+
 async def _with_client(callback, tmp_path: Path):
     side_effect = tmp_path / "request-reached-handler"
 
@@ -56,6 +61,7 @@ def test_evil_origins_are_rejected_before_sensitive_handlers(
     monkeypatch.delenv("VITE_PORT", raising=False)
     evil_origins = (
         "null",
+        "http://localhost:5173",
         "https://localhost:5173",
         "http://localhost:5174",
         "http://127.0.0.1:5173",
@@ -87,7 +93,6 @@ def test_allowed_origins_are_reflected_exactly_without_credentials(
     allowed = (
         "tauri://localhost",
         "http://tauri.localhost",
-        "http://localhost:5173",
         "http://127.0.0.1:15168",
         "http://localhost:15168",
         "http://[::1]:15168",
@@ -109,6 +114,62 @@ def test_allowed_origins_are_reflected_exactly_without_credentials(
         assert side_effect.exists()
 
     asyncio.run(_with_client(scenario, tmp_path))
+
+
+def test_development_origin_requires_explicit_strict_loopback_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    origin = "http://localhost:5173"
+
+    async def rejected(client: TestClient, side_effect: Path):
+        response = await client.get("/status", headers={"Origin": origin})
+        assert response.status == 403
+        assert response.headers.get("Access-Control-Allow-Origin") is None
+        assert not side_effect.exists()
+
+    invalid_values = (
+        "",
+        "https://localhost:5173",
+        "http://localhost",
+        "http://localhost:0",
+        "http://localhost:65536",
+        "http://localhost:5173/path",
+        "http://localhost:5173?query=1",
+        "http://localhost:5173#fragment",
+        "http://user@localhost:5173",
+        "http://evil.example:5173",
+        " http://localhost:5173",
+        "http://localhost:5173 ",
+    )
+    for value in invalid_values:
+        monkeypatch.setenv("GA_DESKTOP_DEV_ORIGIN", value)
+        asyncio.run(_with_client(rejected, tmp_path))
+
+    monkeypatch.setenv("GA_DESKTOP_DEV_ORIGIN", origin)
+
+    async def allowed(client: TestClient, side_effect: Path):
+        response = await client.get("/status", headers={"Origin": origin})
+        assert response.status == 200
+        assert response.headers["Access-Control-Allow-Origin"] == origin
+        assert "origin" in response.headers.get("Vary", "").lower()
+        assert "Access-Control-Allow-Credentials" not in response.headers
+
+        preflight = await client.options("/memory/export", headers={"Origin": origin})
+        assert preflight.status == 204
+        assert preflight.headers["Access-Control-Allow-Origin"] == origin
+
+        side_effect.unlink()
+        alternate = await client.get(
+            "/status", headers={"Origin": "http://127.0.0.1:5173"}
+        )
+        assert alternate.status == 403
+        assert not side_effect.exists()
+
+    asyncio.run(_with_client(allowed, tmp_path))
+
+    loopback_origin = "http://127.0.0.1:5273"
+    monkeypatch.setenv("GA_DESKTOP_DEV_ORIGIN", loopback_origin)
+    assert bridge._configured_desktop_dev_origin() == loopback_origin
 
 
 def test_no_origin_cli_is_allowed_but_cross_site_navigation_is_rejected(
