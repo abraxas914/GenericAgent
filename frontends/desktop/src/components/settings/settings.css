@@ -61,20 +61,6 @@
   outline-offset: 2px;
 }
 
-/* Font size slider */
-.ga-font-slider-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.ga-font-value {
-  font-size: 13px;
-  color: var(--semi-color-text-2, #646a73);
-  min-width: 36px;
-  text-align: right;
-}
-
 /* ── Mixin / 渠道组 ── */
 .ga-mixin-group {
   margin-bottom: 12px;
