@@ -21,6 +21,19 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 static BRIDGE_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 static BRIDGE_LOG_READERS: Mutex<Vec<thread::JoinHandle<()>>> = Mutex::new(Vec::new());
 static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
+const DESKTOP_DEV_ORIGIN_ENV: &str = "GA_DESKTOP_DEV_ORIGIN";
+const DESKTOP_VITE_ORIGIN: &str = "http://localhost:5173";
+
+fn desktop_dev_mode() -> bool {
+    std::env::args().any(|argument| argument == "--dev")
+}
+
+fn configure_bridge_dev_origin(command: &mut Command, dev_mode: bool) {
+    command.env_remove(DESKTOP_DEV_ORIGIN_ENV);
+    if dev_mode {
+        command.env(DESKTOP_DEV_ORIGIN_ENV, DESKTOP_VITE_ORIGIN);
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct BridgeEndpoint {
@@ -1994,7 +2007,11 @@ fn resolve_existing_listener(
     }
 }
 
-fn bridge_command(python_path: &str, project_dir: &str) -> Result<Command, BootstrapFailure> {
+fn bridge_command(
+    python_path: &str,
+    project_dir: &str,
+    dev_mode: bool,
+) -> Result<Command, BootstrapFailure> {
     if python_path.trim().is_empty() {
         return Err(bootstrap_failure(
             BootstrapFailureCode::SpawnFailed,
@@ -2014,6 +2031,7 @@ fn bridge_command(python_path: &str, project_dir: &str) -> Result<Command, Boots
     cmd.arg(&script).current_dir(&dir);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     sanitize_bundle_env(&mut cmd, project_dir);
+    configure_bridge_dev_origin(&mut cmd, dev_mode);
     Ok(cmd)
 }
 
@@ -2040,6 +2058,7 @@ fn spawn_bridge_process(
     app_handle: &tauri::AppHandle,
     python_path: &str,
     project_dir: &str,
+    dev_mode: bool,
 ) -> Result<(), BootstrapFailure> {
     if is_bridge_running() {
         return Err(bootstrap_failure(
@@ -2051,7 +2070,7 @@ fn spawn_bridge_process(
         ));
     }
 
-    let mut command = bridge_command(python_path, project_dir)?;
+    let mut command = bridge_command(python_path, project_dir, dev_mode)?;
     #[cfg(windows)]
     command.creation_flags(0x08000000 | 0x01000000); // CREATE_NO_WINDOW | CREATE_BREAKAWAY_FROM_JOB
 
@@ -2064,7 +2083,7 @@ fn spawn_bridge_process(
                 app_handle,
                 "Windows denied CREATE_BREAKAWAY_FROM_JOB; retrying with CREATE_NO_WINDOW.",
             );
-            let mut fallback = bridge_command(python_path, project_dir)?;
+            let mut fallback = bridge_command(python_path, project_dir, dev_mode)?;
             fallback.creation_flags(0x08000000); // CREATE_NO_WINDOW
             fallback.spawn().map_err(|fallback_error| {
                 bootstrap_failure(
@@ -2348,7 +2367,7 @@ fn bootstrap_inner(
             Some("service"),
             82,
         );
-        spawn_bridge_process(app_handle, python_path, project_dir)?;
+        spawn_bridge_process(app_handle, python_path, project_dir, dev_mode)?;
     }
 
     set_bootstrap_phase(
@@ -2455,7 +2474,13 @@ async fn retry_bootstrap(
     project_dir: String,
 ) -> Result<(), String> {
     let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir)?;
-    execute_bootstrap_async(app_handle, python_path, project_dir, false).await
+    execute_bootstrap_async(
+        app_handle,
+        python_path,
+        project_dir,
+        desktop_dev_mode(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2465,13 +2490,25 @@ async fn start_bridge_with_config(
     project_dir: String,
 ) -> Result<(), String> {
     let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir)?;
-    execute_bootstrap_async(app_handle, python_path, project_dir, false).await
+    execute_bootstrap_async(
+        app_handle,
+        python_path,
+        project_dir,
+        desktop_dev_mode(),
+    )
+    .await
 }
 
 #[tauri::command]
 async fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
     let (python_path, project_dir) = get_or_discover_config();
-    execute_bootstrap_async(app_handle, python_path, project_dir, false).await
+    execute_bootstrap_async(
+        app_handle,
+        python_path,
+        project_dir,
+        desktop_dev_mode(),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -2681,7 +2718,13 @@ fn validated_ga_source(dir: &str) -> Result<String, String> {
 async fn restart_for_current_source(app_handle: tauri::AppHandle) -> Result<String, String> {
     let (python_path, project_dir) = get_or_discover_config();
     let expected_ga_root = effective_ga_root(&project_dir);
-    execute_bootstrap_async(app_handle, python_path, project_dir, false).await?;
+    execute_bootstrap_async(
+        app_handle,
+        python_path,
+        project_dir,
+        desktop_dev_mode(),
+    )
+    .await?;
     Ok(expected_ga_root)
 }
 
@@ -2901,7 +2944,7 @@ async fn capture_macos_window_screenshot(
 pub fn run() {
     let args: Vec<String> = std::env::args().collect();
     let no_autostart = args.iter().any(|a| a == "--no-autostart");
-    let dev_mode = args.iter().any(|a| a == "--dev");
+    let dev_mode = desktop_dev_mode();
 
     let (eff_py, eff_project) = get_or_discover_config();
 
@@ -3344,6 +3387,29 @@ mod tests {
         assert!(bridge_endpoint_from_values(Some("0.0.0.0"), Some("24168")).is_err());
         assert!(bridge_endpoint_from_values(Some("127.0.0.1"), Some("0")).is_err());
         assert!(bridge_endpoint_from_values(Some("127.0.0.1"), Some("bad")).is_err());
+    }
+
+    #[test]
+    fn bridge_child_only_receives_the_vite_origin_in_explicit_dev_mode() {
+        let mut production = Command::new("python");
+        production.env(DESKTOP_DEV_ORIGIN_ENV, "http://localhost:9999");
+        configure_bridge_dev_origin(&mut production, false);
+        let production_value = production
+            .get_envs()
+            .find(|entry| entry.0 == std::ffi::OsStr::new(DESKTOP_DEV_ORIGIN_ENV))
+            .map(|entry| entry.1);
+        assert_eq!(production_value, Some(None));
+
+        let mut development = Command::new("python");
+        configure_bridge_dev_origin(&mut development, true);
+        let development_value = development
+            .get_envs()
+            .find(|entry| entry.0 == std::ffi::OsStr::new(DESKTOP_DEV_ORIGIN_ENV))
+            .and_then(|entry| entry.1);
+        assert_eq!(
+            development_value,
+            Some(std::ffi::OsStr::new(DESKTOP_VITE_ORIGIN))
+        );
     }
 
     #[test]
