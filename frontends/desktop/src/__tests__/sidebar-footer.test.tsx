@@ -124,18 +124,13 @@ describe('Sidebar footer actions', () => {
     expect(screen.queryByRole('dialog', { name: '运行时管理面板' })).toBeNull();
   });
 
-  it('removes the global statusbar and its hard-coded version from the shell', () => {
+  it('keeps the removed global statusbar out of the shell', () => {
     const appLayout = fs.readFileSync(
       path.join(desktopRoot, 'src/components/layout/AppLayout.tsx'),
       'utf8',
     );
-    const statusbar = fs.readFileSync(
-      path.join(desktopRoot, 'src/components/layout/Statusbar.tsx'),
-      'utf8',
-    );
 
     expect(appLayout).not.toContain('<Statusbar');
-    expect(statusbar).not.toContain('v0.1.0');
   });
 
   it('keeps every Semi tooltip compact and opaque', () => {

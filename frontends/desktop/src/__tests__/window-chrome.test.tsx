@@ -37,7 +37,6 @@ async function importAppLayout() {
   }));
   vi.doMock('../components/layout/LeftSidebar', () => ({ LeftSidebar: () => null }));
   vi.doMock('../components/layout/MainArea', () => ({ MainArea: () => null }));
-  vi.doMock('../components/layout/Statusbar', () => ({ Statusbar: () => null }));
   vi.doMock('../components/layout/TitlebarControls', () => ({ TitlebarControls: () => null }));
   vi.doMock('../components/layout/ShortcutPrompt', () => ({ ShortcutPrompt: () => null }));
   vi.doMock('@douyinfe/semi-ui', () => ({
