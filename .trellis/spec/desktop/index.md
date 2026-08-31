@@ -6,6 +6,7 @@ Desktop 由 React Webview、Tauri host 与 Python bridge 组成。跨层变更�
 
 - [Frontend index](frontend/index.md)
 - [Session state management](frontend/session-state.md)
+- [Desktop maintainability](frontend/maintainability.md)
 
 ## Architecture rationale
 

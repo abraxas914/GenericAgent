@@ -174,6 +174,19 @@ for (const workflowPath of workflowPaths) {
 
 const releaseWorkflow = readText('.github/workflows/desktop-release-package.yml', repoRoot);
 const qualityWorkflow = readText('.github/workflows/desktop-ci.yml', repoRoot);
+const requiredDesktopRuntimeTriggers = [
+  'reflect/**',
+  'frontends/*.py',
+  'frontends/conductor_im_plugins/**',
+  'frontends/tests/**',
+  'frontends/desktop/**',
+];
+for (const trigger of requiredDesktopRuntimeTriggers) {
+  check(
+    qualityWorkflow.includes(`- "${trigger}"`),
+    `quality workflow watches Desktop runtime input: ${trigger}`,
+  );
+}
 const trackedLocalOnlyBoundary = `test -z "$(git ls-files -- '.agents/**' '.codex/**' '.trellis/**' ':(exclude).trellis/spec/*.md' ':(exclude).trellis/spec/**/*.md')"`;
 check(
   qualityWorkflow.includes(trackedLocalOnlyBoundary),
