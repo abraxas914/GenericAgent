@@ -2381,6 +2381,56 @@ _WEB_UPLOAD_DIR = Path(DEFAULT_GA_ROOT) / "temp" / "desktop_uploads"
 _WEB_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 UPLOAD_RETENTION_DAYS = 30
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+_MAX_UPLOAD_BASE64_BYTES = 4 * ((MAX_UPLOAD_BYTES + 2) // 3)
+_MAX_UPLOAD_REQUEST_BYTES = _MAX_UPLOAD_BASE64_BYTES + 64 * 1024
+
+
+class _UploadTooLarge(ValueError):
+    pass
+
+
+async def _read_bounded_upload_json(request, max_body_bytes: int) -> dict:
+    content_length = request.content_length
+    if content_length is not None and content_length > max_body_bytes:
+        raise _UploadTooLarge
+
+    body = bytearray()
+    async for chunk in request.content.iter_chunked(64 * 1024):
+        if len(body) + len(chunk) > max_body_bytes:
+            raise _UploadTooLarge
+        body.extend(chunk)
+    data = json.loads(body)
+    return data if isinstance(data, dict) else {}
+
+
+def _decode_upload_data(data_url: str, max_bytes: int) -> bytes:
+    if not isinstance(data_url, str):
+        raise ValueError("upload data must be a string")
+    encoded = data_url.split(",", 1)[1] if "," in data_url else data_url
+    try:
+        encoded_bytes = encoded.encode("ascii")
+    except UnicodeEncodeError as error:
+        raise ValueError("upload data must be base64") from error
+
+    max_encoded_bytes = 4 * ((max_bytes + 2) // 3)
+    if len(encoded_bytes) > max_encoded_bytes:
+        raise _UploadTooLarge
+    blob = base64.b64decode(encoded_bytes, validate=True)
+    if len(blob) > max_bytes:
+        raise _UploadTooLarge
+    return blob
+
+
+def _upload_too_large_response():
+    return json_ok(
+        {
+            "ok": False,
+            "code": "file_too_large",
+            "error": "file exceeds 50 MB limit",
+        },
+        status=413,
+    )
 
 
 def _safe_session_dir(sid: str) -> str:
@@ -2436,21 +2486,17 @@ async def upload_handler(request):
     Returns: {ok: true, path: "<abs path>"}
     """
     try:
-        data = await request.json()
-        if not isinstance(data, dict):
-            data = {}
-    except web.HTTPRequestEntityTooLarge:
-        return json_ok({"ok": False, "error": "file too large for bridge body limit"})
+        data = await _read_bounded_upload_json(request, _MAX_UPLOAD_REQUEST_BYTES)
+    except (_UploadTooLarge, web.HTTPRequestEntityTooLarge):
+        return _upload_too_large_response()
     except Exception as e:
         return json_ok({"ok": False, "error": f"invalid request: {e}"})
     name = (data.get("name") or "file").strip().replace("/", "_").replace("\\", "_")
     data_url = data.get("dataUrl") or ""
-    if "," in data_url:
-        b64 = data_url.split(",", 1)[1]
-    else:
-        b64 = data_url
     try:
-        blob = base64.b64decode(b64)
+        blob = _decode_upload_data(data_url, MAX_UPLOAD_BYTES)
+    except _UploadTooLarge:
+        return _upload_too_large_response()
     except Exception as e:
         return json_ok({"ok": False, "error": f"decode failed: {e}"})
     if not blob:

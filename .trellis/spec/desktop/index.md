@@ -11,6 +11,7 @@ Desktop 由 React Webview、Tauri host 与 Python bridge 组成。跨层变更�
 ## Cross-layer security
 
 - [Desktop transport security](transport-security.md)
+- [Attachment transport](attachment-transport.md)
 
 ## Architecture rationale
 
