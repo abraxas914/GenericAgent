@@ -1396,3 +1396,23 @@ class TestBridgeSettingsWrites:
         assert json.loads(response.text)["error"] == "atomic replace failed"
         assert settings.read_text(encoding="utf-8") == original
         assert manager.config == {}
+
+
+def test_message_pages_cover_history_and_forward_catchup(manager):
+    session = _make_session(messages=[
+        {"id": i, "role": "user", "content": str(i)} for i in range(1, 121)
+    ])
+    manager.sessions[session.id] = session
+    with patch.object(_plan_state_stub, "desktop_plan_payload_from_session", return_value={}, create=True):
+        newest = manager.messages(session.id, limit=50)
+        older = manager.messages(session.id, before=71, limit=50)
+        oldest = manager.messages(session.id, before=21, limit=50)
+        assert [m["id"] for m in oldest["messages"] + older["messages"] + newest["messages"]] == list(range(1, 121))
+        assert newest["hasEarlier"] and older["hasEarlier"]
+        assert not oldest["hasEarlier"]
+        first = manager.messages(session.id, after=1, limit=50, forward=True)
+        second = manager.messages(session.id, after=51, limit=50, forward=True)
+        last = manager.messages(session.id, after=101, limit=50, forward=True)
+        assert first["messages"][0]["id"] == 2
+        assert first["hasMore"] and second["hasMore"] and not last["hasMore"]
+        assert [m["id"] for m in first["messages"] + second["messages"] + last["messages"]] == list(range(2, 121))

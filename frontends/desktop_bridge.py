@@ -1195,20 +1195,26 @@ class AgentManager:
             print(tb, file=sys.stderr)
             emit_session_state(sess, "error")
 
-    def messages(self, sid: str, after: int = 0, limit: int = 200) -> dict:
+    def messages(self, sid: str, after: int = 0, limit: int = 200, before: int = 0, forward: bool = False) -> dict:
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
-            msgs = [m for m in sess.messages if int(m.get("id", 0)) > after]
+            eligible = [m for m in sess.messages if int(m.get("id", 0)) > after
+                        and (not before or int(m.get("id", 0)) < before)]
+            msgs = eligible
             if limit > 0:
-                msgs = msgs[-limit:]
+                msgs = eligible[:limit] if forward else eligible[-limit:]
+            first_id = int(msgs[0]["id"]) if msgs else 0
+            has_earlier = bool(first_id and any(int(m["id"]) < first_id for m in sess.messages))
             import plan_state
             return {
                 "sessionId": sid,
                 "status": sess.status,
                 "hasUnfinishedWork": self._session_has_unfinished_work(sess),
                 "messages": msgs,
+                "hasEarlier": has_earlier,
+                "hasMore": bool(forward and len(eligible) > len(msgs)),
                 "partial": dict(sess.partial) if sess.partial else None,
                 "plan": plan_state.desktop_plan_payload_from_session(sess, self.ga_root),
                 "msgSeq": sess.msg_seq,
@@ -2250,7 +2256,9 @@ async def messages_handler(request):
     sid = request.match_info["sid"]
     after = int(request.query.get("after") or request.query.get("afterId") or 0)
     limit = int(request.query.get("limit") or 200)
-    return json_ok(manager.messages(sid, after=after, limit=limit))
+    before = int(request.query.get("before") or 0)
+    forward = request.query.get("direction") == "forward"
+    return json_ok(manager.messages(sid, after=after, limit=limit, before=before, forward=forward))
 
 
 async def cancel_handler(request):

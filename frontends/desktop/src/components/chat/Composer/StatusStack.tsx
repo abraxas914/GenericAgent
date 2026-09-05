@@ -10,14 +10,24 @@ export function StatusStack() {
   const isGenerating = useChatStore((s) => s.status === 'running');
   const queue = useChatStore((s) => s.pendingQueue);
   const cancelQueued = useChatStore((s) => s.cancelQueued);
+  const activeSessionId = useChatStore((s) => s.activeSessionId);
+  const failedSends = useChatStore((s) => s.failedSends);
+  const retryFailed = useChatStore((s) => s.retryFailed);
+  const failures = failedSends.filter((item) => item.sessionId === activeSessionId);
   const lang = useSettingsStore((s) => s.lang);
 
-  if (!isGenerating && queue.length === 0) return null;
+  if (!isGenerating && queue.length === 0 && failures.length === 0) return null;
 
   const t = (key: keyof typeof LABELS) => LABELS[key][lang] || LABELS[key].en;
 
   return (
     <div data-slot="composer-status-stack">
+      {failures.map((item) => (
+        <div key={item.id} role="alert" data-slot="send-failed">
+          <span>{lang === 'zh' ? '发送未确认，请检查会话：' : 'Send unconfirmed; check the conversation: '}{item.error}</span>
+          <button onClick={() => void retryFailed(item.id)}>{lang === 'zh' ? '重试' : 'Retry'}</button>
+        </div>
+      ))}
       {isGenerating && (
         <div data-slot="status-running">
           <span data-slot="status-dot" />

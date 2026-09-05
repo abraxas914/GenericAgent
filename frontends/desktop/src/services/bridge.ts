@@ -1,4 +1,5 @@
 import { BRIDGE_BASE } from './constants';
+import { checkedFetch } from './http';
 
 export interface AppConfig {
   lang: 'zh' | 'en';
@@ -46,16 +47,10 @@ function getTauriInvoke(): ((cmd: string, args?: Record<string, unknown>) => Pro
 const DEV_BACKEND = BRIDGE_BASE;
 
 async function devFetch(path: string, opts?: RequestInit): Promise<unknown> {
-  const res = await fetch(`${DEV_BACKEND}${path}`, {
+  const res = await checkedFetch(`${DEV_BACKEND}${path}`, {
     headers: { 'Content-Type': 'application/json' },
     ...opts,
   });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    let msg = `${res.status} ${res.statusText}`;
-    try { const j = JSON.parse(body); msg = j.error || j.message || msg; } catch {}
-    throw new Error(msg);
-  }
   return res.json();
 }
 
@@ -75,28 +70,15 @@ export async function getConfig(): Promise<AppConfig> {
       return res.config;
     } catch { /* fall through */ }
   }
-  try {
-    const res = await devFetch('/config') as { config: AppConfig };
-    return res.config;
-  } catch {
-    return {
-      lang: (localStorage.getItem('ga_lang') as 'zh' | 'en') || 'zh',
-      theme: 'light',
-      appearance: (localStorage.getItem('ga_appearance') as 'light' | 'dark') || 'light',
-      plain: false,
-      fontSize: parseInt(localStorage.getItem('ga_font_size') || '14', 10),
-      llmNo: 0,
-    };
-  }
+  const res = await devFetch('/config') as { config: AppConfig };
+  return res.config;
 }
 
 export async function saveConfig(config: Partial<AppConfig>): Promise<void> {
   if (isBridgeAvailable()) {
     try { await ga()!.saveConfig({ config }); return; } catch { /* fall through */ }
   }
-  try {
-    await devFetch('/config', { method: 'POST', body: JSON.stringify({ config }) });
-  } catch {}
+  await devFetch('/config', { method: 'POST', body: JSON.stringify({ config }) });
 }
 
 export async function getModelProfiles(): Promise<ModelProfile[]> {
@@ -106,12 +88,8 @@ export async function getModelProfiles(): Promise<ModelProfile[]> {
       return res.profiles || [];
     } catch { /* fall through */ }
   }
-  try {
-    const res = await devFetch('/model-profiles') as { profiles: ModelProfile[] };
-    return res.profiles || [];
-  } catch {
-    return [];
-  }
+  const res = await devFetch('/model-profiles') as { profiles: ModelProfile[] };
+  return res.profiles || [];
 }
 
 export async function getModelProfileDetail(id: number): Promise<ModelProfile | null> {

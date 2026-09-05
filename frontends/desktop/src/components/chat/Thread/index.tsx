@@ -11,6 +11,9 @@ export function Thread() {
   const messages = useChatStore((state) => state.messages);
   const status = useChatStore((state) => state.status);
   const activeSessionId = useChatStore((state) => state.activeSessionId);
+  const hasEarlier = useChatStore((state) => activeSessionId ? state.sessionsById[activeSessionId]?.hasEarlier ?? false : false);
+  const loadingEarlier = useChatStore((state) => activeSessionId ? state.sessionsById[activeSessionId]?.loadingEarlier ?? false : false);
+  const loadEarlier = useChatStore((state) => state.loadEarlier);
   const viewId = sessionViewId(activeSessionId);
   const budgetMultiplier = useThreadViewStore(
     (state) => state.viewBySessionId[viewId]?.renderBudgetMultiplier ?? 1,
@@ -91,6 +94,17 @@ export function Thread() {
         data-following={isAtBottom}
       >
         <ThreadContent>
+          {hasEarlier && <button data-slot="load-history" disabled={loadingEarlier}
+            onClick={async () => {
+              if (!activeSessionId) return;
+              const viewport = scrollRef.current;
+              const height = viewport?.scrollHeight ?? 0;
+              const top = viewport?.scrollTop ?? 0;
+              await loadEarlier(activeSessionId);
+              requestAnimationFrame(() => {
+                if (viewport?.isConnected) viewport.scrollTop = top + viewport.scrollHeight - height;
+              });
+            }}>Load earlier messages</button>}
           <MessageList
             sessionId={activeSessionId ?? ''}
             messages={messages}

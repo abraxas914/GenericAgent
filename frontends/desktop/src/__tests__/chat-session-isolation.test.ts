@@ -233,8 +233,8 @@ describe('session-scoped chat runtime', () => {
     expect([...useChatStore.getState().runningSessions].sort()).toEqual(['A', 'B']);
 
     await vi.advanceTimersByTimeAsync(1000);
-    expect(mocks.pollMessages).toHaveBeenCalledWith('A');
-    expect(mocks.pollMessages).toHaveBeenCalledWith('B');
+    expect(mocks.pollMessages).toHaveBeenCalledWith('A', undefined);
+    expect(mocks.pollMessages).toHaveBeenCalledWith('B', undefined);
 
     pollB.resolve(result('B', 'idle'));
     await flushPromises();
@@ -269,4 +269,74 @@ describe('session-scoped chat runtime', () => {
     expect(useChatStore.getState().sessionsById.A).toBeUndefined();
     expect(useChatStore.getState().activeSessionId).toBeNull();
   });
+  it('does not complete or drain a send while its upload/submission is pending', async () => {
+    mocks.pollMessages.mockResolvedValue(result('A'));
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.pollMessages.mockClear();
+    const submission = deferred<string>();
+    mocks.sendPrompt.mockReturnValueOnce(submission.promise);
+    const sending = useChatStore.getState().sendMessage('first');
+    await useChatStore.getState().sendMessage('second');
+    mocks.wsHandlers.get('session-state')?.({ sessionId: 'A', status: 'idle' });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.sendPrompt).toHaveBeenCalledTimes(1);
+    expect(mocks.pollMessages).not.toHaveBeenCalled();
+    expect(useChatStore.getState().sessionsById.A.submitting).toBe(true);
+    expect(useChatStore.getState().sessionsById.A.pendingQueue).toHaveLength(1);
+    submission.resolve('1');
+    await sending;
+    await flushPromises();
+    expect(mocks.sendPrompt).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares creation and waits for the selected model before the first prompt', async () => {
+    mocks.createSession.mockResolvedValue('new');
+    mocks.pollMessages.mockResolvedValue(result('new', 'running'));
+    const binding = deferred<unknown>();
+    mocks.setSessionModel.mockReturnValue(binding.promise);
+    await useChatStore.getState().selectSessionModel(2);
+    const first = useChatStore.getState().sendMessage('first');
+    const second = useChatStore.getState().sendMessage('second');
+    await flushPromises();
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.setSessionModel).toHaveBeenCalledWith('new', 2);
+    expect(mocks.sendPrompt).not.toHaveBeenCalled();
+    binding.resolve({ ok: true });
+    await Promise.all([first, second]);
+    expect(mocks.sendPrompt).toHaveBeenCalledTimes(1);
+    expect(useChatStore.getState().sessionsById.new.pendingQueue).toHaveLength(1);
+  });
+
+  it('retains rejected sends and attachments for explicit retry', async () => {
+    mocks.pollMessages.mockResolvedValue(result('A'));
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.sendPrompt.mockRejectedValueOnce(new Error('rejected'));
+    const opts = { files: [{ name: 'notes.txt', path: '/notes.txt' }] };
+    await useChatStore.getState().sendMessage('keep me', opts);
+    const failed = useChatStore.getState().failedSends[0];
+    expect(failed).toMatchObject({ sessionId: 'A', text: 'keep me', opts, error: 'rejected' });
+    expect(useChatStore.getState().sessionsById.A.messages.slice(-1)[0]?.status).toBe('failed');
+  });
+
+  it('removes stale background running IDs when a new snapshot reports idle', async () => {
+    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', status: 'running' }]);
+    await useChatStore.getState().loadSessions();
+    expect(useChatStore.getState().runningSessions.has('background')).toBe(true);
+    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', status: 'idle' }]);
+    await useChatStore.getState().loadSessions();
+    expect(useChatStore.getState().runningSessions.has('background')).toBe(false);
+  });
+
+  it('preserves running membership identity for pure stream content changes', () => {
+    mocks.wsHandlers.get('session-state')?.({ sessionId: 'A', status: 'running' });
+    const membership = useChatStore.getState().runningSessions;
+    for (let i = 0; i < 100; i++) {
+      mocks.wsHandlers.get('partial-update')?.({ sessionId: 'A', content: String(i) });
+    }
+    expect(useChatStore.getState().runningSessions).toBe(membership);
+    expect(rafCallbacks.size).toBe(1);
+  });
+
 });
