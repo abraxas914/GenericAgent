@@ -8,7 +8,15 @@ describe('renderer asset boundaries', () => {
   it('retains WOFF2 for every KaTeX face without changing unrelated fonts', async () => {
     const css = `@font-face { font-family: KaTeX_Main; src: url(main.woff2) format("woff2"), url(main.woff) format("woff"), url(main.ttf) format("truetype"); }
       @font-face { font-family: Other; src: url(other.ttf) format("truetype"); }`;
-    const result = await postcss([katexWoff2Only()]).process(css, { from: undefined });
+    const emitted: string[] = [];
+    const urlResolver = {
+      postcssPlugin: 'record-emitted-urls',
+      Once(root: import('postcss').Root) {
+        root.walkDecls('src', (decl) => { emitted.push(decl.value); });
+      },
+    };
+    const result = await postcss([katexWoff2Only(), urlResolver]).process(css, { from: undefined });
+    expect(emitted[0]).toBe('url(main.woff2) format("woff2")');
     expect(result.css).toContain('url(main.woff2)');
     expect(result.css).not.toContain('url(main.woff)');
     expect(result.css).not.toContain('url(main.ttf)');

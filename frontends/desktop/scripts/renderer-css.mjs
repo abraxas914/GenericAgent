@@ -3,8 +3,9 @@
 export function katexWoff2Only() {
   return {
     postcssPlugin: 'ga-katex-woff2-only',
-    AtRule: {
-      'font-face'(rule) {
+    // Vite resolves and emits URL assets in Once, before normal node visitors.
+    Once(root) {
+      root.walkAtRules('font-face', (rule) => {
         const family = rule.nodes.find((node) => node.prop === 'font-family')?.value;
         if (!family?.replace(/["']/g, '').startsWith('KaTeX_')) return;
         rule.walkDecls('src', (declaration) => {
@@ -12,7 +13,7 @@ export function katexWoff2Only() {
           if (!woff2) throw declaration.error('KaTeX face has no WOFF2 source');
           declaration.value = woff2[0];
         });
-      },
+      });
     },
   };
 }
