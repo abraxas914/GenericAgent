@@ -99,10 +99,14 @@ const modelWrites = new Map<string, ReturnType<typeof serialTask>>();
 const submissions = new Map<string, AbortController>();
 let listGeneration = 0;
 
-function bindModel(sessionId: string, no: number) {
+function sessionOperations(sessionId: string) {
   const enqueue = modelWrites.get(sessionId) ?? serialTask();
   modelWrites.set(sessionId, enqueue);
-  return enqueue(() => apiSetSessionModel(sessionId, no));
+  return enqueue;
+}
+
+function bindModel(sessionId: string, no: number) {
+  return sessionOperations(sessionId)(() => apiSetSessionModel(sessionId, no));
 }
 
 const deletedSessions = new Set<string>();
@@ -278,12 +282,12 @@ export const useChatStore = create<ChatState>((set, get) => {
     const controller = new AbortController();
     submissions.set(sessionId, controller);
     try {
-      if (runtime.sessionModelNo != null) {
-        await bindModel(sessionId, runtime.sessionModelNo);
-      }
-      if (deletedSessions.has(sessionId)) return;
-      if (controller.signal.aborted) throw new Error('Send cancelled');
-      const serverId = await sendPrompt(sessionId, text, opts?.files, opts?.images, controller.signal);
+      const serverId = await sessionOperations(sessionId)(async () => {
+        if (controller.signal.aborted) throw new Error('Send cancelled');
+        if (runtime.sessionModelNo != null) await apiSetSessionModel(sessionId, runtime.sessionModelNo);
+        if (controller.signal.aborted) throw new Error('Send cancelled');
+        return sendPrompt(sessionId, text, opts?.files, opts?.images, controller.signal);
+      });
       if (!get().sessionsById[sessionId]) return;
       updateSession(sessionId, (current) => ({
         ...current,
@@ -356,7 +360,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     } else {
       stopPolling(sessionId);
       cancelPartialFrame(sessionId);
-      drainQueue(sessionId);
+      if (!result.hasMore) drainQueue(sessionId);
     }
     return true;
   }
@@ -475,8 +479,6 @@ export const useChatStore = create<ChatState>((set, get) => {
     }
   });
 
-  void listSessions().then((sessions) => set({ sessions })).catch(() => {});
-
   return {
     activeSessionId: null,
     sessionsById: {},
@@ -589,18 +591,39 @@ export const useChatStore = create<ChatState>((set, get) => {
       const request = ++listGeneration;
       const observed = get().sessionsById;
       try {
-        const sessions = await listSessions();
+        const snapshot = await listSessions();
         if (request !== listGeneration) return;
+        const sessions = snapshot.filter((session) => !deletedSessions.has(session.id));
+        const refresh = new Set<string>();
         set((state) => {
           const runningSessions = new Set(sessions.filter((session) => session.status === 'running').map((session) => session.id));
-          for (const [id, runtime] of Object.entries(state.sessionsById)) {
-            if (runtime.submitting || runtime !== observed[id]) {
+          const sessionsById = { ...state.sessionsById };
+          for (const id of runningSessions) {
+            sessionsById[id] ??= createRuntime();
+          }
+          for (const [id, runtime] of Object.entries(sessionsById)) {
+            if (runtime.submitting || (state.sessionsById[id] && runtime !== observed[id])) {
               if (runtime.status === 'running') runningSessions.add(id);
               else runningSessions.delete(id);
+              continue;
+            }
+            const status = runningSessions.has(id) ? 'running' : 'idle';
+            if (runtime.status !== status) {
+              sessionsById[id] = { ...runtime, status, loadGeneration: runtime.loadGeneration + 1,
+                turnStartedAt: status === 'running' ? runtime.turnStartedAt ?? Date.now() : null };
+              refresh.add(id);
             }
           }
-          return { sessions, runningSessions };
+          return { sessions, sessionsById, runningSessions,
+            ...activeProjection(state.activeSessionId ? sessionsById[state.activeSessionId] : undefined) };
         });
+        for (const [id, runtime] of Object.entries(get().sessionsById)) {
+          if (runtime.status === 'running') startPolling(id);
+          else stopPolling(id);
+        }
+        const active = get().activeSessionId;
+        if (active) refresh.add(active);
+        for (const id of refresh) void requestPoll(id);
       } catch {
         // Bridge reconnect will retry.
       }
@@ -610,6 +633,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       try { await apiDeleteSession(id); }
       catch (error) { Toast.error({ content: String(error) }); return; }
       deletedSessions.add(id);
+      listGeneration++;
       submissions.get(id)?.abort();
       modelWrites.delete(id);
       pendingPolls.delete(id);
@@ -676,7 +700,8 @@ export const useChatStore = create<ChatState>((set, get) => {
           model: result.model ?? runtime.model,
         }));
         if (result.model) syncActiveModel(sessionId, result.model);
-      } catch {
+      } catch (error) {
+        Toast.error({ content: String(error) });
         updateSession(sessionId, (runtime) => runtime.sessionModelNo === llmNo
           ? { ...runtime, sessionModelNo: previous }
           : runtime);
@@ -718,6 +743,8 @@ function stopTimerForTests(sessionId: string) {
   if (timer != null) clearInterval(timer);
   pollTimers.delete(sessionId);
 }
+
+void useChatStore.getState().loadSessions();
 
 onBridgeStatusChange((status) => {
   if (status === 'ready') {

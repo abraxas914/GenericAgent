@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PollResult } from '../services/chat';
+import type { PollResult, SessionInfo } from '../services/chat';
 
 const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   sendPrompt: vi.fn(),
   pollMessages: vi.fn(),
   cancelGeneration: vi.fn(),
-  listSessions: vi.fn(() => Promise.resolve([])),
+  listSessions: vi.fn(() => Promise.resolve([] as SessionInfo[])),
   deleteSession: vi.fn(),
   renameSession: vi.fn(),
   pinSession: vi.fn(),
@@ -80,8 +80,7 @@ function result(
 }
 
 async function flushPromises() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 describe('session-scoped chat runtime', () => {
@@ -321,10 +320,13 @@ describe('session-scoped chat runtime', () => {
   });
 
   it('removes stale background running IDs when a new snapshot reports idle', async () => {
-    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', status: 'running' }]);
+    mocks.pollMessages.mockResolvedValue(result('background', 'running'));
+    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', title: 'Background', untitled: false, status: 'running' }]);
     await useChatStore.getState().loadSessions();
     expect(useChatStore.getState().runningSessions.has('background')).toBe(true);
-    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', status: 'idle' }]);
+    await flushPromises();
+    mocks.pollMessages.mockResolvedValue(result('background', 'idle'));
+    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', title: 'Background', untitled: false, status: 'idle' }]);
     await useChatStore.getState().loadSessions();
     expect(useChatStore.getState().runningSessions.has('background')).toBe(false);
   });

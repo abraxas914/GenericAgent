@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useLogPolling } from '../../hooks/useLogPolling';
 import { Modal, Spin } from '@douyinfe/semi-ui';
 import { useI18n } from '../../i18n';
 import { useServicesStore } from '../../stores/services';
@@ -9,33 +9,10 @@ interface Props {
   onClose: () => void;
 }
 
-const REFRESH_INTERVAL = 3000;
-
 export function ChannelLogModal({ serviceId, onClose }: Props) {
   const { t } = useI18n();
   const fetchLogs = useServicesStore((s) => s.fetchLogs);
-  const [lines, setLines] = useState<string[] | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const loadLogs = useCallback(async () => {
-    if (!serviceId) return;
-    const result = await fetchLogs(serviceId);
-    setLines(result);
-  }, [serviceId, fetchLogs]);
-
-  useEffect(() => {
-    if (serviceId) {
-      setLines(null);
-      loadLogs();
-      timerRef.current = setInterval(loadLogs, REFRESH_INTERVAL);
-    }
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [serviceId, loadLogs]);
+  const lines = useLogPolling(serviceId, fetchLogs);
 
   return (
     <Modal

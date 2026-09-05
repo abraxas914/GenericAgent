@@ -1056,8 +1056,11 @@ class TestMaintenanceGate:
         assert entered_start.wait(timeout=2)
         admission_thread = threading.Thread(target=admit)
         admission_thread.start()
-        time.sleep(0.03)
-        assert admission_result == []
+        admission_thread.join(timeout=2)
+        assert not admission_thread.is_alive(), "maintenance admission must not wait for child startup"
+        assert isinstance(admission_result[0], MaintenanceConflict)
+        assert manager.lock.acquire(timeout=0.2)
+        manager.lock.release()
         release_start.set()
         start_thread.join(timeout=2)
         admission_thread.join(timeout=2)
@@ -1066,6 +1069,78 @@ class TestMaintenanceGate:
         assert start_result[0]["service"]["managed"] is True
         assert isinstance(admission_result[0], MaintenanceConflict)
         assert admission_result[0].running_extras == ["worker"]
+
+    @pytest.mark.parametrize("action", ["start", "stop"])
+    def test_service_handler_keeps_event_loop_available(self, action, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def operation(sid):
+            assert sid == "worker"
+            started.set()
+            assert release.wait(timeout=3)
+            return {"ok": True}
+
+        async def body(_request):
+            return {"id": "worker"}
+
+        monkeypatch.setattr(_mod, "read_json", body)
+        monkeypatch.setattr(_mod.services, f"{action}_service", operation)
+
+        async def scenario():
+            request = SimpleNamespace(query={})
+            task = asyncio.create_task(getattr(_mod, f"service_{action}_handler")(request))
+            try:
+                assert await asyncio.to_thread(started.wait, 1)
+                # This coroutine must run while the process operation is waiting.
+                await asyncio.sleep(0)
+                assert not task.done()
+            finally:
+                release.set()
+            assert (await task).status == 200
+
+        asyncio.run(scenario())
+
+    def test_slow_service_exit_releases_state_lock(self, monkeypatch):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class SlowProcess:
+            done = False
+
+            def poll(self):
+                return 0 if self.done else None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout):
+                entered.set()
+                assert release.wait(timeout=3)
+                self.done = True
+
+        service_manager = ServiceManager.__new__(ServiceManager)
+        service_manager.lock = threading.RLock()
+        service_manager._catalog = {"worker": {}}
+        service_manager.procs = {"worker": SlowProcess()}
+        service_manager._stopping = set()
+        monkeypatch.setattr(service_manager, "_managed_state", lambda *_a, **_kw: {"running": False, "owner": "none"})
+        monkeypatch.setattr(service_manager, "_notify", lambda *_a, **_kw: None)
+        result = []
+        worker = threading.Thread(target=lambda: result.append(service_manager.stop_service("worker")))
+        worker.start()
+        try:
+            assert entered.wait(timeout=2)
+            assert service_manager.lock.acquire(timeout=0.2)
+            service_manager.lock.release()
+        finally:
+            release.set()
+            worker.join(timeout=2)
+        assert result[0]["ok"] is True
+        assert service_manager.procs == {}
 
     def test_managed_service_state_keeps_ui_maintenance_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

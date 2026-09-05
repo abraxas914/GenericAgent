@@ -1,9 +1,10 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useBridgeStatus } from '../../hooks/useBridgeStatus';
 import { useConductorStore } from '../../stores/conductor';
 import { useAppStore } from '../../stores/app';
 import { useI18n } from '../../i18n';
 import { fetchServiceLogs } from '../../services/services-api';
+import { useLogPolling } from '../../hooks/useLogPolling';
 import { LogView } from '../log';
 
 type StatusTone = 'good' | 'warn' | 'bad' | 'muted';
@@ -60,7 +61,7 @@ const LOG_TABS = [
 ] as const;
 
 const LOG_PREVIEW_LINES = 12;
-const LOG_POLL_MS = 3000;
+const readLogs = (id: string) => fetchServiceLogs(id, 200);
 
 interface Props {
   onClose: () => void;
@@ -72,34 +73,11 @@ export function BridgeMenuPanel({ onClose }: Props) {
   const conductorStatus = useConductorStore((s) => s.connectionStatus);
   const setPage = useAppStore((s) => s.setPage);
   const panelRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const [activeTab, setActiveTab] = useState<string>(LOG_TABS[0].id);
-  const [lines, setLines] = useState<string[] | null>(null);
-  const [totalLines, setTotalLines] = useState(0);
-
-  const loadLogs = useCallback(async (sid: string) => {
-    try {
-      const result = await fetchServiceLogs(sid, 200);
-      setTotalLines(result.length);
-      setLines(result.slice(-LOG_PREVIEW_LINES));
-    } catch {
-      setLines([]);
-      setTotalLines(0);
-    }
-  }, []);
-
-  useEffect(() => {
-    setLines(null);
-    loadLogs(activeTab);
-    timerRef.current = setInterval(() => loadLogs(activeTab), LOG_POLL_MS);
-    return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [activeTab, loadLogs]);
+  const allLines = useLogPolling(activeTab, readLogs);
+  const totalLines = allLines?.length ?? 0;
+  const lines = allLines?.slice(-LOG_PREVIEW_LINES) ?? null;
 
   useEffect(() => {
     function onClickOutside(e: MouseEvent) {

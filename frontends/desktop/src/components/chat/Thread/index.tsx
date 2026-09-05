@@ -5,9 +5,11 @@ import { useStickToBottom, useSessionScrollStability } from '../../../hooks/useS
 import { ThreadContent } from './ThreadContent';
 import { MessageList } from './MessageList';
 import { UserTurnRail } from './UserTurnRail';
+import { useI18n } from '../../../i18n';
 import './thread.css';
 
 export function Thread() {
+  const { lang } = useI18n();
   const messages = useChatStore((state) => state.messages);
   const status = useChatStore((state) => state.status);
   const activeSessionId = useChatStore((state) => state.activeSessionId);
@@ -102,9 +104,9 @@ export function Thread() {
               const top = viewport?.scrollTop ?? 0;
               await loadEarlier(activeSessionId);
               requestAnimationFrame(() => {
-                if (viewport?.isConnected) viewport.scrollTop = top + viewport.scrollHeight - height;
+                if (viewport?.isConnected && useChatStore.getState().activeSessionId === activeSessionId) viewport.scrollTop = top + viewport.scrollHeight - height;
               });
-            }}>Load earlier messages</button>}
+            }}>{lang === 'zh' ? '加载更早消息' : 'Load earlier messages'}</button>}
           <MessageList
             sessionId={activeSessionId ?? ''}
             messages={messages}
