@@ -23,6 +23,7 @@ export function measureRenderer(root) {
   // Direct script, stylesheet and modulepreload references, not a claim about
   // measured network traffic or dynamically loaded resources.
   for (const entry of ['index.html', 'loading.html', 'setup.html']) {
+    if (!fs.existsSync(path.join(root, entry))) continue;
     const html = fs.readFileSync(path.join(root, entry), 'utf8');
     const assets = new Set([...html.matchAll(/(?:src|href)=["']\/?(assets\/[^"']+\.(?:js|css))["']/g)].map((m) => m[1]));
     report.entries[entry] = [...assets].reduce((sum, asset) => sum + (sizes[asset] ?? 0), 0);
