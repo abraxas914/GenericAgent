@@ -2878,7 +2878,7 @@ async def bridge_exit_handler(request):
         # delayed process exit. Otherwise a new import/export could acquire the
         # maintenance gate during the response-to-exit timer window.
         manager._shutdown_requested = True
-        _exit_bridge()
+    await _run_worker_to_completion(_exit_bridge)
     return json_ok({"ok": True})
 
 

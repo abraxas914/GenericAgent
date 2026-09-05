@@ -1074,16 +1074,16 @@ class TestMaintenanceGate:
         assert isinstance(admission_result[0], MaintenanceConflict)
         assert admission_result[0].running_extras == ["worker"]
 
-    @pytest.mark.parametrize("action", ["start", "stop"])
-    def test_service_handler_keeps_event_loop_available(self, action, monkeypatch):
+    @pytest.mark.parametrize("action", ["start", "stop", "exit"])
+    def test_service_handler_keeps_event_loop_available(self, action, manager, monkeypatch):
         import asyncio
         from types import SimpleNamespace
 
         started = threading.Event()
         release = threading.Event()
 
-        def operation(sid):
-            assert sid == "worker"
+        def operation(sid=None):
+            assert sid == (None if action == "exit" else "worker")
             started.set()
             assert release.wait(timeout=3)
             return {"ok": True}
@@ -1092,11 +1092,16 @@ class TestMaintenanceGate:
             return {"id": "worker"}
 
         monkeypatch.setattr(_mod, "read_json", body)
-        monkeypatch.setattr(_mod.services, f"{action}_service", operation)
+        monkeypatch.setattr(_mod, "manager", manager)
+        if action == "exit":
+            monkeypatch.setattr(_mod, "_exit_bridge", operation)
+        else:
+            monkeypatch.setattr(_mod.services, f"{action}_service", operation)
 
         async def scenario():
-            request = SimpleNamespace(query={})
-            task = asyncio.create_task(getattr(_mod, f"service_{action}_handler")(request))
+            request = SimpleNamespace(query={}, remote="127.0.0.1")
+            handler = _mod.bridge_exit_handler if action == "exit" else getattr(_mod, f"service_{action}_handler")
+            task = asyncio.create_task(handler(request))
             try:
                 assert await asyncio.to_thread(started.wait, 1)
                 # This coroutine must run while the process operation is waiting.
