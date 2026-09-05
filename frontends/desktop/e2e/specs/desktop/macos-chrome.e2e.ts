@@ -131,6 +131,7 @@ describe('GenericAgent native macOS titlebar geometry', () => {
   });
 
   it('renders deferred settings, theme tokens, SVG icons and WOFF2 fonts in WebKit', async () => {
+    await setSidebarCollapsed(false);
     await chat.waitForBridgeReady();
     await browser.execute(() => window.dispatchEvent(new Event('ga:open-settings')));
     await $('[data-testid="data-import-row"]').waitForExist({ timeout: 10_000 });
