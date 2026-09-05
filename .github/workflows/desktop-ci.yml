@@ -95,6 +95,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -118,6 +120,39 @@ jobs:
       - name: Production build excludes WDIO
         working-directory: frontends/desktop
         run: npm run test:e2e-isolation
+      - name: Enforce production renderer budgets
+        working-directory: frontends/desktop
+        run: npm run test:bundle
+      - name: Compare renderer with base using the same locked dependencies
+        working-directory: frontends/desktop
+        env:
+          RENDERER_BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        run: |
+          if ! git diff --quiet "$RENDERER_BASE" HEAD -- package-lock.json; then
+            echo 'Dependency lock changed; baseline comparison skipped.'
+            exit 0
+          fi
+          BASE_DIR="$RUNNER_TEMP/renderer-baseline"
+          git worktree add --detach "$BASE_DIR" "$RENDERER_BASE"
+          ln -s "$PWD/node_modules" "$BASE_DIR/frontends/desktop/node_modules"
+          npm --prefix "$BASE_DIR/frontends/desktop" run build
+          node --input-type=module - "$BASE_DIR/frontends/desktop/dist" <<'JS'
+          import fs from 'node:fs';
+          import { measureRenderer } from './scripts/renderer-size.mjs';
+          const before = measureRenderer(process.argv[2]);
+          const after = measureRenderer('dist');
+          const saved = Object.fromEntries(['js', 'css', 'fonts', 'other', 'total'].map(key => [key, before[key] - after[key]]));
+          const report = { before, after, saved };
+          fs.writeFileSync('e2e-results/renderer-comparison.json', JSON.stringify(report, null, 2));
+          console.log(JSON.stringify(report, null, 2));
+          JS
+      - name: Upload renderer size evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: renderer-size-${{ github.run_id }}
+          path: frontends/desktop/e2e-results/renderer-*.json
+          if-no-files-found: error
+          retention-days: 14
 
   python-tests:
     name: Python ${{ matrix.python-version }}

@@ -218,15 +218,21 @@ export async function pollMessages(
 
   const params = new URLSearchParams({ limit: String(limit) });
   if (afterId) params.set('after', afterId);
-  const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/messages?${params}`);
-  const data = await res.json();
-  return {
-    messages: (data.messages || []).map((m: Record<string, unknown>) => normalizeMessage(m)),
-    partial: data.partial ? normalizeMessage(data.partial, 'in_progress') : undefined,
-    status: data.status,
-    plan: data.plan,
-    model: data.model,
-  };
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/messages?${params}`, { signal: controller.signal });
+    const data = await res.json();
+    return {
+      messages: (data.messages || []).map((m: Record<string, unknown>) => normalizeMessage(m)),
+      partial: data.partial ? normalizeMessage(data.partial, 'in_progress') : undefined,
+      status: data.status,
+      plan: data.plan,
+      model: data.model,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function cancelGeneration(sessionId: string): Promise<void> {

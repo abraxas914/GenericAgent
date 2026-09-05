@@ -147,7 +147,7 @@ describe('session-scoped chat runtime', () => {
     expect(state.sessionsById.A.messages[0]?.content).toBe('A');
   });
 
-  it('rejects an older generation for the same session', async () => {
+  it('coalesces explicit refreshes and rejects the superseded response', async () => {
     const first = deferred<PollResult>();
     const second = deferred<PollResult>();
     mocks.pollMessages
@@ -156,13 +156,28 @@ describe('session-scoped chat runtime', () => {
 
     useChatStore.getState().setActiveSession('A');
     useChatStore.getState().setActiveSession('A');
-
-    second.resolve(result('new'));
-    await flushPromises();
+    useChatStore.getState().setActiveSession('A');
+    expect(mocks.pollMessages).toHaveBeenCalledTimes(1);
     first.resolve(result('old'));
     await flushPromises();
-
+    expect(useChatStore.getState().sessionsById.A.messages).toEqual([]);
+    expect(mocks.pollMessages).toHaveBeenCalledTimes(2);
+    second.resolve(result('new'));
+    await flushPromises();
     expect(useChatStore.getState().sessionsById.A.messages[0]?.content).toBe('new');
+  });
+
+  it('accepts slow periodic responses without overlap or generation starvation', async () => {
+    const slow = deferred<PollResult>();
+    mocks.pollMessages.mockReturnValueOnce(slow.promise).mockResolvedValue(result('next', 'idle'));
+    mocks.wsHandlers.get('session-state')?.({ sessionId: 'A', status: 'running' });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(mocks.pollMessages).toHaveBeenCalledTimes(1);
+    slow.resolve(result('slow', 'running'));
+    await flushPromises();
+    expect(useChatStore.getState().sessionsById.A.messages[0]?.content).toBe('slow');
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(mocks.pollMessages).toHaveBeenCalledTimes(2);
   });
 
   it('keeps model projections scoped to their session', async () => {

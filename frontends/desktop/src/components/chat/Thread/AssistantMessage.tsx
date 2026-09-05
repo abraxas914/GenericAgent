@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useRef } from 'react';
 import type { Message } from '../../../services/chat';
-import { parseAgentContent } from '../agentProtocol';
+import { messageTurns } from '../../../lib/thread-grouping';
 import { MessageParts, type RenderSegment } from './parts';
 import { AssistantActionBar } from './AssistantActionBar';
 
@@ -11,23 +11,13 @@ interface Props {
 }
 
 export const AssistantMessage = memo(function AssistantMessage({ sessionId, message, isStreaming }: Props) {
-  const segments = useMemo(() => {
-    const turnSegs = message.turn_segs;
-    if (turnSegs && turnSegs.length > 0) {
-      return turnSegs.flatMap((turn, turnIndex) =>
-        parseAgentContent(turn).map((segment, segmentIndex) => ({
-          segment,
-          turnIndex,
-          segmentIndex,
-        })),
-      );
-    }
-    return parseAgentContent(message.content).map((segment, segmentIndex) => ({
+  const segments = useMemo(() => messageTurns(message).flatMap((turn) =>
+    turn.segments.map((segment, segmentIndex) => ({
       segment,
-      turnIndex: 0,
+      turnIndex: turn.index,
       segmentIndex,
-    }));
-  }, [message.content, message.turn_segs]);
+    })),
+  ), [message]);
 
   const segmentsRef = useRef<RenderSegment[]>(segments);
   segmentsRef.current = segments;

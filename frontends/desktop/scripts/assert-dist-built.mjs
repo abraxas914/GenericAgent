@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { measureRenderer, rendererBudgetError } from './renderer-size.mjs';
 import {
   REMOVED_LEGACY_REACT_PUBLIC_ASSETS,
   REQUIRED_REACT_PUBLIC_ASSET_SHA256,
@@ -130,8 +131,7 @@ export function checkDistBuilt(distDir) {
   }
 
   // 5. Keep every production JavaScript chunk below Vite's default 500 kB budget.
-  // The complete Semi stylesheet remains a shared CSS asset; this budget deliberately targets
-  // JavaScript parse/evaluation cost and prevents the renderer from collapsing back into one entry.
+  // Keep both individual chunks and the aggregate payload bounded.
   for (const jsFile of jsFiles) {
     const size = fs.statSync(path.join(assetsDir, jsFile)).size;
     if (size > MAX_JS_CHUNK_SIZE) {
@@ -146,6 +146,14 @@ export function checkDistBuilt(distDir) {
   const cssFiles = assetFiles.filter((f) => f.endsWith('.css'));
   if (cssFiles.length === 0) {
     warnings.push('no CSS files in dist/assets/ — UI may appear unstyled');
+  }
+
+  if (assetFiles.some((name) => /^(?:KaTeX_|codicon).*\.(?:woff|ttf)$/.test(name))) {
+    return { ok: false, error: 'Unused fallback fonts entered dist/assets/' };
+  }
+  if (process.env.VITE_GA_E2E !== '1') {
+    const error = rendererBudgetError(measureRenderer(distDir));
+    if (error) return { ok: false, error };
   }
 
   const result = { ok: true };
@@ -177,6 +185,10 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToP
   const jsFiles = assetFiles.filter((f) => f.endsWith('.js'));
   const cssFiles = assetFiles.filter((f) => f.endsWith('.css'));
   const totalSize = assetFiles.reduce((sum, f) => sum + fs.statSync(path.join(assetsDir, f)).size, 0);
+  const report = measureRenderer(distDir);
+  fs.mkdirSync(path.join(DESKTOP_ROOT, 'e2e-results'), { recursive: true });
+  fs.writeFileSync(path.join(DESKTOP_ROOT, 'e2e-results/renderer-size.json'), JSON.stringify(report, null, 2));
+  console.log(`  Renderer bytes: ${JSON.stringify(report)}`);
 
   console.log(`  ✓ dist/index.html present`);
   console.log(`  ✓ dist/loading.html present`);

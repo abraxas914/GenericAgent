@@ -1,3 +1,4 @@
+import { assertRendererAssets } from '../../harness/renderer-assets';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
 import { ChatPage } from '../../pages/ChatPage';
@@ -59,6 +60,7 @@ describe('GenericAgent critical desktop loops in browser mode', () => {
     await chat.startNewChat();
     await chat.send('[E2E:normal] deterministic ledger');
     await chat.waitForAssistantText('Harness reply');
+    await assertRendererAssets();
     await waitForTotals({ input: 92, output: 20, cacheRead: 12 });
 
     await usage.open();

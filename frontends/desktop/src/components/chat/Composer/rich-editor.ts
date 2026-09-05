@@ -60,35 +60,6 @@ export function placeCaretEnd(el: HTMLElement): void {
   }
 }
 
-export function placeCaretAt(el: HTMLElement, offset: number): void {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-  let pos = 0;
-  let node: Text | null = null;
-  while (walker.nextNode()) {
-    node = walker.currentNode as Text;
-    const len = node.textContent?.length || 0;
-    if (pos + len >= offset) {
-      const range = document.createRange();
-      range.setStart(node, offset - pos);
-      range.collapse(true);
-      const sel = window.getSelection();
-      if (sel) { sel.removeAllRanges(); sel.addRange(range); }
-      return;
-    }
-    pos += len;
-  }
-  placeCaretEnd(el);
-}
-
-export function getCaretOffset(el: HTMLElement): number {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return 0;
-  const range = sel.getRangeAt(0).cloneRange();
-  range.selectNodeContents(el);
-  range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset);
-  return range.toString().length;
-}
-
 // ═══ Insert at Caret ═══
 
 export function insertAtCaret(el: HTMLElement, node: Node): void {
@@ -152,15 +123,6 @@ export function replaceWithSkillChip(el: HTMLElement, id: string, prompt: string
   const space = document.createTextNode(' ');
   el.appendChild(space);
   placeCaretEnd(el);
-}
-
-// ═══ Value Quoting ═══
-
-export function quoteRefValue(value: string): string {
-  if (!value.includes('`')) return `\`${value}\``;
-  if (!value.includes('"')) return `"${value}"`;
-  if (!value.includes("'")) return `'${value}'`;
-  return `\`${value.replace(/`/g, '\\`')}\``;
 }
 
 // ═══ REF_RE ═══

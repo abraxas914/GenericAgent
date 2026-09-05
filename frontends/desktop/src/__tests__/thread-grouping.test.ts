@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { buildThreadGroups } from '../lib/thread-grouping';
+import { buildThreadGroups, messageTurns } from '../lib/thread-grouping';
 import type { Message } from '../services/chat';
 
 function msg(overrides: Partial<Message> & { id: string; role: Message['role'] }): Message {
@@ -114,5 +114,21 @@ describe('buildThreadGroups', () => {
     if (groups[0].kind === 'turn') {
       expect(groups[0].turns[0].weight).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('messageTurns cache', () => {
+  it('reuses parsed history and invalidates changed content', () => {
+    const message = msg({ id: 'a', role: 'assistant', content: 'first' });
+    const first = messageTurns(message);
+    expect(messageTurns(message)).toBe(first);
+    message.content = 'second';
+    expect(messageTurns(message)).not.toBe(first);
+    const second = messageTurns(message);
+    message.turn_segs = ['separate turn'];
+    expect(messageTurns(message)).not.toBe(second);
+  });
+  it('uses content when turn_segs is empty', () => {
+    expect(messageTurns(msg({ id: 'a', role: 'assistant', content: 'reply', turn_segs: [] }))).toHaveLength(1);
   });
 });
