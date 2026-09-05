@@ -1,3 +1,4 @@
+import { assertRendererAssets } from '../../harness/renderer-assets';
 import assert from 'node:assert/strict';
 import { mkdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -127,5 +128,17 @@ describe('GenericAgent native macOS titlebar geometry', () => {
     });
     await assertAligned('scale-factor notification');
     await captureWindow('macos-titlebar-scale-change');
+  });
+
+  it('renders deferred settings, theme tokens, SVG icons and WOFF2 fonts in WebKit', async () => {
+    await chat.waitForBridgeReady();
+    await browser.execute(() => window.dispatchEvent(new Event('ga:open-settings')));
+    await $('[data-testid="data-import-row"]').waitForExist({ timeout: 10_000 });
+    await browser.execute(() => window.dispatchEvent(new Event('ga:close-settings')));
+    await chat.startNewChat();
+    await chat.send('[E2E:normal] macOS renderer assets');
+    await chat.waitForAssistantText('Harness reply', 60_000);
+    await assertRendererAssets();
+    await captureWindow('macos-renderer-assets');
   });
 });
