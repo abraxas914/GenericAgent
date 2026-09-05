@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Toast } from '@douyinfe/semi-ui';
+import { notifyError } from './notifications';
 import { serialTask } from '../lib/serial-task';
 import {
   createSession,
@@ -551,7 +551,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           messages: mergeMessages(current.messages, page.messages, current.partial ?? undefined, partialMessageId(sessionId)),
           hasEarlier: page.hasEarlier ?? false,
         }));
-      } catch (error) { Toast.error({ content: String(error) }); }
+      } catch (error) { notifyError(error); }
       finally { updateSession(sessionId, (current) => ({ ...current, loadingEarlier: false })); }
     },
 
@@ -560,7 +560,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       if (!sessionId) return;
       submissions.get(sessionId)?.abort();
       try { await cancelGeneration(sessionId); }
-      catch (error) { Toast.error({ content: String(error) }); }
+      catch (error) { notifyError(error); }
     },
 
     cancelQueued(index: number) {
@@ -615,7 +615,7 @@ export const useChatStore = create<ChatState>((set, get) => {
             }
           }
           return { sessions, sessionsById, runningSessions,
-            ...activeProjection(state.activeSessionId ? sessionsById[state.activeSessionId] : undefined) };
+            ...(state.activeSessionId ? activeProjection(sessionsById[state.activeSessionId]) : {}) };
         });
         for (const [id, runtime] of Object.entries(get().sessionsById)) {
           if (runtime.status === 'running') startPolling(id);
@@ -631,7 +631,7 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     async deleteSession(id: string) {
       try { await apiDeleteSession(id); }
-      catch (error) { Toast.error({ content: String(error) }); return; }
+      catch (error) { notifyError(error); return; }
       deletedSessions.add(id);
       listGeneration++;
       submissions.get(id)?.abort();
@@ -667,7 +667,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           session.id === id ? { ...session, title, untitled: false } : session,
         ),
       }));
-      } catch (error) { Toast.error({ content: String(error) }); }
+      } catch (error) { notifyError(error); }
     },
 
     async pinSession(id: string, pinned: boolean) {
@@ -678,7 +678,7 @@ export const useChatStore = create<ChatState>((set, get) => {
           session.id === id ? { ...session, pinned } : session,
         ),
       }));
-      } catch (error) { Toast.error({ content: String(error) }); }
+      } catch (error) { notifyError(error); }
     },
 
     async selectSessionModel(llmNo: number) {
@@ -701,7 +701,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         }));
         if (result.model) syncActiveModel(sessionId, result.model);
       } catch (error) {
-        Toast.error({ content: String(error) });
+        notifyError(error);
         updateSession(sessionId, (runtime) => runtime.sessionModelNo === llmNo
           ? { ...runtime, sessionModelNo: previous }
           : runtime);

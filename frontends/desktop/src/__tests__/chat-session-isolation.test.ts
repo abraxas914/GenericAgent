@@ -341,4 +341,52 @@ describe('session-scoped chat runtime', () => {
     expect(rafCallbacks.size).toBe(1);
   });
 
+  it('loads all older pages and catches up forward without skipping message IDs', async () => {
+    const messages = Array.from({ length: 125 }, (_, index) => ({
+      id: String(index + 1), role: 'assistant' as const, content: String(index + 1),
+      status: 'completed' as const, createdAt: 1,
+    }));
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(70, 120), status: 'idle', hasEarlier: true });
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(20, 70), status: 'idle', hasEarlier: true });
+    await useChatStore.getState().loadEarlier('A');
+    expect(mocks.pollMessages).toHaveBeenLastCalledWith('A', undefined, 50, '71');
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(0, 20), status: 'idle', hasEarlier: false });
+    await useChatStore.getState().loadEarlier('A');
+    expect(mocks.pollMessages).toHaveBeenLastCalledWith('A', undefined, 50, '21');
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(120, 123), status: 'idle', hasMore: true });
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(123), status: 'idle', hasMore: false });
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    expect(mocks.pollMessages).toHaveBeenLastCalledWith('A', '123');
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual(messages.map((message) => message.id));
+    expect(useChatStore.getState().sessionsById.A.hasEarlier).toBe(false);
+  });
+
+  it('does not let a list refresh reset the model selected for a new session', async () => {
+    await useChatStore.getState().selectSessionModel(2);
+    await useChatStore.getState().loadSessions();
+    expect(useChatStore.getState().sessionModelNo).toBe(2);
+  });
+
+  it('keeps model changes behind an in-flight prompt submission', async () => {
+    mocks.pollMessages.mockResolvedValue(result('A', 'idle', 1));
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.setSessionModel.mockResolvedValue({ ok: true });
+    const submission = deferred<string>();
+    mocks.sendPrompt.mockReturnValueOnce(submission.promise);
+    const sending = useChatStore.getState().sendMessage('first');
+    await flushPromises();
+    const selecting = useChatStore.getState().selectSessionModel(2);
+    await flushPromises();
+    expect(mocks.setSessionModel.mock.calls).toEqual([['A', 1]]);
+    mocks.pollMessages.mockResolvedValue(result('A', 'running', 2));
+    submission.resolve('1');
+    await sending;
+    await selecting;
+    expect(mocks.setSessionModel.mock.calls).toEqual([['A', 1], ['A', 2]]);
+  });
+
 });

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Toast } from '@douyinfe/semi-ui';
+import { notifyError } from './notifications';
 import { serialTask } from '../lib/serial-task';
 import type { ModelProfile } from '../services/bridge';
 import * as bridge from '../services/bridge';
@@ -138,7 +138,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       await enqueueWrite(() => bridge.saveConfig(patch));
     } catch (error) {
-      Toast.error({ content: `${get().lang === 'zh' ? '设置未保存' : 'Settings not saved'}: ${String(error)}` });
+      notifyError(`${get().lang === 'zh' ? '设置未保存' : 'Settings not saved'}: ${String(error)}`);
     }
   },
 }));

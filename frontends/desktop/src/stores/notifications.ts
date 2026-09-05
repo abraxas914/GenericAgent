@@ -52,3 +52,9 @@ export const useNotificationStore = create<NotificationState>((set, get) => ({
     set({ items: [] });
   },
 }));
+
+export function notifyError(error: unknown) {
+  useNotificationStore.getState().notify({
+    kind: 'error', message: error instanceof Error ? error.message : String(error),
+  });
+}

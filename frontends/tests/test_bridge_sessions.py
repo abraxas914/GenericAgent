@@ -1031,7 +1031,11 @@ class TestMaintenanceGate:
         admission_result: list[object] = []
 
         monkeypatch.setattr(_mod, "manager", manager)
-        monkeypatch.setattr(_mod.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+        def spawn(_command, **kwargs):
+            assert kwargs["env"]["GA_ROOT"] == str(tmp_path)
+            return FakeProcess()
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", spawn)
         monkeypatch.setattr(service_manager, "_is_configured", lambda _sid: True)
 
         def wait_started(_proc):

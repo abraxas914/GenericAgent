@@ -4,7 +4,7 @@ import type { AppConfig } from '../services/bridge';
 
 const mocks = vi.hoisted(() => ({ getConfig: vi.fn(), getModelProfiles: vi.fn(), saveConfig: vi.fn(), error: vi.fn() }));
 vi.mock('../services/bridge', () => mocks);
-vi.mock('@douyinfe/semi-ui', () => ({ Toast: { error: mocks.error } }));
+vi.mock('../stores/notifications', () => ({ notifyError: mocks.error }));
 import { useSettingsStore } from '../stores/settings';
 
 function deferred<T>() {
@@ -58,7 +58,7 @@ describe('settings persistence ordering', () => {
   it('reports a rejected save without poisoning subsequent saves', async () => {
     mocks.saveConfig.mockRejectedValueOnce(new Error('conflict'));
     await useSettingsStore.getState().persist({ lang: 'en' });
-    expect(mocks.error).toHaveBeenCalledWith(expect.objectContaining({ content: expect.stringContaining('conflict') }));
+    expect(mocks.error).toHaveBeenCalledWith(expect.stringContaining('conflict'));
     await useSettingsStore.getState().persist({ fontSize: 16 });
     expect(mocks.saveConfig).toHaveBeenLastCalledWith({ fontSize: 16 });
   });
