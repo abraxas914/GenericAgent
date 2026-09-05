@@ -1195,20 +1195,26 @@ class AgentManager:
             print(tb, file=sys.stderr)
             emit_session_state(sess, "error")
 
-    def messages(self, sid: str, after: int = 0, limit: int = 200) -> dict:
+    def messages(self, sid: str, after: int = 0, limit: int = 200, before: int = 0, forward: bool = False) -> dict:
         with self.lock:
             sess = self.sessions.get(sid)
             if not sess:
                 raise web.HTTPNotFound(text=json.dumps({"error": f"session not found: {sid}"}, ensure_ascii=False), content_type="application/json")
-            msgs = [m for m in sess.messages if int(m.get("id", 0)) > after]
+            eligible = [m for m in sess.messages if int(m.get("id", 0)) > after
+                        and (not before or int(m.get("id", 0)) < before)]
+            msgs = eligible
             if limit > 0:
-                msgs = msgs[-limit:]
+                msgs = eligible[:limit] if forward else eligible[-limit:]
+            first_id = int(msgs[0]["id"]) if msgs else 0
+            has_earlier = bool(first_id and any(int(m["id"]) < first_id for m in sess.messages))
             import plan_state
             return {
                 "sessionId": sid,
                 "status": sess.status,
                 "hasUnfinishedWork": self._session_has_unfinished_work(sess),
                 "messages": msgs,
+                "hasEarlier": has_earlier,
+                "hasMore": bool(forward and len(eligible) > len(msgs)),
                 "partial": dict(sess.partial) if sess.partial else None,
                 "plan": plan_state.desktop_plan_payload_from_session(sess, self.ga_root),
                 "msgSeq": sess.msg_seq,
@@ -1677,7 +1683,22 @@ class ServiceManager:
                 buf.append(line)
         self._notify(sid)
 
+    @contextlib.contextmanager
+    def _operation(self, sid: str):
+        # Serialize only operations on this child, never its entire wait under
+        # the manager/service state locks used by request handlers.
+        with self.lock:
+            if not hasattr(self, "_operation_locks"):
+                self._operation_locks = {}
+            operation_lock = self._operation_locks.setdefault(sid, threading.Lock())
+        with operation_lock:
+            yield
+
     def start_service(self, sid: str) -> dict:
+        with self._operation(sid):
+            return self._start_service(sid)
+
+    def _start_service(self, sid: str) -> dict:
         # Lock order is always AgentManager -> ServiceManager. This makes a
         # service start atomic with maintenance-gate admission.
         with manager.mutation(), self.lock:
@@ -1718,7 +1739,10 @@ class ServiceManager:
             proc = subprocess.Popen(svc["cmd"], **kw)
             self.procs[sid] = proc
             threading.Thread(target=self._reader, args=(sid, proc), daemon=True).start()
-            self._wait_started(proc)
+        # The registered child now participates in maintenance admission.
+        # Waiting for it does not require either state lock.
+        self._wait_started(proc)
+        with self.lock:
             item = self._managed_state(sid)
             self._notify(sid)
             if item["running"] is not True:
@@ -1774,23 +1798,28 @@ class ServiceManager:
             bridge_print(f"[restart-broken] {sid}: {tag}")
 
     def stop_service(self, sid: str) -> dict:
+        with self._operation(sid):
+            return self._stop_service(sid)
+
+    def _stop_service(self, sid: str) -> dict:
         with self.lock:
             if sid not in self._catalog:
                 raise KeyError(sid)
             self._stopping.add(sid)
             proc = self.procs.get(sid)
-            stop_error = ""
-            if proc and proc.poll() is None:
+        stop_error = ""
+        if proc and proc.poll() is None:
+            try:
+                proc.terminate()
                 try:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5.0)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        proc.wait(timeout=2.0)
-                except Exception as exc:
-                    stop_error = f"failed to stop managed process: {type(exc).__name__}: {exc}"
-            if proc is None or proc.poll() is not None:
+                    proc.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2.0)
+            except Exception as exc:
+                stop_error = f"failed to stop managed process: {type(exc).__name__}: {exc}"
+        with self.lock:
+            if self.procs.get(sid) is proc and (proc is None or proc.poll() is not None):
                 self.procs.pop(sid, None)
             self._stopping.discard(sid)
             item = self._managed_state(sid, err=stop_error)
@@ -1863,7 +1892,7 @@ async def ws_handler(request):
     }, ensure_ascii=False))
     await ws.send_str(json.dumps({
         "type": "services.snapshot",
-        "services": services.list_panel_state(),
+        "services": await _run_worker_to_completion(services.list_panel_state),
     }, ensure_ascii=False, default=str))
     async for msg in ws:
         if msg.type == WSMsgType.TEXT:
@@ -2250,7 +2279,9 @@ async def messages_handler(request):
     sid = request.match_info["sid"]
     after = int(request.query.get("after") or request.query.get("afterId") or 0)
     limit = int(request.query.get("limit") or 200)
-    return json_ok(manager.messages(sid, after=after, limit=limit))
+    before = int(request.query.get("before") or 0)
+    forward = request.query.get("direction") == "forward"
+    return json_ok(manager.messages(sid, after=after, limit=limit, before=before, forward=forward))
 
 
 async def cancel_handler(request):
@@ -2613,17 +2644,21 @@ async def mykey_get_handler(request):
     return json_ok({"content": content, "path": str(target)})
 
 
+def _save_mykey_and_recover(content):
+    with manager.mutation():
+        profiles = manager._save_mykey_text(content)
+    # Each recovery start independently enters the maintenance gate.
+    services.restart_broken_extras()
+    return profiles
+
+
 async def mykey_save_handler(request):
     data = await read_json(request)
     content = data.get("content")
     if content is None:
         return json_ok({"ok": False, "error": "missing_content"}, status=400)
     try:
-        with manager.mutation():
-            profiles = manager._save_mykey_text(str(content))
-            # Importing/rewriting mykey may recover only extras that are already
-            # broken. Healthy tasks keep their current process/model snapshot.
-            services.restart_broken_extras()
+        profiles = await _run_worker_to_completion(_save_mykey_and_recover, str(content))
     except MaintenanceConflict:
         raise
     except Exception as e:
@@ -2773,7 +2808,7 @@ async def service_start_handler(request):
     sid = body.get("id") or request.query.get("id")
     if not sid:
         return json_ok({"ok": False, "error": "missing_id"}, status=400)
-    result = services.start_service(sid)
+    result = await _run_worker_to_completion(services.start_service, sid)
     if not result.get("ok"):
         return json_ok(result, status=400)
     return json_ok(result)
@@ -2784,7 +2819,7 @@ async def service_stop_handler(request):
     sid = body.get("id") or request.query.get("id")
     if not sid:
         return json_ok({"ok": False, "error": "missing_id"}, status=400)
-    return json_ok(services.stop_service(sid))
+    return json_ok(await _run_worker_to_completion(services.stop_service, sid))
 
 
 async def service_logs_handler(request):
@@ -2796,7 +2831,7 @@ async def service_logs_handler(request):
 
 
 async def service_panel_handler(request):
-    return json_ok({"services": services.list_panel_state()})
+    return json_ok({"services": await _run_worker_to_completion(services.list_panel_state)})
 
 
 def _is_local_peer(peer: str) -> bool:
@@ -2807,7 +2842,7 @@ def _is_local_peer(peer: str) -> bool:
 async def stop_extras_handler(request):
     if not _is_local_peer(request.remote or ""):
         return json_ok({"ok": False, "error": "forbidden"}, status=403)
-    services.stop_all_extras()
+    await _run_worker_to_completion(services.stop_all_extras)
     return json_ok({"ok": True})
 
 
@@ -2815,7 +2850,8 @@ async def start_extras_handler(request):
     if not _is_local_peer(request.remote or ""):
         return json_ok({"ok": False, "error": "forbidden"}, status=403)
     with manager.mutation():
-        services.autostart_extras()
+        pass  # Refuse an active maintenance operation before dispatching starts.
+    await _run_worker_to_completion(services.autostart_extras)
     return json_ok({"ok": True})
 
 
@@ -2842,7 +2878,7 @@ async def bridge_exit_handler(request):
         # delayed process exit. Otherwise a new import/export could acquire the
         # maintenance gate during the response-to-exit timer window.
         manager._shutdown_requested = True
-        _exit_bridge()
+    await _run_worker_to_completion(_exit_bridge)
     return json_ok({"ok": True})
 
 
@@ -2988,10 +3024,10 @@ def create_app():
 
     async def on_startup(app):
         hub.loop = asyncio.get_running_loop()
-        services.autostart_extras()
+        await _run_worker_to_completion(services.autostart_extras)
 
     async def on_shutdown(app):
-        services.stop_all_extras()
+        await _run_worker_to_completion(services.stop_all_extras)
 
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)

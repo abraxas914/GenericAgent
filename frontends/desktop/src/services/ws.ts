@@ -8,6 +8,7 @@ const RECONNECT_MAX_MS = 30000;
 let ws: WebSocket | null = null;
 let reconnectAttempt = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let enabled = false;
 const listeners = new Map<string, Set<WsHandler>>();
 
 let currentStatus: BridgeStatus = 'offline';
@@ -29,6 +30,7 @@ export function onBridgeStatusChange(fn: (s: BridgeStatus) => void): () => void 
 }
 
 function connect() {
+  if (!enabled) return;
   if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
 
   setStatus('connecting');
@@ -40,12 +42,15 @@ function connect() {
     return;
   }
 
-  ws.onopen = () => {
+  const socket = ws;
+  socket.onopen = () => {
+    if (ws !== socket || !enabled) return;
     reconnectAttempt = 0;
     setStatus('ready');
   };
 
-  ws.onmessage = (ev) => {
+  socket.onmessage = (ev) => {
+    if (ws !== socket || !enabled) return;
     try {
       const data = JSON.parse(ev.data);
       const type = data.type as string;
@@ -57,19 +62,20 @@ function connect() {
     } catch {}
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (ws !== socket || !enabled) return;
     ws = null;
     setStatus('connecting');
     scheduleReconnect();
   };
 
-  ws.onerror = () => {
-    ws?.close();
+  socket.onerror = () => {
+    if (ws === socket) socket.close();
   };
 }
 
 function scheduleReconnect() {
-  if (reconnectTimer) return;
+  if (!enabled || reconnectTimer) return;
   const delay = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempt, RECONNECT_MAX_MS);
   reconnectAttempt++;
   reconnectTimer = setTimeout(() => {
@@ -81,17 +87,26 @@ function scheduleReconnect() {
 export function subscribe(type: string, handler: WsHandler): () => void {
   if (!listeners.has(type)) listeners.set(type, new Set());
   listeners.get(type)!.add(handler);
-  connect();
   return () => {
     listeners.get(type)?.delete(handler);
+    if (listeners.get(type)?.size === 0) listeners.delete(type);
   };
 }
 
+export function start() {
+  enabled = true;
+  connect();
+}
+
 export function disconnect() {
+  enabled = false;
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
-  ws?.close();
+  const socket = ws;
   ws = null;
+  socket?.close();
+  reconnectAttempt = 0;
+  setStatus('offline');
 }

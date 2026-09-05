@@ -1,3 +1,6 @@
+mod runtime_operations;
+mod process_probe;
+
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fs::OpenOptions;
@@ -2297,7 +2300,7 @@ fn show_bootstrap_recovery(app_handle: &tauri::AppHandle) {
     }
 }
 
-static BOOTSTRAP_RUN_LOCK: Mutex<()> = Mutex::new(());
+static RUNTIME_OPERATIONS: runtime_operations::RuntimeOperations = runtime_operations::RuntimeOperations::new();
 
 fn bootstrap_inner(
     app_handle: &tauri::AppHandle,
@@ -2391,9 +2394,16 @@ fn execute_bootstrap(
     project_dir: String,
     dev_mode: bool,
 ) -> Result<(), String> {
-    let _run_guard = BOOTSTRAP_RUN_LOCK
-        .lock()
-        .map_err(|_| "bootstrap lock poisoned".to_string())?;
+    RUNTIME_OPERATIONS.run(|| execute_bootstrap_locked(app_handle, python_path, project_dir, dev_mode))
+}
+
+// Caller owns RUNTIME_OPERATIONS, including any preceding settings mutation.
+fn execute_bootstrap_locked(
+    app_handle: &tauri::AppHandle,
+    python_path: String,
+    project_dir: String,
+    dev_mode: bool,
+) -> Result<(), String> {
     let initial_mode = if needs_first_run_prepare(&project_dir) {
         BootstrapMode::Prepare
     } else {
@@ -2428,15 +2438,17 @@ fn should_force_stop_tracked_bridge(code: BootstrapFailureCode) -> bool {
     )
 }
 
-async fn execute_bootstrap_async(
+async fn execute_bootstrap_request(
     app_handle: tauri::AppHandle,
-    python_path: String,
-    project_dir: String,
-    dev_mode: bool,
+    requested: Option<(String, String)>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        execute_bootstrap(&app_handle, python_path, project_dir, dev_mode)
-    })
+    tauri::async_runtime::spawn_blocking(move || RUNTIME_OPERATIONS.run(|| {
+        let (python_path, project_dir) = match requested {
+            Some((python, project)) => resolve_requested_bootstrap_config(python, project)?,
+            None => get_or_discover_config(),
+        };
+        execute_bootstrap_locked(&app_handle, python_path, project_dir, desktop_dev_mode())
+    }))
     .await
     .map_err(|error| format!("bootstrap task failed: {error}"))?
 }
@@ -2468,14 +2480,7 @@ async fn retry_bootstrap(
     python_path: String,
     project_dir: String,
 ) -> Result<(), String> {
-    let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir)?;
-    execute_bootstrap_async(
-        app_handle,
-        python_path,
-        project_dir,
-        desktop_dev_mode(),
-    )
-    .await
+    execute_bootstrap_request(app_handle, Some((python_path, project_dir))).await
 }
 
 #[tauri::command]
@@ -2484,26 +2489,12 @@ async fn start_bridge_with_config(
     python_path: String,
     project_dir: String,
 ) -> Result<(), String> {
-    let (python_path, project_dir) = resolve_requested_bootstrap_config(python_path, project_dir)?;
-    execute_bootstrap_async(
-        app_handle,
-        python_path,
-        project_dir,
-        desktop_dev_mode(),
-    )
-    .await
+    execute_bootstrap_request(app_handle, Some((python_path, project_dir))).await
 }
 
 #[tauri::command]
 async fn start_bridge(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let (python_path, project_dir) = get_or_discover_config();
-    execute_bootstrap_async(
-        app_handle,
-        python_path,
-        project_dir,
-        desktop_dev_mode(),
-    )
-    .await
+    execute_bootstrap_request(app_handle, None).await
 }
 
 #[tauri::command]
@@ -2654,9 +2645,8 @@ fn probe_ga_source(dir: &str) -> Result<(), String> {
     command.env("GA_ROOT", dir);
     #[cfg(windows)]
     command.creation_flags(0x08000000);
-    let output = command
-        .output()
-        .map_err(|error| format!("compatibility probe failed to run: {error}"))?;
+    let output = process_probe::run(&mut command, Duration::from_secs(20), 1024 * 1024)
+        .map_err(|error| format!("compatibility probe failed: {error}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     if let Some(line) = stdout
         .lines()
@@ -2664,7 +2654,7 @@ fn probe_ga_source(dir: &str) -> Result<(), String> {
         .find(|line| line.trim_start().starts_with('{'))
     {
         if let Ok(verdict) = serde_json::from_str::<serde_json::Value>(line.trim()) {
-            if verdict.get("ok").and_then(|value| value.as_bool()) == Some(true) {
+            if output.status.success() && verdict.get("ok").and_then(|value| value.as_bool()) == Some(true) {
                 return Ok(());
             }
             let missing = verdict
@@ -2710,41 +2700,25 @@ fn validated_ga_source(dir: &str) -> Result<String, String> {
     Ok(source_text)
 }
 
-async fn restart_for_current_source(app_handle: tauri::AppHandle) -> Result<String, String> {
+fn restart_for_current_source(app_handle: &tauri::AppHandle) -> Result<String, String> {
     let (python_path, project_dir) = get_or_discover_config();
     let expected_ga_root = effective_ga_root(&project_dir);
-    execute_bootstrap_async(
-        app_handle,
-        python_path,
-        project_dir,
-        desktop_dev_mode(),
-    )
-    .await?;
+    execute_bootstrap_locked(app_handle, python_path, project_dir, desktop_dev_mode())?;
     Ok(expected_ga_root)
 }
 
 async fn apply_ga_source_with_rollback(
     app_handle: tauri::AppHandle,
     next_override: Option<String>,
-    previous_override: Option<String>,
 ) -> Result<String, String> {
-    restore_setting("ga_source_override", next_override)?;
-    match restart_for_current_source(app_handle.clone()).await {
-        Ok(root) => Ok(root),
-        Err(error) => {
-            restore_setting("ga_source_override", previous_override).map_err(|rollback_error| {
-                format!(
-                    "{error}; restoring the previous workspace setting failed: {rollback_error}"
-                )
-            })?;
-            match restart_for_current_source(app_handle).await {
-                Ok(_) => Err(error),
-                Err(rollback_error) => Err(format!(
-                    "{error}; restoring the previous workspace also failed: {rollback_error}"
-                )),
-            }
-        }
-    }
+    tauri::async_runtime::spawn_blocking(move || RUNTIME_OPERATIONS.switch_source(
+        next_override,
+        saved_ga_source_override,
+        |value| restore_setting("ga_source_override", value),
+        || restart_for_current_source(&app_handle),
+    ))
+    .await
+    .map_err(|error| format!("core switch task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -2757,14 +2731,12 @@ async fn validate_ga_source(dir: String) -> Result<String, String> {
 #[tauri::command]
 async fn set_ga_source(app_handle: tauri::AppHandle, dir: String) -> Result<String, String> {
     let source_text = validate_ga_source(dir).await?;
-    let previous_override = saved_ga_source_override();
-    apply_ga_source_with_rollback(app_handle, Some(source_text), previous_override).await
+    apply_ga_source_with_rollback(app_handle, Some(source_text)).await
 }
 
 #[tauri::command]
 async fn clear_ga_source(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let previous_override = saved_ga_source_override();
-    apply_ga_source_with_rollback(app_handle, None, previous_override).await
+    apply_ga_source_with_rollback(app_handle, None).await
 }
 
 #[derive(Clone, Debug, Serialize)]

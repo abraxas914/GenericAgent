@@ -6,12 +6,18 @@ import { useSettingsStore } from './stores/settings';
 import { AppLayout } from './components/layout/AppLayout';
 import { NotificationStack } from './components/layout/NotificationStack';
 import { SettingsModal } from './components/settings/SettingsModal';
+import { start, disconnect } from './services/ws';
 
 const SEMI_LOCALES = { zh: zh_CN, en: en_US };
 
 export function App() {
   const lang = useSettingsStore((s) => s.lang);
   const loadFromBridge = useSettingsStore((s) => s.loadFromBridge);
+
+  useEffect(() => {
+    start();
+    return disconnect;
+  }, []);
 
   useEffect(() => {
     loadFromBridge();

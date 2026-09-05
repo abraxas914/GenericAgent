@@ -1031,7 +1031,11 @@ class TestMaintenanceGate:
         admission_result: list[object] = []
 
         monkeypatch.setattr(_mod, "manager", manager)
-        monkeypatch.setattr(_mod.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+        def spawn(_command, **kwargs):
+            assert kwargs["env"]["GA_ROOT"] == str(tmp_path)
+            return FakeProcess()
+
+        monkeypatch.setattr(_mod.subprocess, "Popen", spawn)
         monkeypatch.setattr(service_manager, "_is_configured", lambda _sid: True)
 
         def wait_started(_proc):
@@ -1056,8 +1060,11 @@ class TestMaintenanceGate:
         assert entered_start.wait(timeout=2)
         admission_thread = threading.Thread(target=admit)
         admission_thread.start()
-        time.sleep(0.03)
-        assert admission_result == []
+        admission_thread.join(timeout=2)
+        assert not admission_thread.is_alive(), "maintenance admission must not wait for child startup"
+        assert isinstance(admission_result[0], MaintenanceConflict)
+        assert manager.lock.acquire(timeout=0.2)
+        manager.lock.release()
         release_start.set()
         start_thread.join(timeout=2)
         admission_thread.join(timeout=2)
@@ -1066,6 +1073,83 @@ class TestMaintenanceGate:
         assert start_result[0]["service"]["managed"] is True
         assert isinstance(admission_result[0], MaintenanceConflict)
         assert admission_result[0].running_extras == ["worker"]
+
+    @pytest.mark.parametrize("action", ["start", "stop", "exit"])
+    def test_service_handler_keeps_event_loop_available(self, action, manager, monkeypatch):
+        import asyncio
+        from types import SimpleNamespace
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def operation(sid=None):
+            assert sid == (None if action == "exit" else "worker")
+            started.set()
+            assert release.wait(timeout=3)
+            return {"ok": True}
+
+        async def body(_request):
+            return {"id": "worker"}
+
+        monkeypatch.setattr(_mod, "read_json", body)
+        monkeypatch.setattr(_mod, "manager", manager)
+        if action == "exit":
+            monkeypatch.setattr(_mod, "_exit_bridge", operation)
+        else:
+            monkeypatch.setattr(_mod.services, f"{action}_service", operation)
+
+        async def scenario():
+            request = SimpleNamespace(query={}, remote="127.0.0.1")
+            handler = _mod.bridge_exit_handler if action == "exit" else getattr(_mod, f"service_{action}_handler")
+            task = asyncio.create_task(handler(request))
+            try:
+                assert await asyncio.to_thread(started.wait, 1)
+                # This coroutine must run while the process operation is waiting.
+                await asyncio.sleep(0)
+                assert not task.done()
+            finally:
+                release.set()
+            assert (await task).status == 200
+
+        asyncio.run(scenario())
+
+    def test_slow_service_exit_releases_state_lock(self, monkeypatch):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class SlowProcess:
+            done = False
+
+            def poll(self):
+                return 0 if self.done else None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout):
+                entered.set()
+                assert release.wait(timeout=3)
+                self.done = True
+
+        service_manager = ServiceManager.__new__(ServiceManager)
+        service_manager.lock = threading.RLock()
+        service_manager._catalog = {"worker": {}}
+        service_manager.procs = {"worker": SlowProcess()}
+        service_manager._stopping = set()
+        monkeypatch.setattr(service_manager, "_managed_state", lambda *_a, **_kw: {"running": False, "owner": "none"})
+        monkeypatch.setattr(service_manager, "_notify", lambda *_a, **_kw: None)
+        result = []
+        worker = threading.Thread(target=lambda: result.append(service_manager.stop_service("worker")))
+        worker.start()
+        try:
+            assert entered.wait(timeout=2)
+            assert service_manager.lock.acquire(timeout=0.2)
+            service_manager.lock.release()
+        finally:
+            release.set()
+            worker.join(timeout=2)
+        assert result[0]["ok"] is True
+        assert service_manager.procs == {}
 
     def test_managed_service_state_keeps_ui_maintenance_metadata(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1396,3 +1480,23 @@ class TestBridgeSettingsWrites:
         assert json.loads(response.text)["error"] == "atomic replace failed"
         assert settings.read_text(encoding="utf-8") == original
         assert manager.config == {}
+
+
+def test_message_pages_cover_history_and_forward_catchup(manager):
+    session = _make_session(messages=[
+        {"id": i, "role": "user", "content": str(i)} for i in range(1, 121)
+    ])
+    manager.sessions[session.id] = session
+    with patch.object(_plan_state_stub, "desktop_plan_payload_from_session", return_value={}, create=True):
+        newest = manager.messages(session.id, limit=50)
+        older = manager.messages(session.id, before=71, limit=50)
+        oldest = manager.messages(session.id, before=21, limit=50)
+        assert [m["id"] for m in oldest["messages"] + older["messages"] + newest["messages"]] == list(range(1, 121))
+        assert newest["hasEarlier"] and older["hasEarlier"]
+        assert not oldest["hasEarlier"]
+        first = manager.messages(session.id, after=1, limit=50, forward=True)
+        second = manager.messages(session.id, after=51, limit=50, forward=True)
+        last = manager.messages(session.id, after=101, limit=50, forward=True)
+        assert first["messages"][0]["id"] == 2
+        assert first["hasMore"] and second["hasMore"] and not last["hasMore"]
+        assert [m["id"] for m in first["messages"] + second["messages"] + last["messages"]] == list(range(2, 121))

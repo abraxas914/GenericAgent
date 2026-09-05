@@ -23,7 +23,7 @@ it('aborts a stuck poll so a later request can recover', async () => {
 it('clears the deadline after a successful response', async () => {
   vi.useFakeTimers();
   vi.stubEnv('VITE_MOCK', 'false');
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: async () => ({ messages: [], status: 'idle' }) }));
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ messages: [], status: 'idle' }) }));
   expect((await pollMessages('session')).status).toBe('idle');
   expect(vi.getTimerCount()).toBe(0);
 });

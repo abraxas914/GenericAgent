@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { notifyError } from './notifications';
+import { serialTask } from '../lib/serial-task';
 import type { ModelProfile } from '../services/bridge';
 import * as bridge from '../services/bridge';
 
@@ -50,7 +52,7 @@ interface SettingsState {
   setDefaultModel: (no: number) => void;
   setLiveModel: (model: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null } | null) => void;
   loadFromBridge: () => Promise<void>;
-  persist: () => Promise<void>;
+  persist: (patch: Partial<bridge.AppConfig>) => Promise<void>;
 }
 
 function readInitialState() {
@@ -62,6 +64,10 @@ function readInitialState() {
     defaultModelNo: parseInt(localStorage.getItem(STORE_KEYS.llmNo) || '0', 10),
   };
 }
+
+let revision = 0;
+let readSequence = 0;
+const enqueueWrite = serialTask();
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   visible: false,
@@ -75,20 +81,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setAppearance: (app) => {
     set({ appearance: app });
     applyToDOM(app, get().chatFontSize);
-    get().persist();
+    void get().persist({ appearance: app });
   },
 
   setChatFontSize: (size) => {
     const clamped = Math.max(10, Math.min(20, size));
     set({ chatFontSize: clamped });
     applyToDOM(get().appearance, clamped);
-    get().persist();
+    void get().persist({ fontSize: clamped });
   },
 
   setLang: (lang) => {
     set({ lang });
     document.documentElement.lang = lang === 'en' ? 'en' : 'zh-CN';
-    get().persist();
+    void get().persist({ lang });
   },
 
   setModelProfiles: (profiles) => set({ modelProfiles: profiles }),
@@ -98,17 +104,20 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     const profile = profiles[no];
     if (!profile) return;
     set({ defaultModelNo: no });
-    get().persist();
+    void get().persist({ llmNo: no });
   },
 
   setLiveModel: (model) => set({ liveModel: model }),
 
   loadFromBridge: async () => {
+    const version = revision;
+    const request = ++readSequence;
     try {
-      const [config, profiles] = await Promise.all([
+      const [config, profiles] = await enqueueWrite(() => Promise.all([
         bridge.getConfig(),
         bridge.getModelProfiles(),
-      ]);
+      ]));
+      if (version !== revision || request !== readSequence) return;
       set({
         appearance: config.appearance === 'dark' ? 'dark' : 'light',
         chatFontSize: config.fontSize || 14,
@@ -118,21 +127,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       });
       const s = get();
       applyToDOM(s.appearance, s.chatFontSize);
+      document.documentElement.lang = s.lang === 'en' ? 'en' : 'zh-CN';
+      syncBootCache(s);
     } catch (_) { /* bridge not ready yet */ }
   },
 
-  persist: async () => {
-    const s = get();
-    syncBootCache(s);
+  persist: async (patch) => {
+    revision++;
+    syncBootCache(get());
     try {
-      await bridge.saveConfig({
-        lang: s.lang,
-        theme: '1',
-        appearance: s.appearance,
-        plain: false,
-        fontSize: s.chatFontSize,
-        llmNo: s.defaultModelNo,
-      });
-    } catch (_) { /* bridge offline */ }
+      await enqueueWrite(() => bridge.saveConfig(patch));
+    } catch (error) {
+      notifyError(`${get().lang === 'zh' ? '设置未保存' : 'Settings not saved'}: ${String(error)}`);
+    }
   },
 }));

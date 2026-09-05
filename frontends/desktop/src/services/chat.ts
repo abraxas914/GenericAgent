@@ -1,4 +1,6 @@
+import { normalizeMessage } from '../lib/normalize-message';
 import { BRIDGE_BASE } from './constants';
+import { checkedFetch } from './http';
 
 export type MessageStatus = 'completed' | 'in_progress' | 'failed';
 
@@ -29,6 +31,8 @@ export interface PollResult {
   messages: Message[];
   partial?: Message;
   status: 'running' | 'idle';
+  hasEarlier?: boolean;
+  hasMore?: boolean;
   plan?: unknown;
   model?: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null };
 }
@@ -48,33 +52,6 @@ function mockDelay(ms: number): Promise<void> {
 
 // --- API functions ---
 
-function normalizeMessage(msg: Record<string, unknown>, status: MessageStatus = 'completed'): Message {
-  // Bridge timestamps (`ts`, `createdAt`) are Unix seconds (Python time.time()).
-  // The UI works in milliseconds (Date.now(), LiveDuration), so scale up. Local
-  // optimistic messages are already ms and never pass through here.
-  const rawTs = (msg.createdAt as number) ?? (msg.ts as number);
-  const m: Message = {
-    id: String(msg.id),
-    role: msg.role as Message['role'],
-    content: (msg.content as string) || '',
-    status: (msg.status as MessageStatus) ?? status,
-    createdAt: typeof rawTs === 'number' ? Math.round(rawTs * 1000) : undefined,
-  };
-  if (Array.isArray(msg.turn_segs)) {
-    m.turn_segs = msg.turn_segs as string[];
-  }
-  if (Array.isArray(msg.images) && msg.images.length > 0) {
-    m.images = msg.images as { name: string; path: string }[];
-  }
-  if (Array.isArray(msg.files) && msg.files.length > 0) {
-    m.files = msg.files as { name: string; path: string; size?: number }[];
-  }
-  // executionMs is already in milliseconds (bridge computes it at turn end).
-  if (typeof msg.executionMs === 'number') {
-    m.executionMs = msg.executionMs;
-  }
-  return m;
-}
 
 
 export async function createSession(): Promise<string> {
@@ -83,20 +60,22 @@ export async function createSession(): Promise<string> {
     mockMessages.set(id, []);
     return id;
   }
-  const res = await fetch(`${BRIDGE_BASE}/session/new`, {
+  const res = await checkedFetch(`${BRIDGE_BASE}/session/new`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ cwd: '', mcp_servers: [] }),
   });
   const data = await res.json();
+  if (typeof data.sessionId !== 'string' || !data.sessionId) throw new Error('Invalid session response');
   return data.sessionId;
 }
 
-async function uploadImage(sessionId: string, name: string, dataUrl: string): Promise<string> {
-  const res = await fetch(`${BRIDGE_BASE}/upload`, {
+async function uploadImage(sessionId: string, name: string, dataUrl: string, signal?: AbortSignal): Promise<string> {
+  const res = await checkedFetch(`${BRIDGE_BASE}/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, dataUrl, sid: sessionId }),
+    signal,
   });
   const data = await res.json();
   if (!data.ok) throw new Error(data.error || 'upload failed');
@@ -104,7 +83,7 @@ async function uploadImage(sessionId: string, name: string, dataUrl: string): Pr
 }
 
 export async function uploadFile(name: string, dataUrl: string): Promise<string> {
-  const res = await fetch(`${BRIDGE_BASE}/upload`, {
+  const res = await checkedFetch(`${BRIDGE_BASE}/upload`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, dataUrl, sid: '_files' }),
@@ -130,7 +109,7 @@ export interface DropStat {
  */
 export async function statDroppedPath(path: string, preview: boolean): Promise<DropStat | null> {
   try {
-    const res = await fetch(`${BRIDGE_BASE}/drop/stat`, {
+    const res = await checkedFetch(`${BRIDGE_BASE}/drop/stat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path, preview }),
@@ -148,6 +127,7 @@ export async function sendPrompt(
   prompt: string,
   files?: { name: string; path: string; size?: number }[],
   images?: { name: string; path: string; base64?: string }[],
+  signal?: AbortSignal,
 ): Promise<string> {
   if (useMock()) {
     const now = Date.now();
@@ -187,26 +167,29 @@ export async function sendPrompt(
   for (const img of images || []) {
     const dataUrl = img.base64 || (img.path?.startsWith('data:') ? img.path : undefined);
     if (dataUrl) {
-      const path = await uploadImage(sessionId, img.name, dataUrl);
+      const path = await uploadImage(sessionId, img.name, dataUrl, signal);
       imageMetas.push({ name: img.name, path });
     } else if (img.path && !img.path.startsWith('data:') && img.path !== img.name) {
       imageMetas.push({ name: img.name, path: img.path });
     }
   }
 
-  const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/prompt`, {
+  const res = await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}/prompt`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId, prompt, display: prompt, files: filesMeta, imageMetas }),
+    signal,
   });
   const data = await res.json();
-  return data.userMessageId;
+  if (data.userMessageId == null) throw new Error('Prompt was not accepted');
+  return String(data.userMessageId);
 }
 
 export async function pollMessages(
   sessionId: string,
   afterId?: string,
   limit: number = 50,
+  beforeId?: string,
 ): Promise<PollResult> {
   if (useMock()) {
     await mockDelay(100);
@@ -217,16 +200,20 @@ export async function pollMessages(
   }
 
   const params = new URLSearchParams({ limit: String(limit) });
-  if (afterId) params.set('after', afterId);
+  if (afterId) { params.set('after', afterId); params.set('direction', 'forward'); }
+  if (beforeId) params.set('before', beforeId);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/messages?${params}`, { signal: controller.signal });
+    const res = await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}/messages?${params}`, { signal: controller.signal });
     const data = await res.json();
+    if (!['running', 'idle', 'error', 'cancelled'].includes(data.status)) throw new Error('Invalid session status');
     return {
       messages: (data.messages || []).map((m: Record<string, unknown>) => normalizeMessage(m)),
       partial: data.partial ? normalizeMessage(data.partial, 'in_progress') : undefined,
-      status: data.status,
+      status: data.status === 'running' ? 'running' : 'idle',
+      hasEarlier: data.hasEarlier,
+      hasMore: data.hasMore,
       plan: data.plan,
       model: data.model,
     };
@@ -237,7 +224,7 @@ export async function pollMessages(
 
 export async function cancelGeneration(sessionId: string): Promise<void> {
   if (useMock()) return;
-  await fetch(`${BRIDGE_BASE}/session/${sessionId}/cancel`, {
+  await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}/cancel`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId }),
@@ -248,12 +235,14 @@ export async function setSessionModel(
   sessionId: string,
   llmNo: number,
 ): Promise<{ ok: boolean; llmNo: number; model: { isMixin: boolean; current: string; llmNo?: number; runningLlmNo?: number | null; runningModel?: string | null } }> {
-  const res = await fetch(`${BRIDGE_BASE}/session/${sessionId}/model`, {
+  const res = await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}/model`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ llmNo }),
   });
-  return res.json();
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || 'Model change failed');
+  return data;
 }
 
 export async function listSessions(): Promise<SessionInfo[]> {
@@ -264,7 +253,7 @@ export async function listSessions(): Promise<SessionInfo[]> {
       untitled: true,
     }));
   }
-  const res = await fetch(`${BRIDGE_BASE}/sessions`);
+  const res = await checkedFetch(`${BRIDGE_BASE}/sessions`);
   const data = await res.json();
   const all: SessionInfo[] = data.sessions || [];
   // Filter out conductor worker sessions (tui_ prefix = internal dispatch)
@@ -276,12 +265,12 @@ export async function deleteSession(sessionId: string): Promise<void> {
     mockMessages.delete(sessionId);
     return;
   }
-  await fetch(`${BRIDGE_BASE}/session/${sessionId}`, { method: 'DELETE' });
+  await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}`, { method: 'DELETE' });
 }
 
 export async function renameSession(sessionId: string, title: string): Promise<void> {
   if (useMock()) return;
-  await fetch(`${BRIDGE_BASE}/session/${sessionId}`, {
+  await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title }),
@@ -290,7 +279,7 @@ export async function renameSession(sessionId: string, title: string): Promise<v
 
 export async function pinSession(sessionId: string, pinned: boolean): Promise<void> {
   if (useMock()) return;
-  await fetch(`${BRIDGE_BASE}/session/${sessionId}`, {
+  await checkedFetch(`${BRIDGE_BASE}/session/${sessionId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pinned }),

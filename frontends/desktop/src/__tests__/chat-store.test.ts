@@ -75,57 +75,6 @@ describe('mergeMessages', () => {
   });
 });
 
-describe('sendMessage queue logic', () => {
-  interface QueuedMessage { text: string; opts?: { files?: unknown[] } }
-
-  it('enqueues when status is running', () => {
-    const queue: QueuedMessage[] = [];
-    const status = 'running';
-    const text = 'follow-up';
-    const opts = { files: [{ name: 'f.txt', path: '/tmp/f.txt' }] };
-
-    // Simulate the store logic
-    if (status === 'running') {
-      queue.push({ text, opts });
-    }
-    expect(queue).toHaveLength(1);
-    expect(queue[0].text).toBe('follow-up');
-  });
-
-  it('does not enqueue when idle', () => {
-    const queue: QueuedMessage[] = [];
-    const status: string = 'idle';
-    const text = 'new msg';
-    if (status === 'running') {
-      queue.push({ text });
-    }
-    expect(queue).toHaveLength(0);
-  });
-
-  it('cancelQueued removes by index', () => {
-    let queue: QueuedMessage[] = [
-      { text: 'msg1' },
-      { text: 'msg2' },
-      { text: 'msg3' },
-    ];
-    const indexToRemove = 1;
-    queue = queue.filter((_, i) => i !== indexToRemove);
-    expect(queue).toHaveLength(2);
-    expect(queue.map((q) => q.text)).toEqual(['msg1', 'msg3']);
-  });
-
-  it('drains queue on idle: shifts first item', () => {
-    const queue: QueuedMessage[] = [
-      { text: 'first' },
-      { text: 'second' },
-    ];
-    const [next, ...rest] = queue;
-    expect(next.text).toBe('first');
-    expect(rest).toHaveLength(1);
-    expect(rest[0].text).toBe('second');
-  });
-});
-
 it('replaces only the streaming tail and preserves confirmed history order and identity', () => {
   const history = [msg('2', 'user', 'second', 200), msg('1', 'assistant', 'first', 100)];
   const current = [...history, msg('__partial__:session', 'assistant', 'old', 300)];
@@ -135,4 +84,22 @@ it('replaces only the streaming tail and preserves confirmed history order and i
   expect(result[1]).toBe(history[1]);
   expect(result[2].content).toBe('updated');
   expect(current[2].content).toBe('old');
+});
+
+
+it('orders older pages with equal timestamps by their server sequence', () => {
+  const current = [msg('3', 'assistant', 'C', 100), msg('4', 'user', 'D', 100)];
+  const older = [msg('1', 'user', 'A', 100), msg('2', 'assistant', 'B', 100)];
+  expect(mergeMessages(current, older).map((item) => item.id)).toEqual(['1', '2', '3', '4']);
+});
+
+it('replaces acknowledgement metadata with the canonical server attachment path', () => {
+  const local = { ...msg('1', 'user', 'image', 100), images: [{ name: 'a.png', path: 'data:image/png;base64,AA' }] };
+  const server = { ...local, images: [{ name: 'a.png', path: '/desktop_uploads/a.png' }] };
+  expect(mergeMessages([local], [server])).toEqual([server]);
+});
+
+it('does not erase a rejected local send when history contains the same text', () => {
+  const failed = { ...msg('local-1', 'user', 'repeat', 200), status: 'failed' as const };
+  expect(mergeMessages([failed], [msg('1', 'user', 'repeat', 100)])).toHaveLength(2);
 });

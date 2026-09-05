@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PollResult } from '../services/chat';
+import type { PollResult, SessionInfo } from '../services/chat';
 
 const mocks = vi.hoisted(() => ({
   createSession: vi.fn(),
   sendPrompt: vi.fn(),
   pollMessages: vi.fn(),
   cancelGeneration: vi.fn(),
-  listSessions: vi.fn(() => Promise.resolve([])),
+  listSessions: vi.fn(() => Promise.resolve([] as SessionInfo[])),
   deleteSession: vi.fn(),
   renameSession: vi.fn(),
   pinSession: vi.fn(),
@@ -80,8 +80,7 @@ function result(
 }
 
 async function flushPromises() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
 }
 
 describe('session-scoped chat runtime', () => {
@@ -233,8 +232,8 @@ describe('session-scoped chat runtime', () => {
     expect([...useChatStore.getState().runningSessions].sort()).toEqual(['A', 'B']);
 
     await vi.advanceTimersByTimeAsync(1000);
-    expect(mocks.pollMessages).toHaveBeenCalledWith('A');
-    expect(mocks.pollMessages).toHaveBeenCalledWith('B');
+    expect(mocks.pollMessages).toHaveBeenCalledWith('A', undefined);
+    expect(mocks.pollMessages).toHaveBeenCalledWith('B', undefined);
 
     pollB.resolve(result('B', 'idle'));
     await flushPromises();
@@ -269,4 +268,129 @@ describe('session-scoped chat runtime', () => {
     expect(useChatStore.getState().sessionsById.A).toBeUndefined();
     expect(useChatStore.getState().activeSessionId).toBeNull();
   });
+  it('does not complete or drain a send while its upload/submission is pending', async () => {
+    mocks.pollMessages.mockResolvedValue(result('A'));
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.pollMessages.mockClear();
+    const submission = deferred<string>();
+    mocks.sendPrompt.mockReturnValueOnce(submission.promise);
+    const sending = useChatStore.getState().sendMessage('first');
+    await useChatStore.getState().sendMessage('second');
+    mocks.wsHandlers.get('session-state')?.({ sessionId: 'A', status: 'idle' });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(mocks.sendPrompt).toHaveBeenCalledTimes(1);
+    expect(mocks.pollMessages).not.toHaveBeenCalled();
+    expect(useChatStore.getState().sessionsById.A.submitting).toBe(true);
+    expect(useChatStore.getState().sessionsById.A.pendingQueue).toHaveLength(1);
+    submission.resolve('1');
+    await sending;
+    await flushPromises();
+    expect(mocks.sendPrompt).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares creation and waits for the selected model before the first prompt', async () => {
+    mocks.createSession.mockResolvedValue('new');
+    mocks.pollMessages.mockResolvedValue(result('new', 'running'));
+    const binding = deferred<unknown>();
+    mocks.setSessionModel.mockReturnValue(binding.promise);
+    await useChatStore.getState().selectSessionModel(2);
+    const first = useChatStore.getState().sendMessage('first');
+    const second = useChatStore.getState().sendMessage('second');
+    await flushPromises();
+    expect(mocks.createSession).toHaveBeenCalledTimes(1);
+    expect(mocks.setSessionModel).toHaveBeenCalledWith('new', 2);
+    expect(mocks.sendPrompt).not.toHaveBeenCalled();
+    binding.resolve({ ok: true });
+    await Promise.all([first, second]);
+    expect(mocks.sendPrompt).toHaveBeenCalledTimes(1);
+    expect(useChatStore.getState().sessionsById.new.pendingQueue).toHaveLength(1);
+  });
+
+  it('retains rejected sends and attachments for explicit retry', async () => {
+    mocks.pollMessages.mockResolvedValue(result('A'));
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.sendPrompt.mockRejectedValueOnce(new Error('rejected'));
+    const opts = { files: [{ name: 'notes.txt', path: '/notes.txt' }] };
+    await useChatStore.getState().sendMessage('keep me', opts);
+    const failed = useChatStore.getState().failedSends[0];
+    expect(failed).toMatchObject({ sessionId: 'A', text: 'keep me', opts, error: 'rejected' });
+    expect(useChatStore.getState().sessionsById.A.messages.slice(-1)[0]?.status).toBe('failed');
+  });
+
+  it('removes stale background running IDs when a new snapshot reports idle', async () => {
+    mocks.pollMessages.mockResolvedValue(result('background', 'running'));
+    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', title: 'Background', untitled: false, status: 'running' }]);
+    await useChatStore.getState().loadSessions();
+    expect(useChatStore.getState().runningSessions.has('background')).toBe(true);
+    await flushPromises();
+    mocks.pollMessages.mockResolvedValue(result('background', 'idle'));
+    mocks.listSessions.mockResolvedValueOnce([{ id: 'background', title: 'Background', untitled: false, status: 'idle' }]);
+    await useChatStore.getState().loadSessions();
+    expect(useChatStore.getState().runningSessions.has('background')).toBe(false);
+  });
+
+  it('preserves running membership identity for pure stream content changes', () => {
+    mocks.wsHandlers.get('session-state')?.({ sessionId: 'A', status: 'running' });
+    const membership = useChatStore.getState().runningSessions;
+    const changed = vi.fn();
+    const unsubscribe = useChatStore.subscribe(changed);
+    for (let i = 0; i < 100; i++) {
+      mocks.wsHandlers.get('partial-update')?.({ sessionId: 'A', content: String(i) });
+    }
+    expect(useChatStore.getState().runningSessions).toBe(membership);
+    expect(rafCallbacks.size).toBe(1);
+    expect(changed).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+
+  it('loads all older pages and catches up forward without skipping message IDs', async () => {
+    const messages = Array.from({ length: 125 }, (_, index) => ({
+      id: String(index + 1), role: 'assistant' as const, content: String(index + 1),
+      status: 'completed' as const, createdAt: 1,
+    }));
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(70, 120), status: 'idle', hasEarlier: true });
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(20, 70), status: 'idle', hasEarlier: true });
+    await useChatStore.getState().loadEarlier('A');
+    expect(mocks.pollMessages).toHaveBeenLastCalledWith('A', undefined, 50, '71');
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(0, 20), status: 'idle', hasEarlier: false });
+    await useChatStore.getState().loadEarlier('A');
+    expect(mocks.pollMessages).toHaveBeenLastCalledWith('A', undefined, 50, '21');
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(120, 123), status: 'idle', hasMore: true });
+    mocks.pollMessages.mockResolvedValueOnce({ messages: messages.slice(123), status: 'idle', hasMore: false });
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    expect(mocks.pollMessages).toHaveBeenLastCalledWith('A', '123');
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual(messages.map((message) => message.id));
+    expect(useChatStore.getState().sessionsById.A.hasEarlier).toBe(false);
+  });
+
+  it('does not let a list refresh reset the model selected for a new session', async () => {
+    await useChatStore.getState().selectSessionModel(2);
+    await useChatStore.getState().loadSessions();
+    expect(useChatStore.getState().sessionModelNo).toBe(2);
+  });
+
+  it('keeps model changes behind an in-flight prompt submission', async () => {
+    mocks.pollMessages.mockResolvedValue(result('A', 'idle', 1));
+    useChatStore.getState().setActiveSession('A');
+    await flushPromises();
+    mocks.setSessionModel.mockResolvedValue({ ok: true });
+    const submission = deferred<string>();
+    mocks.sendPrompt.mockReturnValueOnce(submission.promise);
+    const sending = useChatStore.getState().sendMessage('first');
+    await flushPromises();
+    const selecting = useChatStore.getState().selectSessionModel(2);
+    await flushPromises();
+    expect(mocks.setSessionModel.mock.calls).toEqual([['A', 1]]);
+    mocks.pollMessages.mockResolvedValue(result('A', 'running', 2));
+    submission.resolve('1');
+    await sending;
+    await selecting;
+    expect(mocks.setSessionModel.mock.calls).toEqual([['A', 1], ['A', 2]]);
+  });
+
 });

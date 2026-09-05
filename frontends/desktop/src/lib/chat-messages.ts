@@ -16,19 +16,24 @@ export function mergeMessages(
   const localMessages = withoutPartial.filter((message) => String(message.id).startsWith('local-'));
   let merged = withoutPartial.filter((message) => !String(message.id).startsWith('local-'));
 
-  const ids = new Set(merged.map((message) => message.id));
+  const indices = new Map(merged.map((message, index) => [message.id, index]));
   for (const incomingMessage of incoming) {
-    if (ids.has(incomingMessage.id)) continue;
-    ids.add(incomingMessage.id);
+    const existing = indices.get(incomingMessage.id);
+    if (existing != null) {
+      merged[existing] = incomingMessage;
+      continue;
+    }
+    indices.set(incomingMessage.id, merged.length);
     const localIndex = localMessages.findIndex(
-      (message) => message.role === incomingMessage.role && message.content === incomingMessage.content,
+      (message) => message.status !== 'failed' && message.role === incomingMessage.role && message.content === incomingMessage.content,
     );
     if (localIndex >= 0) localMessages.splice(localIndex, 1);
     merged.push(incomingMessage);
   }
 
   merged = [...merged, ...localMessages];
-  merged.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
+  merged.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0)
+    || (/^\d+$/.test(a.id) && /^\d+$/.test(b.id) ? Number(a.id) - Number(b.id) : 0));
 
   if (partial) {
     merged.push({ ...partial, id: partialId, status: 'in_progress' });

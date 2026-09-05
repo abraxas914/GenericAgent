@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { notifyError } from './notifications';
+import { serialTask } from '../lib/serial-task';
 import {
   createSession,
   sendPrompt,
@@ -34,6 +36,13 @@ export interface QueuedMessage {
   opts?: SendOptions;
 }
 
+export interface FailedSend extends QueuedMessage {
+  id: string;
+  sessionId: string | null;
+  error: string;
+  localMessageId?: string;
+}
+
 export interface SessionRuntimeState {
   messages: Message[];
   status: ChatStatus;
@@ -43,6 +52,10 @@ export interface SessionRuntimeState {
   sessionModelNo: number | null;
   model: LiveModel | null;
   loadGeneration: number;
+  submitting: boolean;
+  cursor: string | null;
+  hasEarlier: boolean;
+  loadingEarlier: boolean;
 }
 
 interface ChatState {
@@ -56,6 +69,9 @@ interface ChatState {
   turnStartedAt: number | null;
   sessionModelNo: number | null;
 
+  failedSends: FailedSend[];
+  retryFailed: (id: string) => Promise<void>;
+  loadEarlier: (sessionId: string) => Promise<void>;
   sessions: SessionInfo[];
   runningSessions: Set<string>;
 
@@ -76,6 +92,24 @@ interface PartialFrameState {
   rafId: number | null;
 }
 
+let navigationGeneration = 0;
+let sendSequence = 0;
+let creatingSession: { generation: number; promise: Promise<string> } | null = null;
+const modelWrites = new Map<string, ReturnType<typeof serialTask>>();
+const submissions = new Map<string, AbortController>();
+let listGeneration = 0;
+
+function sessionOperations(sessionId: string) {
+  const enqueue = modelWrites.get(sessionId) ?? serialTask();
+  modelWrites.set(sessionId, enqueue);
+  return enqueue;
+}
+
+function bindModel(sessionId: string, no: number) {
+  return sessionOperations(sessionId)(() => apiSetSessionModel(sessionId, no));
+}
+
+const deletedSessions = new Set<string>();
 const pendingPolls = new Map<string, { again: boolean }>();
 const partialFrames = new Map<string, PartialFrameState>();
 const pollTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -90,6 +124,10 @@ function createRuntime(overrides: Partial<SessionRuntimeState> = {}): SessionRun
     sessionModelNo: null,
     model: null,
     loadGeneration: 0,
+    submitting: false,
+    cursor: null,
+    hasEarlier: false,
+    loadingEarlier: false,
     ...overrides,
   };
 }
@@ -140,12 +178,13 @@ export const useChatStore = create<ChatState>((set, get) => {
     let updated = false;
     set((state) => {
       const current = state.sessionsById[sessionId];
-      if (!current) return {};
+      if (!current) return state;
       const next = updater(current);
-      if (next === current) return {};
+      if (next === current) return state;
       updated = true;
 
-      const runningSessions = new Set(state.runningSessions);
+      const membershipChanged = state.runningSessions.has(sessionId) !== (next.status === 'running');
+      const runningSessions = membershipChanged ? new Set(state.runningSessions) : state.runningSessions;
       if (next.status === 'running') runningSessions.add(sessionId);
       else runningSessions.delete(sessionId);
 
@@ -216,15 +255,16 @@ export const useChatStore = create<ChatState>((set, get) => {
     }
 
     const now = Date.now();
+    const localId = `local-${sessionId}-${++sendSequence}`;
     const localImages = opts?.images?.map((file) => ({
       name: file.name,
       path: file.base64 || file.path || file.name,
     }));
     const userMessage: Message = {
-      id: `local-${sessionId}-${now}`,
+      id: localId,
       role: 'user',
       content: text,
-      status: 'completed',
+      status: 'in_progress',
       createdAt: now,
       images: localImages,
       files: opts?.files,
@@ -234,20 +274,51 @@ export const useChatStore = create<ChatState>((set, get) => {
       ...current,
       messages: [...current.messages, userMessage],
       status: 'running',
+      submitting: true,
+      loadGeneration: current.loadGeneration + 1,
       turnStartedAt: now,
     }));
-    startPolling(sessionId);
 
+    const controller = new AbortController();
+    submissions.set(sessionId, controller);
     try {
-      await sendPrompt(sessionId, text, opts?.files, opts?.images);
-    } catch {
+      const serverId = await sessionOperations(sessionId)(async () => {
+        if (controller.signal.aborted) throw new Error('Send cancelled');
+        if (runtime.sessionModelNo != null) await apiSetSessionModel(sessionId, runtime.sessionModelNo);
+        if (controller.signal.aborted) throw new Error('Send cancelled');
+        return sendPrompt(sessionId, text, opts?.files, opts?.images, controller.signal);
+      });
+      if (!get().sessionsById[sessionId]) return;
+      updateSession(sessionId, (current) => ({
+        ...current,
+        submitting: false,
+        messages: current.messages.map((message) => message.id === localId
+          ? { ...message, id: serverId, status: 'completed' } : message),
+      }));
+      startPolling(sessionId);
+      void requestPoll(sessionId);
+    } catch (error) {
+      if (deletedSessions.has(sessionId)) return;
       stopPolling(sessionId);
       updateSession(sessionId, (current) => ({
         ...current,
+        submitting: false,
         status: 'idle',
         turnStartedAt: null,
+        messages: current.messages.map((message) => message.id === localId
+          ? { ...message, status: 'failed' } : message),
       }));
+      recordFailed(sessionId, text, opts, error, localId);
+    } finally {
+      if (submissions.get(sessionId) === controller) submissions.delete(sessionId);
     }
+  }
+
+  function recordFailed(sessionId: string | null, text: string, opts: SendOptions | undefined, error: unknown, localMessageId?: string) {
+    set((state) => ({ failedSends: [...state.failedSends, {
+      id: `failed-${++sendSequence}`, sessionId, text, opts,
+      error: error instanceof Error ? error.message : String(error), localMessageId,
+    }] }));
   }
 
   function drainQueue(sessionId: string) {
@@ -259,7 +330,7 @@ export const useChatStore = create<ChatState>((set, get) => {
   }
 
   function applyPollResult(sessionId: string, generation: number, result: PollResult): boolean {
-    if (!isCurrentLoad(sessionId, generation)) return false;
+    if (!isCurrentLoad(sessionId, generation) || get().sessionsById[sessionId]?.submitting) return false;
 
     const applied = updateSession(sessionId, (runtime) => ({
       ...runtime,
@@ -269,6 +340,9 @@ export const useChatStore = create<ChatState>((set, get) => {
         result.partial,
         partialMessageId(sessionId),
       ),
+      cursor: result.messages.reduce((cursor, message) => /^\d+$/.test(message.id)
+        && Number(message.id) > Number(cursor ?? 0) ? message.id : cursor, runtime.cursor),
+      hasEarlier: runtime.cursor == null ? (result.hasEarlier ?? false) : runtime.hasEarlier,
       partial: result.partial ?? null,
       status: result.status,
       turnStartedAt:
@@ -286,12 +360,13 @@ export const useChatStore = create<ChatState>((set, get) => {
     } else {
       stopPolling(sessionId);
       cancelPartialFrame(sessionId);
-      drainQueue(sessionId);
+      if (!result.hasMore) drainQueue(sessionId);
     }
     return true;
   }
 
   async function requestPoll(sessionId: string) {
+    if (get().sessionsById[sessionId]?.submitting || deletedSessions.has(sessionId)) return;
     const active = pendingPolls.get(sessionId);
     if (active) {
       // Explicit refreshes supersede the old response, then run once it settles.
@@ -304,9 +379,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     const pending = { again: false };
     pendingPolls.set(sessionId, pending);
     try {
-      const result = await pollMessages(sessionId);
+      const cursor = get().sessionsById[sessionId]?.cursor ?? undefined;
+      const result = await pollMessages(sessionId, cursor);
       if (pendingPolls.get(sessionId) === pending) {
-        applyPollResult(sessionId, generation, result);
+        const applied = applyPollResult(sessionId, generation, result);
+        if (applied && result.hasMore) pending.again = true;
       }
     } catch {
       // Polling is a fallback path. The next tick or websocket event can recover.
@@ -338,15 +415,16 @@ export const useChatStore = create<ChatState>((set, get) => {
       turn_segs?: string[];
       curr_turn?: number;
     };
-    if (!event.sessionId) return;
+    if (!event.sessionId || deletedSessions.has(event.sessionId)) return;
 
     const sessionId = event.sessionId;
     ensureSession(sessionId, { status: 'running', turnStartedAt: Date.now() });
-    updateSession(sessionId, (runtime) => ({
-      ...runtime,
-      status: 'running',
-      turnStartedAt: runtime.turnStartedAt ?? Date.now(),
-    }));
+    updateSession(sessionId, (runtime) => runtime.status === 'running' && runtime.turnStartedAt != null
+      ? runtime : {
+        ...runtime, status: 'running',
+        loadGeneration: runtime.loadGeneration + 1,
+        turnStartedAt: runtime.turnStartedAt ?? Date.now(),
+      });
     startPolling(sessionId);
 
     const frame = partialFrames.get(sessionId) ?? { pending: null, rafId: null };
@@ -365,7 +443,8 @@ export const useChatStore = create<ChatState>((set, get) => {
 
   subscribe('session-state', (data: unknown) => {
     const event = data as { sessionId?: string; status?: string };
-    if (!event.sessionId || !event.status) return;
+    if (!event.sessionId || !event.status || deletedSessions.has(event.sessionId)) return;
+    if (get().sessionsById[event.sessionId]?.submitting) return;
 
     const sessionId = event.sessionId;
     const running = event.status === 'running';
@@ -378,6 +457,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       updateSession(sessionId, (runtime) => ({
         ...runtime,
         status: 'running',
+        loadGeneration: runtime.status === 'running' ? runtime.loadGeneration : runtime.loadGeneration + 1,
         turnStartedAt: runtime.turnStartedAt ?? Date.now(),
       }));
       startPolling(sessionId);
@@ -395,11 +475,9 @@ export const useChatStore = create<ChatState>((set, get) => {
         turnStartedAt: null,
       }));
       void requestPoll(sessionId);
-      void listSessions().then((sessions) => set({ sessions })).catch(() => {});
+      void get().loadSessions();
     }
   });
-
-  void listSessions().then((sessions) => set({ sessions })).catch(() => {});
 
   return {
     activeSessionId: null,
@@ -410,9 +488,11 @@ export const useChatStore = create<ChatState>((set, get) => {
     turnStartedAt: null,
     sessionModelNo: null,
     sessions: [],
+    failedSends: [],
     runningSessions: new Set(),
 
     async newSession() {
+      navigationGeneration++;
       useThreadViewStore.getState().resetSession(null);
       useSettingsStore.getState().setLiveModel(null);
       set({ activeSessionId: null, ...activeProjection() });
@@ -420,35 +500,67 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     async sendMessage(text: string, opts?: SendOptions) {
       let sessionId = get().activeSessionId;
-      if (!sessionId) {
-        const pendingModel = get().sessionModelNo;
-        sessionId = await createSession();
-        const runtime = createRuntime({ sessionModelNo: pendingModel });
-        set((state) => ({
-          activeSessionId: sessionId,
-          sessionsById: { ...state.sessionsById, [sessionId!]: runtime },
-          ...activeProjection(runtime),
-        }));
-        void get().loadSessions();
-        if (pendingModel != null) {
-          void apiSetSessionModel(sessionId, pendingModel).then((result) => {
-            if (!get().sessionsById[sessionId!]) return;
-            updateSession(sessionId!, (current) => ({
-              ...current,
-              sessionModelNo: result.model?.llmNo ?? current.sessionModelNo,
-              model: result.model ?? current.model,
-            }));
-            if (result.model) syncActiveModel(sessionId!, result.model);
-          }).catch(() => {});
+      try {
+        if (!sessionId) {
+          const generation = navigationGeneration;
+          if (!creatingSession || creatingSession.generation !== generation) {
+            const pendingModel = get().sessionModelNo;
+            const promise = createSession().then((id) => {
+              const runtime = ensureSession(id, { sessionModelNo: pendingModel });
+              if (navigationGeneration === generation) {
+                set({ activeSessionId: id, ...activeProjection(runtime) });
+              }
+              void get().loadSessions();
+              return id;
+            });
+            creatingSession = { generation, promise };
+          }
+          const creation = creatingSession;
+          try { sessionId = await creation.promise; }
+          finally { if (creatingSession === creation) creatingSession = null; }
         }
+        await sendMessageToSession(sessionId, text, opts);
+      } catch (error) {
+        recordFailed(sessionId, text, opts, error);
       }
-      await sendMessageToSession(sessionId, text, opts);
+    },
+
+    async retryFailed(id: string) {
+      const failed = get().failedSends.find((item) => item.id === id);
+      if (!failed) return;
+      set((state) => ({ failedSends: state.failedSends.filter((item) => item.id !== id) }));
+      if (failed.sessionId) {
+        updateSession(failed.sessionId, (runtime) => ({ ...runtime,
+          messages: runtime.messages.filter((message) => message.id !== failed.localMessageId),
+        }));
+        await sendMessageToSession(failed.sessionId, failed.text, failed.opts);
+      } else {
+        await get().sendMessage(failed.text, failed.opts);
+      }
+    },
+
+    async loadEarlier(sessionId: string) {
+      const runtime = get().sessionsById[sessionId];
+      if (!runtime || runtime.loadingEarlier || !runtime.hasEarlier) return;
+      const before = runtime.messages.find((message) => /^\d+$/.test(message.id))?.id;
+      if (!before) return;
+      updateSession(sessionId, (current) => ({ ...current, loadingEarlier: true }));
+      try {
+        const page = await pollMessages(sessionId, undefined, 50, before);
+        updateSession(sessionId, (current) => ({ ...current,
+          messages: mergeMessages(current.messages, page.messages, current.partial ?? undefined, partialMessageId(sessionId)),
+          hasEarlier: page.hasEarlier ?? false,
+        }));
+      } catch (error) { notifyError(error); }
+      finally { updateSession(sessionId, (current) => ({ ...current, loadingEarlier: false })); }
     },
 
     async cancel() {
       const sessionId = get().activeSessionId;
       if (!sessionId) return;
-      await cancelGeneration(sessionId);
+      submissions.get(sessionId)?.abort();
+      try { await cancelGeneration(sessionId); }
+      catch (error) { notifyError(error); }
     },
 
     cancelQueued(index: number) {
@@ -461,6 +573,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     setActiveSession(id: string | null) {
+      navigationGeneration++;
       if (!id) {
         useSettingsStore.getState().setLiveModel(null);
         set({ activeSessionId: null, ...activeProjection() });
@@ -475,21 +588,54 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     async loadSessions() {
+      const request = ++listGeneration;
+      const observed = get().sessionsById;
       try {
-        const sessions = await listSessions();
+        const snapshot = await listSessions();
+        if (request !== listGeneration) return;
+        const sessions = snapshot.filter((session) => !deletedSessions.has(session.id));
+        const refresh = new Set<string>();
         set((state) => {
-          const runningSessions = new Set(state.runningSessions);
-          for (const session of sessions) {
-            if (session.status === 'running') runningSessions.add(session.id);
+          const runningSessions = new Set(sessions.filter((session) => session.status === 'running').map((session) => session.id));
+          const sessionsById = { ...state.sessionsById };
+          for (const id of runningSessions) {
+            sessionsById[id] ??= createRuntime();
           }
-          return { sessions, runningSessions };
+          for (const [id, runtime] of Object.entries(sessionsById)) {
+            if (runtime.submitting || (state.sessionsById[id] && runtime !== observed[id])) {
+              if (runtime.status === 'running') runningSessions.add(id);
+              else runningSessions.delete(id);
+              continue;
+            }
+            const status = runningSessions.has(id) ? 'running' : 'idle';
+            if (runtime.status !== status) {
+              sessionsById[id] = { ...runtime, status, loadGeneration: runtime.loadGeneration + 1,
+                turnStartedAt: status === 'running' ? runtime.turnStartedAt ?? Date.now() : null };
+              refresh.add(id);
+            }
+          }
+          return { sessions, sessionsById, runningSessions,
+            ...(state.activeSessionId ? activeProjection(sessionsById[state.activeSessionId]) : {}) };
         });
+        for (const [id, runtime] of Object.entries(get().sessionsById)) {
+          if (runtime.status === 'running') startPolling(id);
+          else stopPolling(id);
+        }
+        const active = get().activeSessionId;
+        if (active) refresh.add(active);
+        for (const id of refresh) void requestPoll(id);
       } catch {
         // Bridge reconnect will retry.
       }
     },
 
     async deleteSession(id: string) {
+      try { await apiDeleteSession(id); }
+      catch (error) { notifyError(error); return; }
+      deletedSessions.add(id);
+      listGeneration++;
+      submissions.get(id)?.abort();
+      modelWrites.delete(id);
       pendingPolls.delete(id);
       stopPolling(id);
       cancelPartialFrame(id);
@@ -505,41 +651,34 @@ export const useChatStore = create<ChatState>((set, get) => {
           sessionsById,
           runningSessions,
           sessions: state.sessions.filter((session) => session.id !== id),
+          failedSends: state.failedSends.filter((item) => item.sessionId !== id),
           ...(deletingActive ? activeProjection() : {}),
         };
       });
       if (get().activeSessionId == null) useSettingsStore.getState().setLiveModel(null);
-      try {
-        await apiDeleteSession(id);
-      } catch {
-        // Keep the optimistic local deletion; a later session refresh reconciles it.
-      }
+
     },
 
     async renameSession(id: string, title: string) {
+      try {
+        await apiRenameSession(id, title);
       set((state) => ({
         sessions: state.sessions.map((session) =>
           session.id === id ? { ...session, title, untitled: false } : session,
         ),
       }));
-      try {
-        await apiRenameSession(id, title);
-      } catch {
-        // Session list refresh reconciles bridge failures.
-      }
+      } catch (error) { notifyError(error); }
     },
 
     async pinSession(id: string, pinned: boolean) {
+      try {
+        await apiPinSession(id, pinned);
       set((state) => ({
         sessions: state.sessions.map((session) =>
           session.id === id ? { ...session, pinned } : session,
         ),
       }));
-      try {
-        await apiPinSession(id, pinned);
-      } catch {
-        // Session list refresh reconciles bridge failures.
-      }
+      } catch (error) { notifyError(error); }
     },
 
     async selectSessionModel(llmNo: number) {
@@ -552,7 +691,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       const previous = get().sessionsById[sessionId]?.sessionModelNo ?? null;
       updateSession(sessionId, (runtime) => ({ ...runtime, sessionModelNo: llmNo }));
       try {
-        const result = await apiSetSessionModel(sessionId, llmNo);
+        const result = await bindModel(sessionId, llmNo);
         const current = get().sessionsById[sessionId];
         if (!current || current.sessionModelNo !== llmNo) return;
         updateSession(sessionId, (runtime) => ({
@@ -561,7 +700,8 @@ export const useChatStore = create<ChatState>((set, get) => {
           model: result.model ?? runtime.model,
         }));
         if (result.model) syncActiveModel(sessionId, result.model);
-      } catch {
+      } catch (error) {
+        notifyError(error);
         updateSession(sessionId, (runtime) => runtime.sessionModelNo === llmNo
           ? { ...runtime, sessionModelNo: previous }
           : runtime);
@@ -571,6 +711,13 @@ export const useChatStore = create<ChatState>((set, get) => {
 });
 
 export function __resetChatStoreForTests() {
+  navigationGeneration++;
+  listGeneration++;
+  modelWrites.clear();
+  for (const controller of submissions.values()) controller.abort();
+  submissions.clear();
+  creatingSession = null;
+  deletedSessions.clear();
   pendingPolls.clear();
   for (const sessionId of pollTimers.keys()) stopTimerForTests(sessionId);
   for (const [sessionId, frame] of partialFrames) {
@@ -586,6 +733,7 @@ export function __resetChatStoreForTests() {
     turnStartedAt: null,
     sessionModelNo: null,
     sessions: [],
+    failedSends: [],
     runningSessions: new Set(),
   });
 }
@@ -595,6 +743,8 @@ function stopTimerForTests(sessionId: string) {
   if (timer != null) clearInterval(timer);
   pollTimers.delete(sessionId);
 }
+
+void useChatStore.getState().loadSessions();
 
 onBridgeStatusChange((status) => {
   if (status === 'ready') {

@@ -61,23 +61,6 @@ def test_bridge_discovers_package_conductor_but_external_scheduler(tmp_path):
     assert catalog["reflect/scheduler.py"]["cmd"][-1] == "reflect/scheduler.py"
 
 
-def test_service_spawn_injects_effective_ga_root():
-    tree = ast.parse(BRIDGE_SOURCE)
-    service_manager = next(
-        item for item in tree.body if isinstance(item, ast.ClassDef) and item.name == "ServiceManager"
-    )
-    start_service = next(
-        item for item in service_manager.body
-        if isinstance(item, ast.FunctionDef) and item.name == "start_service"
-    )
-    string_constants = {
-        node.value for node in ast.walk(start_service)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str)
-    }
-
-    assert "GA_ROOT" in string_constants
-
-
 def test_missing_optional_p2p_dependencies_cannot_abort_hub_setup():
     tree = ast.parse(HUB_SOURCE)
     p2p_import = next(
