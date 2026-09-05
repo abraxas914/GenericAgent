@@ -17,7 +17,8 @@ import { subscribe, onBridgeStatusChange } from '../services/ws';
 import { useSettingsStore } from './settings';
 import { useThreadViewStore } from './thread-view';
 
-export const PARTIAL_MSG_ID = '__partial__';
+import { PARTIAL_MSG_ID, isPartialMessage, mergeMessages, replacePartialMessage } from '../lib/chat-messages';
+export { PARTIAL_MSG_ID, mergeMessages } from '../lib/chat-messages';
 const POLL_INTERVAL_MS = 1000;
 
 type ChatStatus = 'idle' | 'running';
@@ -75,6 +76,7 @@ interface PartialFrameState {
   rafId: number | null;
 }
 
+const pendingPolls = new Map<string, { again: boolean }>();
 const partialFrames = new Map<string, PartialFrameState>();
 const pollTimers = new Map<string, ReturnType<typeof setInterval>>();
 
@@ -94,38 +96,6 @@ function createRuntime(overrides: Partial<SessionRuntimeState> = {}): SessionRun
 
 function partialMessageId(sessionId: string): string {
   return `${PARTIAL_MSG_ID}:${sessionId}`;
-}
-
-function isPartialMessage(message: Message): boolean {
-  return String(message.id) === PARTIAL_MSG_ID || String(message.id).startsWith(`${PARTIAL_MSG_ID}:`);
-}
-
-export function mergeMessages(
-  current: Message[],
-  incoming: Message[],
-  partial?: Message,
-  partialId: string = PARTIAL_MSG_ID,
-): Message[] {
-  const withoutPartial = current.filter((message) => !isPartialMessage(message));
-  const localMessages = withoutPartial.filter((message) => String(message.id).startsWith('local-'));
-  let merged = withoutPartial.filter((message) => !String(message.id).startsWith('local-'));
-
-  for (const incomingMessage of incoming) {
-    if (merged.some((message) => message.id === incomingMessage.id)) continue;
-    const localIndex = localMessages.findIndex(
-      (message) => message.role === incomingMessage.role && message.content === incomingMessage.content,
-    );
-    if (localIndex >= 0) localMessages.splice(localIndex, 1);
-    merged.push(incomingMessage);
-  }
-
-  merged = [...merged, ...localMessages];
-  merged.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-
-  if (partial) {
-    merged.push({ ...partial, id: partialId, status: 'in_progress' });
-  }
-  return merged;
 }
 
 function inferTurnStart(messages: Message[]): number {
@@ -224,7 +194,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     updateSession(sessionId, (runtime) => ({
       ...runtime,
       partial,
-      messages: mergeMessages(runtime.messages, [], partial, partialMessageId(sessionId)),
+      messages: replacePartialMessage(runtime.messages, partial, partialMessageId(sessionId)),
     }));
   }
 
@@ -322,13 +292,29 @@ export const useChatStore = create<ChatState>((set, get) => {
   }
 
   async function requestPoll(sessionId: string) {
+    const active = pendingPolls.get(sessionId);
+    if (active) {
+      // Explicit refreshes supersede the old response, then run once it settles.
+      active.again = true;
+      beginLoad(sessionId);
+      return;
+    }
     const generation = beginLoad(sessionId);
     if (generation == null) return;
+    const pending = { again: false };
+    pendingPolls.set(sessionId, pending);
     try {
       const result = await pollMessages(sessionId);
-      applyPollResult(sessionId, generation, result);
+      if (pendingPolls.get(sessionId) === pending) {
+        applyPollResult(sessionId, generation, result);
+      }
     } catch {
       // Polling is a fallback path. The next tick or websocket event can recover.
+    } finally {
+      if (pendingPolls.get(sessionId) === pending) {
+        pendingPolls.delete(sessionId);
+        if (pending.again && get().sessionsById[sessionId]) void requestPoll(sessionId);
+      }
     }
   }
 
@@ -340,7 +326,7 @@ export const useChatStore = create<ChatState>((set, get) => {
         stopPolling(sessionId);
         return;
       }
-      void requestPoll(sessionId);
+      if (!pendingPolls.has(sessionId)) void requestPoll(sessionId);
     }, POLL_INTERVAL_MS);
     pollTimers.set(sessionId, timer);
   }
@@ -504,6 +490,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     },
 
     async deleteSession(id: string) {
+      pendingPolls.delete(id);
       stopPolling(id);
       cancelPartialFrame(id);
       useThreadViewStore.getState().deleteSession(id);
@@ -584,6 +571,7 @@ export const useChatStore = create<ChatState>((set, get) => {
 });
 
 export function __resetChatStoreForTests() {
+  pendingPolls.clear();
   for (const sessionId of pollTimers.keys()) stopTimerForTests(sessionId);
   for (const [sessionId, frame] of partialFrames) {
     if (frame.rafId != null) cancelAnimationFrame(frame.rafId);

@@ -1,3 +1,4 @@
+import { assertRendererAssets } from '../../harness/renderer-assets';
 import assert from 'node:assert/strict';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -85,6 +86,7 @@ describe('GenericAgent native Tauri smoke', () => {
     await chat.startNewChat();
     await chat.send('[E2E:normal] native smoke');
     await chat.waitForAssistantText('Harness reply', 60_000);
+    await assertRendererAssets();
     await usage.open();
     await usage.waitForTotal('107', 30_000);
 

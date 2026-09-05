@@ -1,5 +1,5 @@
 import './platform';
-import '@semi-css';
+import '@douyinfe/semi-ui/lib/es/_base/base.css';
 import './loading/bootstrap.css';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';

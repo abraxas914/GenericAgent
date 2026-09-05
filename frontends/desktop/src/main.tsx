@@ -1,7 +1,6 @@
 import './platform';
-import '@semi-css';
+import '@douyinfe/semi-ui/lib/es/_base/base.css';
 import './global.css';
-import './stores/bridgeActivity';
 import { handleRenderedContentLinkClick } from './lib/rendered-content-policy';
 
 if (document.documentElement.dataset.appearance === 'dark') {

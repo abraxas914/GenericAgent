@@ -1,88 +1,26 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Modal } from '@douyinfe/semi-ui';
+import { lazy, Suspense, useEffect } from 'react';
 import { useSettingsStore } from '../../stores/settings';
-import { useI18n } from '../../i18n';
-import './settings.css';
-import { AppearanceSection } from './AppearanceSection';
-import { LanguageSection } from './LanguageSection';
-import { ModelSection } from './ModelSection';
-import { DataSection } from './DataSection';
-import { ConnectionModeSection } from './ConnectionModeSection';
-import { HelpFeedbackSection } from './HelpFeedbackSectionView';
-import { AddModelView } from './AddModelView';
 
-type View = 'main' | 'addModel';
+const SettingsDialog = lazy(() => import('./SettingsContent').then((module) => ({
+  default: module.SettingsDialog,
+})));
 
 export function SettingsModal() {
-  const { visible, open, close, loadFromBridge } = useSettingsStore();
-  const { t } = useI18n();
-
-  const [view, setView] = useState<View>('main');
-  const [editingId, setEditingId] = useState<number | null>(null);
-
+  const visible = useSettingsStore((s) => s.visible);
   useEffect(() => {
-    const handler = () => {
-      loadFromBridge();
-      open();
+    const open = () => {
+      const settings = useSettingsStore.getState();
+      void settings.loadFromBridge();
+      settings.open();
     };
-    const closeHandler = () => close();
-    window.addEventListener('ga:open-settings', handler);
-    window.addEventListener('ga:close-settings', closeHandler);
+    const close = () => useSettingsStore.getState().close();
+    window.addEventListener('ga:open-settings', open);
+    window.addEventListener('ga:close-settings', close);
     return () => {
-      window.removeEventListener('ga:open-settings', handler);
-      window.removeEventListener('ga:close-settings', closeHandler);
+      window.removeEventListener('ga:open-settings', open);
+      window.removeEventListener('ga:close-settings', close);
     };
-  }, [open, close, loadFromBridge]);
-
-  useEffect(() => {
-    if (!visible) {
-      setView('main');
-      setEditingId(null);
-    }
-  }, [visible]);
-
-  const handleAddModel = useCallback(() => {
-    setEditingId(null);
-    setView('addModel');
   }, []);
 
-  const handleEditModel = useCallback((id: number) => {
-    setEditingId(id);
-    setView('addModel');
-  }, []);
-
-  const handleModelDone = useCallback(() => {
-    setView('main');
-    setEditingId(null);
-  }, []);
-
-  const title = view === 'main'
-    ? t('modal.settings')
-    : (editingId != null ? t('modal.editModel') : t('modal.addModel'));
-
-  return (
-    <Modal
-      visible={visible}
-      onCancel={close}
-      title={title}
-      footer={null}
-      width={870}
-      centered
-      closeOnEsc
-      className="ga-settings-dialog"
-    >
-      {view === 'main' ? (
-        <>
-          <AppearanceSection />
-          <LanguageSection />
-          <ModelSection onAdd={handleAddModel} onEdit={handleEditModel} />
-          <DataSection />
-          <ConnectionModeSection />
-          <HelpFeedbackSection />
-        </>
-      ) : (
-        <AddModelView editingId={editingId} onDone={handleModelDone} />
-      )}
-    </Modal>
-  );
+  return visible ? <Suspense fallback={null}><SettingsDialog /></Suspense> : null;
 }

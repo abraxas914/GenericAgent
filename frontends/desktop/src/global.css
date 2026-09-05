@@ -16,20 +16,10 @@
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--semi-color-fill-1); }
 
-/* Codicon icon font */
-@font-face {
-  font-family: 'codicon';
-  src: url('@vscode/codicons/dist/codicon.ttf') format('truetype');
-  font-weight: normal;
-  font-style: normal;
-}
-
-.codicon {
-  font-family: 'codicon';
-  font-weight: normal;
-  font-style: normal;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+.codicon > svg {
+  display: block;
+  width: 1em;
+  height: 1em;
 }
 
 :root {

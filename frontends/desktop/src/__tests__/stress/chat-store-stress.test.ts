@@ -1,38 +1,8 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 
-type MessageStatus = 'completed' | 'in_progress' | 'failed';
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  status: MessageStatus;
-  createdAt?: number;
-}
-
-const PARTIAL_MSG_ID = '__partial__';
-
-function mergeMessages(current: Message[], incoming: Message[], partial?: Message): Message[] {
-  const withoutPartial = current.filter((m) => m.id !== PARTIAL_MSG_ID);
-  const localMsgs = withoutPartial.filter((m) => String(m.id).startsWith('local-'));
-  let merged = withoutPartial.filter((m) => !String(m.id).startsWith('local-'));
-
-  for (const inc of incoming) {
-    if (merged.some((m) => m.id === inc.id)) continue;
-    const localIdx = localMsgs.findIndex((l) => l.role === inc.role && l.content === inc.content);
-    if (localIdx >= 0) {
-      localMsgs.splice(localIdx, 1);
-    }
-    merged.push(inc);
-  }
-  merged = [...merged, ...localMsgs];
-  merged.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-
-  if (partial) {
-    merged.push({ ...partial, id: PARTIAL_MSG_ID, status: 'in_progress' });
-  }
-  return merged;
-}
+import type { Message } from '../../services/chat';
+import { mergeMessages, PARTIAL_MSG_ID } from '../../lib/chat-messages';
 
 function msg(id: string, role: Message['role'], content: string, createdAt: number): Message {
   return { id, role, content, status: 'completed', createdAt };

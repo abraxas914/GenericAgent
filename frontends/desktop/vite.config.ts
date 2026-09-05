@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import fs from 'fs';
 import type { Plugin as EsbuildPlugin } from 'esbuild';
+import { katexWoff2Only } from './scripts/renderer-css.mjs';
 
 /**
  * Prismjs language components are CJS IIFEs that expect a global `Prism`.
@@ -91,12 +92,8 @@ export default defineConfig({
       plugins: [prismjsEsbuildPlugin()],
     },
   },
-  resolve: {
-    alias: {
-      '@semi-css': path.resolve(__dirname, 'node_modules/@douyinfe/semi-ui/dist/css/semi.min.css'),
-    },
-  },
   css: {
+    postcss: { plugins: [katexWoff2Only()] },
     preprocessorOptions: {
       scss: {
         additionalData: '',

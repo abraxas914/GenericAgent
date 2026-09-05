@@ -65,15 +65,6 @@ export function resolveLanguage(lang: string): string {
   return 'plaintext';
 }
 
-export function isLanguageLoaded(lang: string): boolean {
-  try {
-    const resolved = resolveLanguage(lang);
-    return resolved !== 'plaintext' || lang === 'plaintext' || lang === 'txt' || lang === 'text';
-  } catch {
-    return false;
-  }
-}
-
 /** Skip highlighting for very large code blocks to avoid UI jank. */
 const HIGHLIGHT_BUDGET_CHARS = 50_000;
 

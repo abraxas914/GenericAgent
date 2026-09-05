@@ -1,5 +1,6 @@
 export const REQUIRED_REACT_PUBLIC_ASSETS = [
   'THIRD_PARTY_NOTICES.txt',
+  'CODICONS-NOTICE.txt',
   'fallback.html',
   'assets/ga-logo.svg',
 ];
