@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 import type { ComponentType, ReactNode } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useCoreSwitchStore } from '../stores/core-switch';
 
 const mocks = vi.hoisted(() => ({
   tauriInvoke: vi.fn(),
@@ -106,6 +107,30 @@ describe('ConnectionModeSection', () => {
     mocks.loadSessions.mockClear();
     mocks.loadFromBridge.mockClear();
     mocks.runningSessions.clear();
+    useCoreSwitchStore.setState({ applying: false });
+  });
+
+  it('keeps a pending core switch disabled after the settings content remounts', async () => {
+    let finish!: (value: string) => void;
+    const switching = new Promise<string>((resolve) => { finish = resolve; });
+    let currentPath = '';
+    mocks.tauriInvoke.mockImplementation(async (command: string) => {
+      if (command === 'get_ga_source') return currentPath;
+      if (command === 'pick_directory' || command === 'validate_ga_source') return '/core';
+      if (command === 'set_ga_source') return switching;
+    });
+    const first = render(<ConnectionModeSection />);
+    await waitFor(() => expect(first.container.querySelector('fieldset')?.disabled).toBe(false));
+    fireEvent.click(screen.getByDisplayValue('localRepository'));
+    await screen.findByText('/core');
+    fireEvent.click(screen.getByRole('button', { name: 'connection.apply' }));
+    await screen.findByRole('button', { name: 'connection.applying' });
+    first.unmount();
+    render(<ConnectionModeSection />);
+    expect((screen.getByRole('button', { name: 'connection.applying' }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => { currentPath = '/core'; finish('/core'); });
+    await screen.findByText('/core');
+    expect(mocks.tauriInvoke.mock.calls.filter(([command]) => command === 'set_ga_source')).toHaveLength(1);
   });
 
   it('shows the complete repository path without character truncation', async () => {

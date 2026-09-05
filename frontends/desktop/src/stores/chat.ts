@@ -178,9 +178,9 @@ export const useChatStore = create<ChatState>((set, get) => {
     let updated = false;
     set((state) => {
       const current = state.sessionsById[sessionId];
-      if (!current) return {};
+      if (!current) return state;
       const next = updater(current);
-      if (next === current) return {};
+      if (next === current) return state;
       updated = true;
 
       const membershipChanged = state.runningSessions.has(sessionId) !== (next.status === 'running');

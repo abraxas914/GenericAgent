@@ -334,11 +334,15 @@ describe('session-scoped chat runtime', () => {
   it('preserves running membership identity for pure stream content changes', () => {
     mocks.wsHandlers.get('session-state')?.({ sessionId: 'A', status: 'running' });
     const membership = useChatStore.getState().runningSessions;
+    const changed = vi.fn();
+    const unsubscribe = useChatStore.subscribe(changed);
     for (let i = 0; i < 100; i++) {
       mocks.wsHandlers.get('partial-update')?.({ sessionId: 'A', content: String(i) });
     }
     expect(useChatStore.getState().runningSessions).toBe(membership);
     expect(rafCallbacks.size).toBe(1);
+    expect(changed).not.toHaveBeenCalled();
+    unsubscribe();
   });
 
   it('loads all older pages and catches up forward without skipping message IDs', async () => {

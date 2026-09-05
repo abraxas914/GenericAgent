@@ -6,6 +6,7 @@ import * as bridge from '../../services/bridge';
 import { isMissingTauriCommand, tauriErrorText } from '../../services/tauri-compat';
 import { useAppStore } from '../../stores/app';
 import { useChatStore } from '../../stores/chat';
+import { useCoreSwitchStore } from '../../stores/core-switch';
 import { useSettingsStore } from '../../stores/settings';
 import { isTauri } from '../../utils/tauri';
 import { SettingsSectionTitle } from './SettingsSectionTitle';
@@ -15,11 +16,11 @@ type ConnectionMode = 'included' | 'localRepository';
 const tauriAvailable = isTauri();
 
 function mapConnectionError(message: string, t: (key: string) => string): string {
+  if (message.includes('timed out') || message.includes('20s') || message.includes('ready')) return t('connection.errorTimeout');
   if (message.includes('agentmain.py')) return t('connection.errorInvalid');
   if (message.includes('not compatible') || message.includes('compatibility probe')) {
     return t('connection.errorIncompatible');
   }
-  if (message.includes('20s') || message.includes('ready')) return t('connection.errorTimeout');
   return t('connection.errorGeneric');
 }
 
@@ -36,7 +37,7 @@ export function ConnectionModeSection() {
   const [pendingPath, setPendingPath] = useState('');
   const [loading, setLoading] = useState(true);
   const [validating, setValidating] = useState(false);
-  const [applying, setApplying] = useState(false);
+  const applying = useCoreSwitchStore((state) => state.applying);
 
   const loadCurrentMode = useCallback(async () => {
     if (!tauriAvailable) return;
@@ -56,8 +57,8 @@ export function ConnectionModeSection() {
   }, []);
 
   useEffect(() => {
-    if (settingsVisible) void loadCurrentMode();
-  }, [loadCurrentMode, settingsVisible]);
+    if (settingsVisible && !applying) void loadCurrentMode();
+  }, [loadCurrentMode, settingsVisible, applying]);
 
   const chooseRepository = useCallback(async () => {
     setValidating(true);
@@ -111,8 +112,7 @@ export function ConnectionModeSection() {
   const applyDisabled = loading || validating || applying || !dirty || hasRunningTasks;
 
   const handleApply = useCallback(async () => {
-    if (applyDisabled) return;
-    setApplying(true);
+    if (applyDisabled || !useCoreSwitchStore.getState().begin()) return;
     try {
       if (pendingMode === 'localRepository') {
         await bridge.tauriInvoke('set_ga_source', { dir: pendingPath });
@@ -135,7 +135,7 @@ export function ConnectionModeSection() {
       console.error('[ConnectionMode] apply failed:', error);
       Toast.error({ content: mapConnectionError(tauriErrorText(error), t) });
     } finally {
-      setApplying(false);
+      useCoreSwitchStore.getState().finish();
     }
   }, [applyDisabled, pendingMode, pendingPath, t]);
 
