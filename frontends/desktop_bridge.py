@@ -510,62 +510,6 @@ class AgentManager:
         if self.sessions:
             self.active_session_id = max(self.sessions.values(), key=lambda s: s.updated_at).id
 
-    def import_sessions(self, source_dir: str) -> dict:
-        """把 source 的桌面会话合并进当前列表(按 id 去重)。
-
-        兼容两种源格式:新版 temp/desktop_sessions/<id>.json,以及旧版单文件
-        temp/desktop_sessions.json(含已退休的 .migrated)。只落盘新增的会话。
-        """
-        src = Path(source_dir).expanduser().resolve()
-        items: List[dict] = []
-        found = False
-
-        # New per-session format.
-        src_dir = src / "temp" / "desktop_sessions"
-        if src_dir.is_dir():
-            for f in src_dir.glob("*.json"):
-                try:
-                    items.append(json.loads(f.read_text(encoding="utf-8")))
-                    found = True
-                except Exception:
-                    continue
-
-        # Legacy monolithic format (live or already retired).
-        for legacy in (src / "temp" / "desktop_sessions.json",
-                       src / "temp" / "desktop_sessions.json.migrated"):
-            if legacy.is_file():
-                found = True
-                try:
-                    arr = json.loads(legacy.read_text(encoding="utf-8"))
-                    if isinstance(arr, list):
-                        items.extend(x for x in arr if isinstance(x, dict))
-                except Exception:
-                    continue
-
-        if not found:
-            return {"sessionsAdded": 0, "sessionsSkipped": 0, "sessionsFileFound": False}
-
-        added = 0
-        skipped = 0
-        new_sessions: List["Session"] = []
-        with self.mutation():
-            for item in items:
-                sid = item.get("id")
-                if not _is_desktop_session_id(sid) or sid in self.sessions:
-                    skipped += 1
-                    continue
-                try:
-                    sess = self._session_from_item(item)
-                except ValueError:
-                    skipped += 1
-                    continue
-                self.sessions[sid] = sess
-                new_sessions.append(sess)
-                added += 1
-            for sess in new_sessions:
-                self._persist_session(sess)
-        return {"sessionsAdded": added, "sessionsSkipped": skipped, "sessionsFileFound": True}
-
     def _mykey_file(self) -> Path:
         p = Path(self.ga_root) / "mykey.py"
         if not p.exists():
@@ -2685,11 +2629,6 @@ async def mykey_save_handler(request):
     except Exception as e:
         return json_ok({"ok": False, "error": str(e)}, status=400)
     return json_ok({"ok": True, "path": str(manager._mykey_file()), "profiles": profiles})
-
-
-def _import_memory_from(source_dir: str, ga_root: str) -> dict:
-    """Compatibility wrapper for the transactional Desktop data import."""
-    return merge_data_files(source_dir, ga_root)
 
 
 async def _run_worker_to_completion(function, *args):

@@ -299,6 +299,13 @@ class TestLoadSessionsMissingDir:
 
 
 class TestImportSessionsFiltersInternalArtifacts:
+    @pytest.fixture(autouse=True)
+    def import_context(self, manager, monkeypatch):
+        monkeypatch.setattr(_mod, "manager", manager)
+        monkeypatch.setattr(
+            _mod, "services", _types.SimpleNamespace(running_managed_ids=lambda: [])
+        )
+
     def test_import_skips_tui_sessions(self, manager: AgentManager, tmp_path: Path):
         source = tmp_path / "source"
         sessions_dir = source / "temp" / "desktop_sessions"
@@ -317,14 +324,21 @@ class TestImportSessionsFiltersInternalArtifacts:
                 encoding="utf-8",
             )
 
-        result = manager.import_sessions(str(source))
+        result = _mod._import_data_source(str(source))
 
         assert set(manager.sessions) == {"sess-imported"}
         assert result["sessionsAdded"] == 1
         assert result["sessionsSkipped"] == 1
+        assert (manager._sessions_dir / "sess-imported.json").is_file()
+        assert not (manager._sessions_dir / "tui_internal.json").exists()
+        assert manager._maintenance_token is None
 
     def test_import_rejects_session_ids_that_could_escape_storage(self, manager: AgentManager, tmp_path: Path):
         source = tmp_path / "source"
+        # A valid memory item lets inspection accept the source before the
+        # transactional importer filters its unsafe session record.
+        (source / "memory").mkdir(parents=True)
+        (source / "memory" / "valid.md").write_text("memory", encoding="utf-8")
         sessions_dir = source / "temp" / "desktop_sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / "malicious.json").write_text(
@@ -337,7 +351,7 @@ class TestImportSessionsFiltersInternalArtifacts:
             encoding="utf-8",
         )
 
-        result = manager.import_sessions(str(source))
+        result = _mod._import_data_source(str(source))
 
         assert result["sessionsAdded"] == 0
         assert result["sessionsSkipped"] == 1
