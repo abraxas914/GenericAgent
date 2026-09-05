@@ -77,19 +77,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          purge_runtime_bytecode() {
-            local runtime_root="$1"
-            find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
-            find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            if find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q .; then
-              echo "Python bytecode cache directory remains in packaged runtime: $runtime_root" >&2
-              return 1
-            fi
-            if find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-              echo "Python bytecode remains in packaged runtime: $runtime_root" >&2
-              return 1
-            fi
-          }
+          source frontends/desktop/packaging/scripts/runtime-assembly.sh
 
           EXE_SRC="$(find frontends/desktop/src-tauri/target/release -maxdepth 1 -type f -name 'ga-desktop.exe' | head -n 1)"
           [[ -n "$EXE_SRC" ]] || { echo "ga-desktop.exe not found" >&2; exit 1; }
@@ -140,46 +128,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
             --requirement "$RUNTIME/wheels/requirements.txt"
 
-          # Runtime source (project root minus heavy/dev/build dirs)
-          mkdir -p "$RUNTIME/app"
-          tar \
-            --exclude='./.git' --exclude='./.github' \
-            --exclude='./frontends/tests' \
-            --exclude='./frontends/desktop/src-tauri' \
-            --exclude='./frontends/desktop/src' \
-            --exclude='./frontends/desktop/public' \
-            --exclude='./frontends/desktop/scripts' \
-            --exclude='./frontends/desktop/e2e' \
-            --exclude='./frontends/desktop/tests' \
-            --exclude='./frontends/desktop/testing' \
-            --exclude='./frontends/desktop/spec' \
-            --exclude='./frontends/desktop/node_modules' \
-            --exclude='./frontends/desktop/dist' \
-            --exclude='./frontends/desktop/DESIGN.md' \
-            --exclude='./frontends/desktop/package.json' \
-            --exclude='./frontends/desktop/package-lock.json' \
-            --exclude='./frontends/desktop/.npmrc' \
-            --exclude='./frontends/desktop/index.html' \
-            --exclude='./frontends/desktop/loading.html' \
-            --exclude='./frontends/desktop/setup.html' \
-            --exclude='./frontends/desktop/tsconfig*.json' \
-            --exclude='./frontends/desktop/vite.config.ts' \
-            --exclude='./frontends/desktop/packaging' --exclude='./docs' \
-            --exclude='./assets/demo' --exclude='./assets/images' \
-            --exclude='./assets/GenericAgent_Technical_Report.pdf' \
-            --exclude='./artifacts' \
-            --exclude='*/node_modules' --exclude='*/target' \
-            --exclude='*/.venv' --exclude='./.venv' \
-            --exclude='*/__pycache__' --exclude='*.pyc' \
-            -cf - . | tar -xf - -C "$RUNTIME/app"
-          test -f "$RUNTIME/app/agentmain.py"
-          test -f "$RUNTIME/app/frontends/desktop_bridge.py"
-          test -f "$RUNTIME/app/frontends/desktop/static/index.html"
-          test ! -e "$RUNTIME/app/frontends/desktop/dist"
-          test ! -e "$RUNTIME/app/frontends/desktop/src"
-          test ! -e "$RUNTIME/app/frontends/desktop/public"
-          test ! -e "$RUNTIME/app/frontends/desktop/package-lock.json"
-          test ! -e "$RUNTIME/app/frontends/desktop/node_modules"
+          stage_runtime_source "$RUNTIME"
 
           # Drop python debug symbols (.pdb) to slim the package (~80MB)
           find "$RUNTIME/python" -name '*.pdb' -delete 2>/dev/null || true
@@ -317,19 +266,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          purge_runtime_bytecode() {
-            local runtime_root="$1"
-            find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
-            find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            if find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q .; then
-              echo "Python bytecode cache directory remains in packaged runtime: $runtime_root" >&2
-              return 1
-            fi
-            if find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-              echo "Python bytecode remains in packaged runtime: $runtime_root" >&2
-              return 1
-            fi
-          }
+          source frontends/desktop/packaging/scripts/runtime-assembly.sh
 
           APPIMAGE_SRC="$(find frontends/desktop/src-tauri/target/release/bundle/appimage -maxdepth 1 -type f -name '*.AppImage' | head -n 1)"
           [[ -n "$APPIMAGE_SRC" ]] || { echo "No AppImage found" >&2; exit 1; }
@@ -367,46 +304,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 "$PY" -m pip download --only-binary=:all: --dest "$RUNTIME/wheels" \
             --requirement "$RUNTIME/wheels/requirements.txt"
 
-          # Runtime source (project root minus heavy/dev/build dirs)
-          mkdir -p "$RUNTIME/app"
-          tar \
-            --exclude='./.git' --exclude='./.github' \
-            --exclude='./frontends/tests' \
-            --exclude='./frontends/desktop/src-tauri' \
-            --exclude='./frontends/desktop/src' \
-            --exclude='./frontends/desktop/public' \
-            --exclude='./frontends/desktop/scripts' \
-            --exclude='./frontends/desktop/e2e' \
-            --exclude='./frontends/desktop/tests' \
-            --exclude='./frontends/desktop/testing' \
-            --exclude='./frontends/desktop/spec' \
-            --exclude='./frontends/desktop/node_modules' \
-            --exclude='./frontends/desktop/dist' \
-            --exclude='./frontends/desktop/DESIGN.md' \
-            --exclude='./frontends/desktop/package.json' \
-            --exclude='./frontends/desktop/package-lock.json' \
-            --exclude='./frontends/desktop/.npmrc' \
-            --exclude='./frontends/desktop/index.html' \
-            --exclude='./frontends/desktop/loading.html' \
-            --exclude='./frontends/desktop/setup.html' \
-            --exclude='./frontends/desktop/tsconfig*.json' \
-            --exclude='./frontends/desktop/vite.config.ts' \
-            --exclude='./frontends/desktop/packaging' --exclude='./docs' \
-            --exclude='./assets/demo' --exclude='./assets/images' \
-            --exclude='./assets/GenericAgent_Technical_Report.pdf' \
-            --exclude='./artifacts' \
-            --exclude='*/node_modules' --exclude='*/target' \
-            --exclude='*/.venv' --exclude='./.venv' \
-            --exclude='*/__pycache__' --exclude='*.pyc' \
-            -cf - . | tar -xf - -C "$RUNTIME/app"
-          test -f "$RUNTIME/app/agentmain.py"
-          test -f "$RUNTIME/app/frontends/desktop_bridge.py"
-          test -f "$RUNTIME/app/frontends/desktop/static/index.html"
-          test ! -e "$RUNTIME/app/frontends/desktop/dist"
-          test ! -e "$RUNTIME/app/frontends/desktop/src"
-          test ! -e "$RUNTIME/app/frontends/desktop/public"
-          test ! -e "$RUNTIME/app/frontends/desktop/package-lock.json"
-          test ! -e "$RUNTIME/app/frontends/desktop/node_modules"
+          stage_runtime_source "$RUNTIME"
 
           purge_runtime_bytecode "$RUNTIME"
 
@@ -594,19 +492,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          purge_runtime_bytecode() {
-            local runtime_root="$1"
-            find "$runtime_root" -type d -name '__pycache__' -prune -exec rm -rf {} +
-            find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-            if find "$runtime_root" -type d -name '__pycache__' -print -quit | grep -q .; then
-              echo "Python bytecode cache directory remains in packaged runtime: $runtime_root" >&2
-              return 1
-            fi
-            if find "$runtime_root" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print -quit | grep -q .; then
-              echo "Python bytecode remains in packaged runtime: $runtime_root" >&2
-              return 1
-            fi
-          }
+          source frontends/desktop/packaging/scripts/runtime-assembly.sh
 
           APP_SRC="$(find frontends/desktop/src-tauri/target/release/bundle/macos -maxdepth 1 -name '*.app' -type d | head -n 1)"
           [[ -n "$APP_SRC" ]] || { echo "No .app found" >&2; exit 1; }
@@ -649,46 +535,7 @@ jobs:
           printf 'ok\n' > "$RUNTIME_SRC/.prepared"
           test -s "$RUNTIME_SRC/.prepared"
 
-          # Runtime source (project root minus heavy/dev/build dirs) — bsdtar exclude syntax.
-          mkdir -p "$RUNTIME_SRC/app"
-          tar \
-            --exclude='.git' --exclude='.github' \
-            --exclude='frontends/tests' \
-            --exclude='frontends/desktop/src-tauri' \
-            --exclude='frontends/desktop/src' \
-            --exclude='frontends/desktop/public' \
-            --exclude='frontends/desktop/scripts' \
-            --exclude='frontends/desktop/e2e' \
-            --exclude='frontends/desktop/tests' \
-            --exclude='frontends/desktop/testing' \
-            --exclude='frontends/desktop/spec' \
-            --exclude='frontends/desktop/node_modules' \
-            --exclude='frontends/desktop/dist' \
-            --exclude='frontends/desktop/DESIGN.md' \
-            --exclude='frontends/desktop/package.json' \
-            --exclude='frontends/desktop/package-lock.json' \
-            --exclude='frontends/desktop/.npmrc' \
-            --exclude='frontends/desktop/index.html' \
-            --exclude='frontends/desktop/loading.html' \
-            --exclude='frontends/desktop/setup.html' \
-            --exclude='frontends/desktop/tsconfig*.json' \
-            --exclude='frontends/desktop/vite.config.ts' \
-            --exclude='frontends/desktop/packaging' --exclude='docs' \
-            --exclude='assets/demo' --exclude='assets/images' \
-            --exclude='assets/GenericAgent_Technical_Report.pdf' \
-            --exclude='artifacts' \
-            --exclude='*/node_modules' --exclude='*/target' \
-            --exclude='*/.venv' --exclude='.venv' \
-            --exclude='*/__pycache__' --exclude='*.pyc' \
-            -cf - . | tar -xf - -C "$RUNTIME_SRC/app"
-          test -f "$RUNTIME_SRC/app/agentmain.py"
-          test -f "$RUNTIME_SRC/app/frontends/desktop_bridge.py"
-          test -f "$RUNTIME_SRC/app/frontends/desktop/static/index.html"
-          test ! -e "$RUNTIME_SRC/app/frontends/desktop/dist"
-          test ! -e "$RUNTIME_SRC/app/frontends/desktop/src"
-          test ! -e "$RUNTIME_SRC/app/frontends/desktop/public"
-          test ! -e "$RUNTIME_SRC/app/frontends/desktop/package-lock.json"
-          test ! -e "$RUNTIME_SRC/app/frontends/desktop/node_modules"
+          stage_runtime_source "$RUNTIME_SRC"
 
           DMG_STAGE="artifacts/macos/dmg-stage"
           DMG_APP="$DMG_STAGE/GenericAgent.app"
