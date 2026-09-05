@@ -171,7 +171,7 @@ def web_execute_js(script, switch_tab_id=None, no_monitor=False):
     try:
         if driver is None: first_init_driver()
         if len(driver.get_all_sessions()) == 0: return {"status": "error", "msg": "没有可用的浏览器标签页，查L3记忆分析原因。"}
-        if switch_tab_id: driver.default_session_id = switch_tab_id
+        if switch_tab_id: driver.default_session_id = str(switch_tab_id)
         result = simphtml.execute_js_rich(script, driver, no_monitor=no_monitor)
         return result
     except Exception as e: return {"status": "error", "msg": format_error(e)}

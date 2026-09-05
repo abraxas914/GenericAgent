@@ -1490,29 +1490,24 @@ pub fn get_or_discover_config() -> (String, String) {
     let trust_settings = true;
 
     // A packaged macOS app never trusts a stale path from a previous install/translocation.
-    if trust_settings && path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
-                let python = val
-                    .get("python_path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let project = val
-                    .get("project_dir")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                if python_interpreter_resolves(&python)
-                    && !project.is_empty()
-                    && PathBuf::from(&project)
-                        .join("frontends")
-                        .join("desktop_bridge.py")
-                        .exists()
-                {
-                    return (python, project);
-                }
-            }
+    if trust_settings {
+        let settings = read_settings_from(&path);
+        let python = settings
+            .get("python_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let project = settings
+            .get("project_dir")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if python_interpreter_resolves(python)
+            && !project.is_empty()
+            && PathBuf::from(project)
+                .join("frontends")
+                .join("desktop_bridge.py")
+                .exists()
+        {
+            return (python.to_string(), project.to_string());
         }
     }
 

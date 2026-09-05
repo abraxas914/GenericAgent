@@ -1,3 +1,4 @@
+import { expandRuntimeAssembly } from './runtime-assembly-contract.mjs';
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -172,7 +173,7 @@ for (const workflowPath of workflowPaths) {
   );
 }
 
-const releaseWorkflow = readText('.github/workflows/desktop-release-package.yml', repoRoot);
+const releaseWorkflow = expandRuntimeAssembly(readText('.github/workflows/desktop-release-package.yml', repoRoot));
 const qualityWorkflow = readText('.github/workflows/desktop-ci.yml', repoRoot);
 const requiredDesktopRuntimeTriggers = [
   'reflect/**',
@@ -328,7 +329,8 @@ function prunedRuntimeSourceContract(job) {
     'frontends/desktop/package-lock.json',
     'frontends/desktop/node_modules',
   ];
-  return excluded.every((entry) => normalized.includes(`--exclude='${entry}'`))
+  return /stage_runtime_source "\$(RUNTIME|RUNTIME_SRC)"/.test(job)
+    && excluded.every((entry) => normalized.includes(`--exclude='${entry}'`))
     && !normalized.includes("--exclude='frontends/desktop/static'")
     && normalized.includes('frontends/desktop/static/index.html')
     && normalized.includes('frontends/desktop/package-lock.json"')

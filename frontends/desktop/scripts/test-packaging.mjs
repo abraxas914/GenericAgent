@@ -13,6 +13,7 @@
  *   0 = all checks pass
  *   1 = one or more checks failed
  */
+import { expandRuntimeAssembly } from './runtime-assembly-contract.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -112,7 +113,8 @@ function prunedRuntimeSourceContract(job) {
     'frontends/desktop/package-lock.json',
     'frontends/desktop/node_modules',
   ];
-  return excluded.every((entry) => normalized.includes(`--exclude='${entry}'`))
+  return /stage_runtime_source "\$(RUNTIME|RUNTIME_SRC)"/.test(job)
+    && excluded.every((entry) => normalized.includes(`--exclude='${entry}'`))
     && !normalized.includes("--exclude='frontends/desktop/static'")
     && normalized.includes('frontends/desktop/static/index.html')
     && normalized.includes('frontends/desktop/package-lock.json"')
@@ -312,10 +314,10 @@ if (!fs.existsSync(scriptsDir)) {
 // ── 4. Locked package inputs ──
 console.log('\n[4] Locked package inputs');
 
-const releaseWorkflow = fs.readFileSync(
+const releaseWorkflow = expandRuntimeAssembly(fs.readFileSync(
   path.join(REPO_ROOT, '.github', 'workflows', 'desktop-release-package.yml'),
   'utf8',
-);
+));
 const packageManifest = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package.json'), 'utf8'));
 const packageLock = JSON.parse(fs.readFileSync(path.join(DESKTOP_ROOT, 'package-lock.json'), 'utf8'));
 const packagingTauriConfig = JSON.parse(fs.readFileSync(confPath, 'utf8'));
